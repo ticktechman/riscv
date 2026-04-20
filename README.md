@@ -1,2 +1,3 @@
 # riscv
-riscv soc running linux on xilinx A7 100T
+
+rv64ima soc running linux on xilinx A7 100T
