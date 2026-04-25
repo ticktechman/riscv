@@ -2,6 +2,12 @@
 OUTPUT_ARCH("riscv")
 ENTRY(_start)
 
+PHDRS
+{
+  text_phdr PT_LOAD FLAGS(5);   /* 5 = R + X */
+  rodata_phdr PT_LOAD FLAGS(4); /* 6 = R + W */
+}
+
 SECTIONS
 {
   /* 假设 BootROM 起始地址为 0x10000000 */
@@ -9,13 +15,13 @@ SECTIONS
 
   .text : {
     *(.text)
-  }
+  } : text_phdr
 
   .rodata : {
     . = ALIGN(8);
     *(.rodata)
     *(.rodata.*)
-  }
+  } : rodata_phdr
 
   /DISCARD/ : { *(.comment) *(.note*) }
 }

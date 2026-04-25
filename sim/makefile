@@ -9,7 +9,9 @@
 .PHONY: all build test install doc
 
 V_FLAGS = --cc --exe --trace --build
-SV_SRCS = top.sv
+SV_SRCS = top.sv \
+          ../rtl/soc/soc.sv \
+          ../rtl/soc/bootrom.sv
 
 SIM = obj_dir/Vtop
 
@@ -17,6 +19,9 @@ all: $(SIM)
 
 $(SIM): $(SV_SRCS)
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
+
+run: $(SIM)
+	@$(SIM)
 
 clean:
 	rm -rf obj_dir
