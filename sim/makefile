@@ -19,7 +19,7 @@ SIM = obj_dir/Vtop
 
 all: $(SIM)
 
-$(SIM): $(SV_SRCS)
+$(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
 
 run: $(SIM)

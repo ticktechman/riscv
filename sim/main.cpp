@@ -12,8 +12,7 @@ int main(int argc, char **argv) {
 
   printf("==> sim started.\n");
   for (int i = 0; !Verilated::gotFinish(); i++) {
-    if (i > 1)
-      top->rst_n = 1;
+    top->rst_n = i > 2 ? 1 : 0;
     top->clk = !top->clk;
     top->eval();
   }
