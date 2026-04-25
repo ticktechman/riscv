@@ -5,3 +5,5 @@
 --named_port_alignment=flush-left
 --formal_parameters_alignment=flush-left
 --named_parameter_alignment=flush-left
+--formal_parameters_indentation=indent
+--named_parameter_indentation=indent
