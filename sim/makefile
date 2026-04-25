@@ -8,7 +8,7 @@
 ###############################################################################
 .PHONY: all build test install doc
 
-V_FLAGS = --cc --exe --trace --build -I../
+V_FLAGS = --timing --cc --exe --trace --build -I../
 SV_SRCS = \
 		top.sv \
 		../rtl/soc/soc.sv \

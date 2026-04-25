@@ -1,3 +1,4 @@
+
 `include "rtl/inc/log.svh"
 
 module bootrom #(
@@ -16,7 +17,7 @@ module bootrom #(
 );
 
   localparam [63:0] ROMSIZE = DEPTH * 4;
-  localparam int ROMIDX = $clog2(DEPTH) + 1;
+  localparam int ADDR_IDX = $clog2(DEPTH) + 1;
   logic ready;
   logic [31:0] instr;
 
@@ -35,9 +36,10 @@ module bootrom #(
     end else begin
       if (req_i) begin
         if (addr_i > ROMSIZE) begin
+          `LOGI("finish");
           $finish;
         end else begin
-          instr <= rom[addr_i[ROMIDX:2]];
+          instr <= rom[addr_i[ADDR_IDX:2]];
           ready <= 1'b1;
         end
       end else begin
@@ -50,5 +52,4 @@ module bootrom #(
   assign ready_o = ready;
   assign instr_o = instr;
   assign error_o = 1'b0;
-
 endmodule
