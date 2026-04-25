@@ -1,3 +1,5 @@
+`include "rtl/inc/log.svh"
+
 module bootrom #(
     parameter HEX_FILE = ""
 ) (
@@ -14,7 +16,7 @@ module bootrom #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      $write("bootrom end\n");
+      `LOGE("bootrom end");
       $finish;
     end
   end

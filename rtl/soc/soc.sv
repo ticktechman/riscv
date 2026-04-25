@@ -12,4 +12,9 @@ module soc #(
     .rst_n(rst_n)
   );
 
+  uart uart1 (
+    .clk(clk),
+    .rst_n(rst_n)
+  );
+
 endmodule
