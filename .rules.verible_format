@@ -7,3 +7,4 @@
 --named_parameter_alignment=flush-left
 --formal_parameters_indentation=indent
 --named_parameter_indentation=indent
+--module_net_variable_alignment=flush-left

@@ -13,7 +13,8 @@ SV_SRCS = \
 		top.sv \
 		../rtl/soc/soc.sv \
 		../rtl/soc/uart.sv \
-		../rtl/soc/bootrom.sv
+		../rtl/soc/bootrom.sv \
+		../rtl/core/core.sv
 
 SIM = obj_dir/Vtop
 
