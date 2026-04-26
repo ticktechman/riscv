@@ -6,7 +6,8 @@ module top (
 );
 
   initial begin
-    $timeformat(-9, 3, "", 9);  // format: NNN.PPP (N:ns, P:ps)
+    // format: NNN.PPP (N:ns, P:ps)
+    $timeformat(-9, 3, "", 9);
   end
 
   // top level hardware instances

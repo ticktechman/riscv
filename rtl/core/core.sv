@@ -1,4 +1,13 @@
-`include "rtl/inc/log.svh"
+/*
+ *******************************************************************************
+ *
+ *        filename: core.sv
+ *     description:
+ *         created: 2026/04/26
+ *          author: ticktechman
+ *
+ *******************************************************************************
+ */
 
 module core (
   input logic clk,
@@ -12,25 +21,29 @@ module core (
   output logic instr_req_o
 );
 
-  localparam RESET_ADDR = 64'h0000_0000_0000_0000;
+  ifstage ifstage1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .instr_error_i(instr_error_i),
+    .instr_ready_i(instr_ready_i),
+    .instr_addr_o(instr_addr_o),
+    .instr_req_o(instr_req_o)
+  );
 
-  logic [63:0] instr_addr;
-  logic instr_req;
-
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      instr_addr <= RESET_ADDR;
-      instr_req  <= 1'b0;
-    end else begin
-      if (instr_ready_i) begin
-        instr_addr <= instr_addr + 4;
-      end
-      instr_req <= 1'b1;
-    end
-  end
-  ;
-
-  assign instr_addr_o = instr_addr;
-  assign instr_req_o  = instr_req;
+  logic [4:0] rs1, rs2, rd;
+  logic [63:0] imm;
+  logic iderror;
+  idstage idstage1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .instr_i(instr_i),
+    .rs1_o(rs1),
+    .rs2_o(rs2),
+    .rd_o(rd),
+    .imm_o(imm),
+    .error_o(iderror)
+  );
 
 endmodule
+
+/******************************************************************************/
