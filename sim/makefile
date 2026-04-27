@@ -14,6 +14,7 @@ SV_SRCS = \
 		../rtl/soc/soc.sv \
 		../rtl/soc/uart.sv \
 		../rtl/soc/bootrom.sv \
+		../rtl/core/corepkg.sv \
 		../rtl/core/ifstage.sv \
 		../rtl/core/idstage.sv \
 		../rtl/core/core.sv
