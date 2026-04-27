@@ -66,7 +66,7 @@ module bootrom #(
           `LOGE("Address out of bounds");
           $finish;
         end else begin
-          `LOGI($sformatf("addr=%02d instr=%h", addr_i, rom[addr_i[ADDR_IDX:2]]));
+          // `LOGI($sformatf("addr=%02d instr=%h", addr_i, rom[addr_i[ADDR_IDX:2]]));
           instr_r <= rom[addr_i[ADDR_IDX:2]];
           ready_r <= 1'b1;
         end

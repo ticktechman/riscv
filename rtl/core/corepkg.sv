@@ -100,6 +100,7 @@ package corepkg;
     logic branch;
     logic jump;
     logic reg_write;
+    logic err;
 
     op1_e      op1;
     op2_e      op2;

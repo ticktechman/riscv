@@ -32,17 +32,16 @@ module core (
 
   logic [4:0] rs1, rs2, rd;
   logic [63:0] imm;
-  logic iderror;
   corepkg::id_ctrl_t idctrl;
   idstage idstage1 (
     .clk(clk),
     .rst_n(rst_n),
     .instr_i(instr_i),
+    .instr_ready_i(instr_ready_i),
     .rs1_o(rs1),
     .rs2_o(rs2),
     .rd_o(rd),
     .imm_o(imm),
-    .error_o(iderror),
     .ctrl_o(idctrl)
   );
 
