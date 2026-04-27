@@ -45,6 +45,12 @@ module core (
     .ctrl_o(idctrl)
   );
 
+  exstage exstage1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .id_ctrl_i(idctrl)
+  );
+
 endmodule
 
 /******************************************************************************/

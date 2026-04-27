@@ -62,6 +62,27 @@ package corepkg;
     ALU_NONE
   } alu_op_e;
 
+  typedef enum {
+    SYS_NONE,
+    SYS_ECALL,
+    SYS_EBREAK,
+    SYS_MRET,
+    SYS_SRET,
+    SYS_URET,
+    SYS_CSRRW,
+    SYS_CSRRS,
+    SYS_CSRRC,
+    SYS_CSRRWI,
+    SYS_CSRRSI,
+    SYS_CSRRCI
+  } sys_op_e;
+
+  typedef enum {
+    FENCE_NONE,
+    FENCE_MEM,
+    FENCE_I
+  } fence_op_e;
+
   typedef enum logic {
     OP1_RS1,
     OP1_PC
@@ -105,6 +126,8 @@ package corepkg;
     op1_e      op1;
     op2_e      op2;
     alu_op_e   alu_op;
+    sys_op_e   sys_op;
+    fence_op_e fence_op;
     lsu_op_e   lsu_op;
     imm_type_e imm_type;
   } id_ctrl_t;

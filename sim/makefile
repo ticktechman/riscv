@@ -17,6 +17,7 @@ SV_SRCS = \
 		../rtl/core/corepkg.sv \
 		../rtl/core/ifstage.sv \
 		../rtl/core/idstage.sv \
+		../rtl/core/exstage.sv \
 		../rtl/core/core.sv
 
 SIM = obj_dir/Vtop

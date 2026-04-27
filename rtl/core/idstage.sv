@@ -41,6 +41,8 @@ module idstage (
 
     decode = '0;
     decode.alu_op = ALU_NONE;
+    decode.sys_op = SYS_NONE;
+    decode.fence_op = FENCE_NONE;
     decode.lsu_op = LSU_NONE;
     decode.op1 = OP1_RS1;
     decode.op2 = OP2_RS2;
@@ -176,17 +178,59 @@ module idstage (
       end
 
       OPCODE_SYSTEM: begin
-        `LOGE($sformatf("Unimplemented instr: %h", instr_i));
+        unique case (f3)
+          3'b000: begin
+            unique case (instr_i[31:20])
+              12'h000: decode.sys_op = SYS_ECALL;
+              12'h001: decode.sys_op = SYS_EBREAK;
+              12'h002: decode.sys_op = SYS_URET;
+              12'h102: decode.sys_op = SYS_SRET;
+              12'h302: decode.sys_op = SYS_MRET;
+              default: ;
+            endcase
+          end
+          3'b001: begin
+            decode.reg_write = 1;
+            decode.sys_op = SYS_CSRRW;
+          end
+          3'b010: begin
+            decode.reg_write = 1;
+            decode.sys_op = SYS_CSRRS;
+          end
+          3'b011: begin  // CSRRC
+            decode.sys_op    = SYS_CSRRC;
+            decode.reg_write = 1;
+          end
+
+          3'b101: begin  // CSRRWI
+            decode.sys_op    = SYS_CSRRWI;
+            decode.reg_write = 1;
+          end
+
+          3'b110: begin  // CSRRSI
+            decode.sys_op    = SYS_CSRRSI;
+            decode.reg_write = 1;
+          end
+
+          3'b111: begin  // CSRRCI
+            decode.sys_op    = SYS_CSRRCI;
+            decode.reg_write = 1;
+          end
+          default: ;
+        endcase
       end
 
       OPCODE_FENCE: begin
-        `LOGE($sformatf("Unimplemented instr: %h", instr_i));
+        unique case (f3)
+          3'b000:  decode.fence_op = FENCE_MEM;
+          3'b001:  decode.fence_op = FENCE_I;
+          default: decode.err = 1'b1;
+        endcase
       end
 
       default: begin
         `LOGE($sformatf("BAD instr: %h", instr_i));
         decode.err = 1'b1;
-        $finish;
       end
     endcase
 
@@ -223,6 +267,8 @@ module idstage (
         rd_o   <= instr_i[11:7];
         ctrl_o <= ctrl;
         imm_o  <= encode_imm(ctrl.imm_type);
+      end else begin
+        ctrl_o.err <= '1;
       end
     end
   end
