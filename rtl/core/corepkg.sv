@@ -37,6 +37,8 @@ package corepkg;
   } opcode_e;
 
   typedef enum logic [5:0] {
+    ALU_NONE,
+
     ALU_ADD,
     ALU_SUB,
     ALU_AND,
@@ -52,14 +54,12 @@ package corepkg;
     ALU_DIV,
     ALU_REM,
 
-    // RV64 W
+    // rv64 word
     ALU_ADDW,
     ALU_SUBW,
     ALU_SLLW,
     ALU_SRLW,
-    ALU_SRAW,
-
-    ALU_NONE
+    ALU_SRAW
   } alu_op_e;
 
   typedef enum {
@@ -117,20 +117,64 @@ package corepkg;
     LSU_SD
   } lsu_op_e;
 
+  typedef enum {
+    W1B,
+    W2B,
+    W4B,
+    W8B
+  } datawidth_e;
+
   typedef struct packed {
+    logic valid;
+    logic [63:0] pc;
+    logic [31:0] instr;
+  } if_ctrl_t;
+
+  typedef struct packed {
+    logic valid;
     logic branch;
     logic jump;
     logic reg_write;
-    logic err;
 
     op1_e      op1;
     op2_e      op2;
     alu_op_e   alu_op;
+    lsu_op_e   lsu_op;
     sys_op_e   sys_op;
     fence_op_e fence_op;
-    lsu_op_e   lsu_op;
     imm_type_e imm_type;
   } id_ctrl_t;
+
+  typedef struct packed {
+    logic valid;
+
+    logic [63:0] alu_result;
+    logic [63:0] rs2_data;
+    logic [63:0] mem_addr;
+    logic [4:0]  rd;
+
+    datawidth_e data_width;
+    logic reg_write;
+    logic mem_read;
+    logic mem_write;
+    logic reg_src;
+  } ex_ctrl_t;
+
+  typedef struct packed {
+    logic valid;
+    logic [4:0] rd;
+    logic [63:0] alu_result;
+    logic [63:0] mem_result;
+
+    logic reg_write;
+    logic reg_src;    // 0-alu, 1-mem;
+  } mem_ctrl_t;
+
+  typedef struct packed {
+    logic we;
+    logic [4:0] rd;
+    logic [63:0] wdata;
+  } wb_ctrl_t;
 
 endpackage
 

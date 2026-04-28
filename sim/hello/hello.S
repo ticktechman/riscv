@@ -12,13 +12,4 @@ _start:
     li t0, 0x10000000 # UART 映射地址
     li t1, 0x48 # 'H'
     sd t1, 0(t0)
-    li t1, 0x65 # 'e'
-    sd t1, 0(t0)
-    li t1, 0x6c # 'l'
-    sd t1, 0(t0)
-    sd t1, 0(t0) # 'l'
-    li t1, 0x6f # 'o'
-    sd t1, 0(t0)
-    li t1, 0x0a # '\n'
-    sd t1, 0(t0)
     ebreak

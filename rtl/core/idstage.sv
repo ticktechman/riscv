@@ -47,6 +47,7 @@ module idstage (
     decode.op1 = OP1_RS1;
     decode.op2 = OP2_RS2;
     decode.imm_type = IMM_NONE;
+    decode.valid = 1;
 
     // handle opcode
     unique case (opcode)
@@ -141,9 +142,11 @@ module idstage (
       end
 
       OPCODE_LUI: begin
+        `LOGI("LUI");
         decode.reg_write = 1;
         decode.op2 = OP2_IMM;
         decode.imm_type = IMM_U;
+        decode.alu_op = ALU_ADD;
       end
 
       OPCODE_AUIPC: begin
@@ -224,13 +227,13 @@ module idstage (
         unique case (f3)
           3'b000:  decode.fence_op = FENCE_MEM;
           3'b001:  decode.fence_op = FENCE_I;
-          default: decode.err = 1'b1;
+          default: decode.valid = 1'b0;
         endcase
       end
 
       default: begin
         `LOGE($sformatf("BAD instr: %h", instr_i));
-        decode.err = 1'b1;
+        decode.valid = 1'b0;
       end
     endcase
 
@@ -268,7 +271,7 @@ module idstage (
         ctrl_o <= ctrl;
         imm_o  <= encode_imm(ctrl.imm_type);
       end else begin
-        ctrl_o.err <= '1;
+        ctrl_o.valid <= '0;
       end
     end
   end
