@@ -1,0 +1,347 @@
+`timescale 1ns / 1ps
+
+module mini ();
+
+  logic clk, rst_n;
+  initial begin
+    // format: NNN.PPP (N:ns, P:ps)
+    $timeformat(-9, 3, "", 9);
+    clk   = 0;
+    rst_n = 0;
+    #2 rst_n = 1;
+  end
+
+  always #1 clk = ~clk;
+
+  // top level hardware instances
+  minisoc soc (
+    .clk(clk),
+    .rst(rst_n)
+  );
+
+endmodule
+
+module minisoc (
+  input logic clk,
+  input logic rst
+);
+
+  // =========================
+  // PC
+  // =========================
+  logic [63:0] pc, pc_next;
+
+  // =========================
+  // IF
+  // =========================
+  logic [31:0] imem_rdata;
+  logic [31:0] if_inst;
+  logic [63:0] if_pc;
+
+  // =========================
+  // ID
+  // =========================
+  logic [4:0] rs1, rs2, rd;
+  logic [63:0] regfile[31:0];
+  logic [63:0] rs1_val, rs2_val;
+
+  // =========================
+  // ID/EX
+  // =========================
+  logic [63:0] ex_pc, ex_rs1_val, ex_rs2_val, ex_imm;
+  logic [4:0] ex_rs1, ex_rs2, ex_rd;
+
+  typedef struct packed {
+    logic alu_src_imm;
+    logic mem_read;
+    logic mem_write;
+    logic reg_write;
+    logic branch;
+    logic jump;
+    logic [3:0] alu_op;
+  } ctrl_t;
+
+  ctrl_t id_ctrl, ex_ctrl, mem_ctrl, wb_ctrl;
+
+  // =========================
+  // EX
+  // =========================
+  logic [63:0] alu_result;
+  logic ex_branch_taken;
+
+  // forwarding
+  logic [1:0] fwd_a, fwd_b;
+  logic [63:0] op1, op2;
+
+  // =========================
+  // MEM
+  // =========================
+  logic [63:0] mem_alu_result, mem_wdata;
+  logic [4:0] mem_rd;
+  logic [63:0] dmem_rdata;
+
+  // =========================
+  // WB
+  // =========================
+  logic [63:0] wb_data;
+  logic [4:0] wb_rd;
+
+  // =========================
+  // Hazard
+  // =========================
+  logic stall, flush;
+
+  // ============================================================
+  // PC UPDATE
+  // ============================================================
+  always_comb begin
+    pc_next = pc + 4;
+
+    if (ex_ctrl.branch && ex_branch_taken) begin
+      pc_next = ex_pc + ex_imm;
+    end
+
+    if (ex_ctrl.jump) begin
+      pc_next = ex_pc + ex_imm;
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (!rst) pc <= 64'h8000_0000;
+    else if (!stall) pc <= pc_next;
+  end
+
+  assign flush = (ex_ctrl.branch && ex_branch_taken) | ex_ctrl.jump;
+
+  // ============================================================
+  // IF/ID
+  // ============================================================
+  logic [15:0] counter = '0;
+  always_ff @(posedge clk) begin
+    counter <= counter + 1;
+    $display("counter=%0d", counter);
+    if (flush) begin
+      if_inst <= 32'h00000013;
+      if_pc   <= 0;
+    end else if (!stall) begin
+      if_inst <= imem_rdata;
+      if_pc   <= pc;
+    end
+    if (counter > 20) begin
+      $finish;
+    end
+  end
+
+  // ============================================================
+  // ID
+  // ============================================================
+  assign rs1 = if_inst[19:15];
+  assign rs2 = if_inst[24:20];
+  assign rd = if_inst[11:7];
+
+  assign rs1_val = regfile[rs1];
+  assign rs2_val = regfile[rs2];
+
+  // immediate
+  function automatic [63:0] imm_i(input [31:0] inst);
+    return {{52{inst[31]}}, inst[31:20]};
+  endfunction
+
+  function automatic [63:0] imm_s(input [31:0] inst);
+    return {{52{inst[31]}}, inst[31:25], inst[11:7]};
+  endfunction
+
+  function automatic [63:0] imm_b(input [31:0] inst);
+    return {{51{inst[31]}}, inst[31], inst[7], inst[30:25], inst[11:8], 1'b0};
+  endfunction
+
+  function automatic [63:0] imm_u(input [31:0] inst);
+    return {{32{inst[31]}}, inst[31:12], 12'b0};
+  endfunction
+
+  function automatic [63:0] imm_j(input [31:0] inst);
+    return {{43{inst[31]}}, inst[31], inst[19:12], inst[20], inst[30:21], 1'b0};
+  endfunction
+
+  // decode
+  always_comb begin
+    id_ctrl = '0;
+
+    case (if_inst[6:0])
+      7'b0110011: begin
+        id_ctrl.reg_write = 1;
+        if (if_inst[30]) id_ctrl.alu_op = 1;  // SUB
+        else id_ctrl.alu_op = 0;  // ADD
+      end
+
+      7'b0010011: begin
+        id_ctrl.reg_write = 1;
+        id_ctrl.alu_src_imm = 1;
+        id_ctrl.alu_op = 0;
+      end
+
+      7'b0000011: begin
+        id_ctrl.mem_read = 1;
+        id_ctrl.reg_write = 1;
+        id_ctrl.alu_src_imm = 1;
+      end
+
+      7'b0100011: begin
+        id_ctrl.mem_write   = 1;
+        id_ctrl.alu_src_imm = 1;
+      end
+
+      7'b1100011: begin
+        id_ctrl.branch = 1;
+      end
+
+      7'b1101111: begin
+        id_ctrl.jump = 1;
+        id_ctrl.reg_write = 1;
+      end
+      default: ;
+    endcase
+  end
+
+  logic [63:0] id_imm;
+
+  always_comb begin
+    case (if_inst[6:0])
+      7'b0010011, 7'b0000011: id_imm = imm_i(if_inst);
+      7'b0100011: id_imm = imm_s(if_inst);
+      7'b1100011: id_imm = imm_b(if_inst);
+      7'b1101111: id_imm = imm_j(if_inst);
+      default: id_imm = 0;
+    endcase
+  end
+
+  // ============================================================
+  // HAZARD (load-use)
+  // ============================================================
+  assign stall = ex_ctrl.mem_read && (ex_rd != 0) && ((ex_rd == rs1) || (ex_rd == rs2));
+
+  // ============================================================
+  // ID/EX
+  // ============================================================
+  always_ff @(posedge clk) begin
+    if (flush || stall) begin
+      ex_ctrl <= '0;
+    end else begin
+      ex_ctrl <= id_ctrl;
+      ex_pc <= if_pc;
+      ex_rs1_val <= rs1_val;
+      ex_rs2_val <= rs2_val;
+      ex_rs1 <= rs1;
+      ex_rs2 <= rs2;
+      ex_rd <= rd;
+      ex_imm <= id_imm;
+    end
+  end
+
+  // ============================================================
+  // FORWARDING
+  // ============================================================
+  always_comb begin
+    fwd_a = 0;
+    fwd_b = 0;
+
+    if (mem_ctrl.reg_write && mem_rd != 0 && mem_rd == ex_rs1) fwd_a = 1;
+    else if (wb_ctrl.reg_write && wb_rd != 0 && wb_rd == ex_rs1) fwd_a = 2;
+
+    if (mem_ctrl.reg_write && mem_rd != 0 && mem_rd == ex_rs2) fwd_b = 1;
+    else if (wb_ctrl.reg_write && wb_rd != 0 && wb_rd == ex_rs2) fwd_b = 2;
+  end
+
+  always_comb begin
+    op1 = ex_rs1_val;
+    op2 = ex_rs2_val;
+
+    case (fwd_a)
+      1: op1 = mem_alu_result;
+      2: op1 = wb_data;
+    endcase
+
+    case (fwd_b)
+      1: op2 = mem_alu_result;
+      2: op2 = wb_data;
+    endcase
+  end
+
+  logic [63:0] alu_b;
+
+  assign alu_b = ex_ctrl.alu_src_imm ? ex_imm : op2;
+
+  always_comb begin
+    case (ex_ctrl.alu_op)
+      0: begin
+        alu_result = op1 + alu_b;
+      end
+      1: alu_result = op1 - alu_b;
+      default: alu_result = 0;
+    endcase
+  end
+
+  assign ex_branch_taken = (if_inst[14:12] == 3'b000) ? (op1 == op2) : (if_inst[14:12] == 3'b001) ? (op1 != op2) : 0;
+
+  // ============================================================
+  // EX/MEM
+  // ============================================================
+  always_ff @(posedge clk) begin
+    mem_ctrl <= ex_ctrl;
+    mem_alu_result <= alu_result;
+    mem_wdata <= op2;
+    mem_rd <= ex_rd;
+  end
+
+  // ============================================================
+  // MEMORY (simple SRAM)
+  // ============================================================
+  logic [63:0] memory[0:1023];
+
+  always_ff @(posedge clk) begin
+    if (mem_ctrl.mem_write) memory[mem_alu_result[12:3]] <= mem_wdata;
+
+    dmem_rdata <= memory[mem_alu_result[12:3]];
+  end
+
+  // ============================================================
+  // MEM/WB
+  // ============================================================
+  always_ff @(posedge clk) begin
+    wb_ctrl <= mem_ctrl;
+    wb_rd   <= mem_rd;
+
+    if (mem_ctrl.mem_read) wb_data <= dmem_rdata;
+    else if (mem_ctrl.jump) wb_data <= ex_pc + 4;
+    else wb_data <= mem_alu_result;
+  end
+
+  // ============================================================
+  // WB
+  // ============================================================
+  always_ff @(posedge clk) begin
+    if (wb_ctrl.reg_write && wb_rd != 0) begin
+      $display("reg[%0d]=%h", wb_rd, wb_data);
+      regfile[wb_rd] <= wb_data;
+    end
+  end
+
+  // ============================================================
+  // BOOT ROM
+  // ============================================================
+  logic [31:0] rom[0:255];
+
+  initial begin
+    rom[0] = 32'h00500093;  // addi x1, x0, 5
+    rom[1] = 32'h00a00113;  // addi x2, x0, 10
+    rom[2] = 32'h002081b3;  // add x3, x1, x2
+    rom[3] = 32'h00303023;  // sd x3, 0(x0)
+    rom[4] = 32'h00003203;  // ld x4, 0(x0)
+    rom[5] = 32'h00418463;  // beq x3, x4, +8
+    rom[6] = 32'h06300293;  // addi x5, x0, 99 (should skip)
+    rom[7] = 32'h00100313;  // addi x6, x0, 1
+  end
+
+  assign imem_rdata = rom[pc[9:2]];
+
+endmodule

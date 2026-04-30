@@ -31,6 +31,7 @@ int main(int argc, char **argv) {
     top->clk = !top->clk;
 
     top->eval(); // 评估逻辑
+    // printf("==> time: %llu\n", contextp->time());
 
     tfp->dump(contextp->time()); // 6. 将当前时刻的信号值写入 VCD 文件
   }

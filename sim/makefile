@@ -27,8 +27,13 @@ SIM = obj_dir/Vtop
 
 all: $(SIM)
 
+mini: obj_dir/Vmini
+
 $(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
+
+obj_dir/Vmini: minisoc.sv
+	@verilator --timing --binary --trace minisoc.sv --top-module mini
 
 run: $(SIM)
 	@$(SIM)
