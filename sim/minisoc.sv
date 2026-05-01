@@ -10,60 +10,71 @@
  */
 
 `timescale 1ns / 1ps
-
 `define LOG(msg) $display("[%t] %s", $time, msg)
 
+// ============================================================
+// Testbench
+// ============================================================
 module mini ();
-
   logic clk, rst_n;
+
   initial begin
-    // format: NNN.PPP (N:ns, P:ps)
     $timeformat(-9, 3, "", 9);
     clk   = 0;
     rst_n = 0;
-    #2ns rst_n = 1;
+    #1 rst_n = 1;
   end
 
-  always #1ns clk = ~clk;
+  always #1 clk = ~clk;
 
-  // top level hardware instances
   minisoc soc (
     .clk(clk),
     .rst(rst_n)
   );
-
 endmodule
 
+
+// ============================================================
+// Minimal RV64I SoC (VALID + CLEAN CONTROL FLOW)
+// ============================================================
 module minisoc (
   input logic clk,
   input logic rst
 );
 
-  // =========================
+  // ============================================================
   // PC
-  // =========================
+  // ============================================================
   logic [63:0] pc, pc_next;
 
-  // =========================
-  // IF
-  // =========================
-  logic [31:0] imem_rdata;
+  // ============================================================
+  // Pipeline valid bits (CRITICAL)
+  // ============================================================
+  logic if_valid, id_valid, ex_valid, mem_valid, wb_valid;
+
+  // ============================================================
+  // IF stage
+  // ============================================================
   logic [31:0] if_inst;
   logic [63:0] if_pc;
+  logic [31:0] imem_rdata;
 
-  // =========================
-  // ID
-  // =========================
-  logic [4:0] rs1, rs2, rd;
+  // ============================================================
+  // Register file
+  // ============================================================
   logic [63:0] regfile[31:0];
-  logic [63:0] rs1_val, rs2_val;
+  logic [4:0] rs1, rs2, rd;
 
-  // =========================
+  // ============================================================
   // ID/EX
-  // =========================
+  // ============================================================
   logic [63:0] ex_pc, ex_rs1_val, ex_rs2_val, ex_imm;
   logic [4:0] ex_rs1, ex_rs2, ex_rd;
+  logic [2:0] ex_funct3;
 
+  // ============================================================
+  // Control
+  // ============================================================
   typedef struct packed {
     logic alu_src_imm;
     logic mem_read;
@@ -71,155 +82,169 @@ module minisoc (
     logic reg_write;
     logic branch;
     logic jump;
+    logic jalr;
     logic [3:0] alu_op;
   } ctrl_t;
 
   ctrl_t id_ctrl, ex_ctrl, mem_ctrl, wb_ctrl;
 
-  // =========================
-  // EX
-  // =========================
-  logic [63:0] alu_result;
-  logic ex_branch_taken;
+  localparam ALU_ADD = 0;
+  localparam ALU_SUB = 1;
 
-  // forwarding
+  // ============================================================
+  // EX
+  // ============================================================
+  logic [63:0] alu_result;
+  logic ex_taken;
+
   logic [1:0] fwd_a, fwd_b;
   logic [63:0] op1, op2;
 
-  // =========================
-  // MEM
-  // =========================
+  // ============================================================
+  // MEM/WB
+  // ============================================================
   logic [63:0] mem_alu_result, mem_wdata;
   logic [4:0] mem_rd;
-  logic [63:0] dmem_rdata;
+  logic [63:0] mem_pc;
 
-  // =========================
-  // WB
-  // =========================
   logic [63:0] wb_data;
   logic [4:0] wb_rd;
 
-  // =========================
-  // Hazard
-  // =========================
   logic stall, flush;
 
   // ============================================================
-  // PC UPDATE
+  // PC control (ONLY EX STAGE)
   // ============================================================
   always_comb begin
     pc_next = pc + 4;
 
-    if (ex_ctrl.branch && ex_branch_taken) begin
-      pc_next = ex_pc + ex_imm;
-    end
+    if (ex_valid && ex_ctrl.branch && ex_taken) pc_next = ex_pc + ex_imm;
 
-    if (ex_ctrl.jump) begin
-      pc_next = ex_pc + ex_imm;
-    end
+    if (ex_valid && ex_ctrl.jump && !ex_ctrl.jalr) pc_next = ex_pc + ex_imm;
+
+    if (ex_valid && ex_ctrl.jalr) pc_next = (op1 + ex_imm) & ~64'd1;
   end
 
+  logic [15:0] counter;
   always_ff @(posedge clk) begin
     if (!rst) pc <= 64'h8000_0000;
     else if (!stall) pc <= pc_next;
+    counter <= counter + 1;
+    if (counter > 60) begin
+      $finish;
+    end
   end
 
-  assign flush = (ex_ctrl.branch && ex_branch_taken) | ex_ctrl.jump;
+  assign flush = ex_valid && (ex_ctrl.branch & ex_taken | ex_ctrl.jump | ex_ctrl.jalr);
 
   // ============================================================
-  // IF/ID
+  // VALID PIPELINE (核心)
   // ============================================================
-  logic [15:0] counter = '0;
   always_ff @(posedge clk) begin
-    counter <= counter + 1;
+    if (!rst) begin
+      if_valid  <= 0;
+      id_valid  <= 0;
+      ex_valid  <= 0;
+      mem_valid <= 0;
+      wb_valid  <= 0;
+    end else begin
+      if_valid <= 1;
+
+      if (flush) id_valid <= 0;
+      else if (!stall) id_valid <= if_valid;
+
+      if (flush) ex_valid <= 0;
+      else ex_valid <= id_valid;
+
+      mem_valid <= ex_valid;
+      wb_valid  <= mem_valid;
+    end
+  end
+
+  // ============================================================
+  // IF
+  // ============================================================
+  always_ff @(posedge clk) begin
     if (flush) begin
-      if_inst <= 32'h00000013;
+      if_inst <= 32'h00000013;  // NOP
       if_pc   <= 0;
     end else if (!stall) begin
       if_inst <= imem_rdata;
       if_pc   <= pc;
     end
-    if (counter > 20) begin
-      $finish;
-    end
   end
 
   // ============================================================
-  // ID
+  // Decode
   // ============================================================
   assign rs1 = if_inst[19:15];
   assign rs2 = if_inst[24:20];
-  assign rd = if_inst[11:7];
+  assign rd  = if_inst[11:7];
 
-  assign rs1_val = regfile[rs1];
-  assign rs2_val = regfile[rs2];
-
-  // immediate
-  function automatic [63:0] imm_i(input [31:0] inst);
-    return {{52{inst[31]}}, inst[31:20]};
+  function automatic [63:0] imm_i(input [31:0] i);
+    return {{52{i[31]}}, i[31:20]};
   endfunction
 
-  function automatic [63:0] imm_s(input [31:0] inst);
-    return {{52{inst[31]}}, inst[31:25], inst[11:7]};
+  function automatic [63:0] imm_s(input [31:0] i);
+    return {{52{i[31]}}, i[31:25], i[11:7]};
   endfunction
 
-  function automatic [63:0] imm_b(input [31:0] inst);
-    return {{51{inst[31]}}, inst[31], inst[7], inst[30:25], inst[11:8], 1'b0};
+  function automatic [63:0] imm_b(input [31:0] i);
+    return {{51{i[31]}}, i[31], i[7], i[30:25], i[11:8], 1'b0};
   endfunction
 
-  function automatic [63:0] imm_u(input [31:0] inst);
-    return {{32{inst[31]}}, inst[31:12], 12'b0};
+  function automatic [63:0] imm_j(input [31:0] i);
+    return {{43{i[31]}}, i[31], i[19:12], i[20], i[30:21], 1'b0};
   endfunction
 
-  function automatic [63:0] imm_j(input [31:0] inst);
-    return {{43{inst[31]}}, inst[31], inst[19:12], inst[20], inst[30:21], 1'b0};
-  endfunction
+  logic [63:0] id_imm;
 
-  // decode
   always_comb begin
     id_ctrl = '0;
+    id_ctrl.alu_op = ALU_ADD;
 
     case (if_inst[6:0])
-      7'b0110011: begin
+      7'b0110011: begin  // R-type (ADD/SUB)
         id_ctrl.reg_write = 1;
-        if (if_inst[30]) id_ctrl.alu_op = 1;  // SUB
-        else id_ctrl.alu_op = 0;  // ADD
+        id_ctrl.alu_op = if_inst[30] ? ALU_SUB : ALU_ADD;
       end
 
-      7'b0010011: begin
-        id_ctrl.reg_write = 1;
+      7'b0010011: begin  // ADDI
+        id_ctrl.reg_write   = 1;
         id_ctrl.alu_src_imm = 1;
-        id_ctrl.alu_op = 0;
       end
 
-      7'b0000011: begin
+      7'b0000011: begin  // LD
         id_ctrl.mem_read = 1;
         id_ctrl.reg_write = 1;
         id_ctrl.alu_src_imm = 1;
       end
 
-      7'b0100011: begin
+      7'b0100011: begin  // SD
         id_ctrl.mem_write   = 1;
         id_ctrl.alu_src_imm = 1;
       end
 
-      7'b1100011: begin
-        id_ctrl.branch = 1;
-      end
+      7'b1100011: id_ctrl.branch = 1;  // BEQ/BNE
 
-      7'b1101111: begin
+      7'b1101111: begin  // JAL
         id_ctrl.jump = 1;
         id_ctrl.reg_write = 1;
       end
+
+      7'b1100111: begin  // JALR
+        id_ctrl.jalr = 1;
+        id_ctrl.reg_write = 1;
+        id_ctrl.alu_src_imm = 1;
+      end
+
       default: ;
     endcase
   end
 
-  logic [63:0] id_imm;
-
   always_comb begin
     case (if_inst[6:0])
-      7'b0010011, 7'b0000011: id_imm = imm_i(if_inst);
+      7'b0010011, 7'b0000011, 7'b1100111: id_imm = imm_i(if_inst);
       7'b0100011: id_imm = imm_s(if_inst);
       7'b1100011: id_imm = imm_b(if_inst);
       7'b1101111: id_imm = imm_j(if_inst);
@@ -228,72 +253,71 @@ module minisoc (
   end
 
   // ============================================================
-  // HAZARD (load-use)
+  // Hazard
   // ============================================================
-  assign stall = ex_ctrl.mem_read && (ex_rd != 0) && ((ex_rd == rs1) || (ex_rd == rs2));
+  assign stall = ex_valid && ex_ctrl.mem_read && (ex_rd != 0) && ((ex_rd == rs1) || (ex_rd == rs2));
 
   // ============================================================
   // ID/EX
   // ============================================================
   always_ff @(posedge clk) begin
-    if (flush || stall) begin
+    if (!rst) begin
       ex_ctrl <= '0;
+      ex_rd   <= 0;
+      ex_pc   <= 0;
+    end else if (flush || stall) begin
+      ex_ctrl <= '0;
+      ex_rd   <= 0;
     end else begin
       ex_ctrl <= id_ctrl;
       ex_pc <= if_pc;
-      ex_rs1_val <= rs1_val;
-      ex_rs2_val <= rs2_val;
+      ex_rs1_val <= regfile[rs1];
+      ex_rs2_val <= regfile[rs2];
       ex_rs1 <= rs1;
       ex_rs2 <= rs2;
       ex_rd <= rd;
       ex_imm <= id_imm;
+      ex_funct3 <= if_inst[14:12];
     end
   end
 
   // ============================================================
-  // FORWARDING
+  // Forwarding
   // ============================================================
   always_comb begin
     fwd_a = 0;
     fwd_b = 0;
 
-    if (mem_ctrl.reg_write && mem_rd != 0 && mem_rd == ex_rs1) fwd_a = 1;
-    else if (wb_ctrl.reg_write && wb_rd != 0 && wb_rd == ex_rs1) fwd_a = 2;
+    if (mem_valid && mem_ctrl.reg_write && mem_rd == ex_rs1) fwd_a = 1;
+    else if (wb_valid && wb_ctrl.reg_write && wb_rd == ex_rs1) fwd_a = 2;
 
-    if (mem_ctrl.reg_write && mem_rd != 0 && mem_rd == ex_rs2) fwd_b = 1;
-    else if (wb_ctrl.reg_write && wb_rd != 0 && wb_rd == ex_rs2) fwd_b = 2;
+    if (mem_valid && mem_ctrl.reg_write && mem_rd == ex_rs2) fwd_b = 1;
+    else if (wb_valid && wb_ctrl.reg_write && wb_rd == ex_rs2) fwd_b = 2;
   end
 
   always_comb begin
     op1 = ex_rs1_val;
     op2 = ex_rs2_val;
 
-    case (fwd_a)
-      1: op1 = mem_alu_result;
-      2: op1 = wb_data;
-    endcase
+    if (fwd_a == 1) op1 = mem_alu_result;
+    else if (fwd_a == 2) op1 = wb_data;
 
-    case (fwd_b)
-      1: op2 = mem_alu_result;
-      2: op2 = wb_data;
-    endcase
+    if (fwd_b == 1) op2 = mem_alu_result;
+    else if (fwd_b == 2) op2 = wb_data;
   end
 
   logic [63:0] alu_b;
-
   assign alu_b = ex_ctrl.alu_src_imm ? ex_imm : op2;
 
   always_comb begin
     case (ex_ctrl.alu_op)
-      0: begin
-        alu_result = op1 + alu_b;
-      end
-      1: alu_result = op1 - alu_b;
+      ALU_ADD: alu_result = op1 + alu_b;
+      ALU_SUB: alu_result = op1 - alu_b;
       default: alu_result = 0;
     endcase
   end
 
-  assign ex_branch_taken = (if_inst[14:12] == 3'b000) ? (op1 == op2) : (if_inst[14:12] == 3'b001) ? (op1 != op2) : 0;
+  assign ex_taken = (ex_funct3 == 3'b000) ? (op1 == op2) : (ex_funct3 == 3'b001) ? (op1 != op2) : 0;
 
   // ============================================================
   // EX/MEM
@@ -303,20 +327,23 @@ module minisoc (
     mem_alu_result <= alu_result;
     mem_wdata <= op2;
     mem_rd <= ex_rd;
+    mem_pc <= ex_pc;
   end
 
   // ============================================================
-  // MEMORY (simple SRAM)
+  // MEMORY
   // ============================================================
   logic [63:0] memory[0:1023];
 
   always_ff @(posedge clk) begin
-    if (mem_ctrl.mem_write) begin
-      `LOG($sformatf("mem[%0d]=%h", mem_alu_result[12:3], mem_wdata));
+    if (mem_valid && mem_ctrl.mem_write) begin
+      `LOG($sformatf("m[%02d]=%h", mem_alu_result[12:3], mem_wdata));
       memory[mem_alu_result[12:3]] <= mem_wdata;
     end
+  end
 
-    dmem_rdata <= memory[mem_alu_result[12:3]];
+  always_ff @(posedge clk) begin
+    if (mem_valid && mem_ctrl.mem_read) wb_data <= memory[mem_alu_result[12:3]];
   end
 
   // ============================================================
@@ -326,35 +353,45 @@ module minisoc (
     wb_ctrl <= mem_ctrl;
     wb_rd   <= mem_rd;
 
-    if (mem_ctrl.mem_read) wb_data <= dmem_rdata;
-    else if (mem_ctrl.jump) wb_data <= ex_pc + 4;
-    else wb_data <= mem_alu_result;
+    if (mem_ctrl.jump || mem_ctrl.jalr) wb_data <= mem_pc + 4;
+    else if (!mem_ctrl.mem_read) wb_data <= mem_alu_result;
   end
 
   // ============================================================
   // WB
   // ============================================================
   always_ff @(posedge clk) begin
-    if (wb_ctrl.reg_write && wb_rd != 0) begin
-      `LOG($sformatf("reg[%0d]=%h", wb_rd, wb_data));
+    if (wb_valid && wb_ctrl.reg_write && wb_rd != 0) begin
+      `LOG($sformatf("r[%02d]=%0d", wb_rd, wb_data));
       regfile[wb_rd] <= wb_data;
     end
   end
 
   // ============================================================
-  // BOOT ROM
+  // ROM (WITH COMMENTS)
   // ============================================================
   logic [31:0] rom[0:255];
 
   initial begin
-    rom[0] = 32'h00500093;  // addi x1, x0, 5
-    rom[1] = 32'h00a00113;  // addi x2, x0, 10
-    rom[2] = 32'h002081b3;  // add x3, x1, x2
-    rom[3] = 32'h00303023;  // sd x3, 0(x0)
-    rom[4] = 32'h00003203;  // ld x4, 0(x0)
-    rom[5] = 32'h00418463;  // beq x3, x4, +8
-    rom[6] = 32'h06300293;  // addi x5, x0, 99 (should skip)
-    rom[7] = 32'h00100313;  // addi x6, x0, 1
+    rom[0]  = 32'h00500093;  // addi x1, x0, 5
+    rom[1]  = 32'h00a00113;  // addi x2, x0, 10
+    rom[2]  = 32'h002081b3;  // add  x3, x1, x2
+    rom[3]  = 32'h00318233;  // add  x4, x3, x3
+    rom[4]  = 32'h00403023;  // sd   x4, 0(x0)
+    rom[5]  = 32'h00003283;  // ld   x5, 0(x0)
+    rom[6]  = 32'h00528333;  // add  x6, x5, x5
+    rom[7]  = 32'h00628663;  // beq  x5, x6, +12
+    rom[8]  = 32'h00100393;  // addi x7, x0, 1
+    rom[9]  = 32'h00630663;  // beq  x6, x6, +12
+    rom[10] = 32'h06300413;  // addi x8, x0, 99 (flushed)
+    rom[11] = 32'h00200493;  // addi x9, x0, 2
+    rom[12] = 32'h008000ef;  // jal  x1, +8
+    rom[13] = 32'h00300513;  // addi x10, x0, 3
+    rom[14] = 32'h00400593;  // addi x11, x0, 4
+    rom[15] = 32'h00008067;  // jalr x0, x1, 0
+    rom[16] = 32'h00b03023;  // sd   x11, 0(x0)
+    rom[17] = 32'h00003603;  // ld   x12, 0(x0)
+    rom[18] = 32'h00100693;  // addi x13, x0, 1
   end
 
   assign imem_rdata = rom[pc[9:2]];
@@ -362,4 +399,3 @@ module minisoc (
 endmodule
 
 /******************************************************************************/
-

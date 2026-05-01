@@ -28,6 +28,7 @@ module exstage (
   import corepkg::*;
 
   ex_ctrl_t ctrl;
+
   logic [63:0] op1 = 64'b0;
   logic [63:0] op2 = 64'b0;
 
@@ -71,7 +72,7 @@ module exstage (
     end else begin
       ctrl <= '0;
       if (ctrl_i.valid) begin
-        ctrl.valid = 1;
+        ctrl.valid <= 1;
         if (ctrl_i.alu_op != ALU_NONE) begin
           exec_alu();
         end
@@ -84,8 +85,8 @@ module exstage (
         if (ctrl_i.lsu_op != LSU_NONE) begin
           exec_loadstore();
         end
-        ctrl.reg_write = ctrl_i.reg_write;
-        ctrl.rd = rd_i;
+        ctrl.reg_write <= ctrl_i.reg_write;
+        ctrl.rd <= rd_i;
       end
       ctrl_o <= ctrl;
     end

@@ -40,7 +40,6 @@ module regfile (
       end
     end else begin
       if (we_i && rd_i > 0 && int'(rd_i) < REGCNT) begin
-        `LOGI($sformatf("write reg %0d = %h", rd_i, wdata_i));
         regs[rd_i] <= wdata_i;
       end
     end

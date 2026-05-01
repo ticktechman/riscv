@@ -36,7 +36,7 @@ obj_dir/Vmini: minisoc.sv
 	@verilator --timing --binary --trace minisoc.sv --top-module mini
 
 run: $(SIM)
-	@$(SIM)
+	@$(SIM) +verilator+quiet
 
 clean:
 	rm -rf obj_dir

@@ -28,8 +28,8 @@ module memstage (
       ctrl <= '0;
       if (ctrl_i.valid) begin
         ctrl.valid <= 1'b1;
-        ctrl.alu_result = ctrl_i.alu_result;
-        ctrl.reg_src = ctrl_i.reg_src;
+        ctrl.alu_result <= ctrl_i.alu_result;
+        ctrl.reg_src <= ctrl_i.reg_src;
         ctrl.reg_write <= ctrl_i.reg_write;
         ctrl.rd <= ctrl_i.rd;
       end

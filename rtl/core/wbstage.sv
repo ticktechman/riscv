@@ -29,11 +29,11 @@ module wbstage (
     if (!rst_n) begin
       ctrl_o <= '0;
     end else begin
-      ctrl.we = 1'b0;
+      ctrl.we <= 1'b0;
       if (ctrl_i.valid && ctrl_i.reg_write) begin
         if ((int'(ctrl_i.rd)) < REGCNT && (int'(ctrl_i.rd)) > 0) begin
-          ctrl.we = 1'b1;
-          ctrl.rd = ctrl_i.rd;
+          ctrl.we <= 1'b1;
+          ctrl.rd <= ctrl_i.rd;
           unique case (ctrl_i.reg_src)
             0: ctrl.wdata <= ctrl_i.alu_result;
             1: ctrl.wdata <= ctrl_i.mem_result;
