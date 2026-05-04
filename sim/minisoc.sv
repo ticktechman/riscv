@@ -29,7 +29,9 @@ module top ();
     $timeformat(-9, 3, "", 9);
   end
 
-  clkgen clock (
+  clkgen #(
+    .COUNTER(100)
+  ) clock (
     .clk(clk),
     .rst_n(rst_n)
   );
@@ -45,7 +47,7 @@ endmodule
 // clock gen
 //-------------------------------------
 module clkgen #(
-  parameter COUNTER = 100
+  parameter COUNTER = 10
 ) (
   output logic clk,
   output logic rst_n
@@ -551,7 +553,7 @@ module soc (
             `LOGI($sformatf("m[%0d]=%h", addr, mem_data));
             unique case (sd_op)
               SD_SB: begin
-                // ram[mem_addr] <= mem_data[7:0];
+                ram[addr] <= mem_data[7:0];
               end
               SD_SH: begin
                 ram[addr]   <= mem_data[7:0];
