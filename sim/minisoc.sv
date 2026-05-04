@@ -30,7 +30,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(100)
+    .COUNTER(80)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -172,7 +172,7 @@ module soc (
   logic [2:0] f3;
   logic [6:0] f7;
   logic [9:0] fc;
-  logic br, br_taken;
+  logic br, br_taken, jump;
   imm_type_e imm_type;
   op_src_e op_s1, op_s2;
   opcode_e opcode;
@@ -203,6 +203,7 @@ module soc (
       op_s2 = OP_SRC_NONE;
       reg_write = 0;
       br = 1'b0;
+      jump = 1'b0;
 
       rs1 = instr[19:15];
       rs2 = instr[24:20];
@@ -306,6 +307,7 @@ module soc (
           `LOGI("JAL");
           // 008000ef: jal rd, imm
           // rd = PC+4; PC=PC+imm;
+          jump = 1'b1;
           imm_type = IMM_J;
           reg_write = 1;
           alu_op = ALU_ADD;
@@ -316,6 +318,7 @@ module soc (
           `LOGI("JALR");
           // 00008067: jalr rd, imm(rs1)
           // rd = PC+4; PC = (rs1 + imm) & ~1 ;
+          jump = 1'b1;
           imm_type = IMM_I;
           reg_write = 1;
           alu_op = ALU_ADD;
@@ -409,6 +412,7 @@ module soc (
       end
       if (mem_op != MEM_NONE) begin
         mem_addr = alu_result;
+        addr = mem_addr[6:0];
         if (mem_op == MEM_SD) begin
           mem_data = x[rs2];
         end
@@ -448,7 +452,7 @@ module soc (
           if (br_taken) begin
             pc <= br_target;
             `LOGI($sformatf("pc to br_target=%h", br_target));
-          end else if (opcode == OPCODE_JAL || opcode == OPCODE_JALR) begin
+          end else if (jump) begin
             `LOGI($sformatf("pc to j_target=%h", j_target));
             pc <= j_target;
           end else begin
@@ -519,7 +523,6 @@ module soc (
       end
     end else begin
       if (state == MEMACCESS && mem_op != MEM_NONE) begin
-        addr = mem_addr[6:0];
         unique case (mem_op)
           MEM_LD: begin
             `LOGI($sformatf("load m[%0d]", addr));
