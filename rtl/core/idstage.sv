@@ -132,11 +132,10 @@ module idstage (
         decode.imm_type = IMM_S;
         decode.alu_op   = ALU_ADD;
         unique case (f3)
-          3'b000: decode.lsu_op = LSU_SB;
-          3'b001: decode.lsu_op = LSU_SH;
-          3'b010: decode.lsu_op = LSU_SW;
-          3'b011: decode.lsu_op = LSU_SD;
-
+          3'b000:  decode.lsu_op = LSU_SB;
+          3'b001:  decode.lsu_op = LSU_SH;
+          3'b010:  decode.lsu_op = LSU_SW;
+          3'b011:  decode.lsu_op = LSU_SD;
           default: ;
         endcase
       end

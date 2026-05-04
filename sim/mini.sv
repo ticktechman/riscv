@@ -70,6 +70,7 @@ module mini (
   input logic rst_n
 );
 
+  logic [31:0] a, b, c;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       `LOGW("reset");
