@@ -123,10 +123,6 @@ module soc (
     ALU_SRA,
     ALU_SLT,
     ALU_SLTU,
-    ALU_MUL,
-    ALU_MULH,
-    ALU_DIV,
-    ALU_REM,
 
     // rv64 32bit word
     ALU_ADDW,
@@ -213,7 +209,7 @@ module soc (
   reg_t x[REGMAX];
   reg_t csr[REGMAX];
 
-  always_comb begin
+  always_comb begin : decode
     if (state == DECODE) begin
       alu_op = ALU_NONE;
       mem_op = MEM_NONE;
@@ -258,6 +254,20 @@ module soc (
             default: ;
           endcase
         end
+        OPCODE_OP_32: begin
+          // R-type: rd = rs1 op rs2 (32-bit + sign extend)
+          reg_write = 1;
+          op_s1 = OP_SRC_REG;
+          op_s2 = OP_SRC_REG;
+          unique case (fc)
+            {7'b0000000, 3'b000} : alu_op = ALU_ADDW;
+            {7'b0100000, 3'b000} : alu_op = ALU_SUBW;
+            {7'b0000000, 3'b001} : alu_op = ALU_SLLW;
+            {7'b0000000, 3'b101} : alu_op = ALU_SRLW;
+            {7'b0100000, 3'b101} : alu_op = ALU_SRAW;
+            default: ;
+          endcase
+        end
         OPCODE_OP_IMM: begin
           `LOGI("OP_IMM");
           // 00500093: addi x1, x0, 5
@@ -271,6 +281,35 @@ module soc (
             3'b000:  alu_op = ALU_ADD;
             3'b010:  alu_op = ALU_SLT;
             3'b011:  alu_op = ALU_SLTU;
+            3'b100:  alu_op = ALU_XOR;
+            3'b110:  alu_op = ALU_OR;
+            3'b111:  alu_op = ALU_AND;
+            default: ;
+          endcase
+          unique case (fc)
+            {7'b0000000, 3'b001} : alu_op = ALU_SLL;
+            {7'b0000000, 3'b101} : alu_op = ALU_SRL;
+            {7'b0100000, 3'b101} : alu_op = ALU_SRA;
+            default: ;
+          endcase
+        end
+        OPCODE_OP_IMM_32: begin
+          `LOGI("OP_IMM32");
+          // 00500093: addiw x1, x0, 5
+          // addi rd, rs1, imm
+          // ALU: rs1 <op> imm;
+          reg_write = 1;
+          op_s1 = OP_SRC_REG;
+          op_s2 = OP_SRC_IMM;
+          imm_type = IMM_I;
+          unique case (f3)
+            3'b000:  alu_op = ALU_ADDW;
+            default: ;
+          endcase
+          unique case (fc)
+            {7'b0000000, 3'b001} : alu_op = ALU_SLLW;
+            {7'b0000000, 3'b101} : alu_op = ALU_SRLW;
+            {7'b0100000, 3'b101} : alu_op = ALU_SRAW;
             default: ;
           endcase
         end
@@ -528,7 +567,7 @@ module soc (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-    end else begin
+    end else begin : writeback
       if (state == WB && reg_write == 1) begin
         if (rd > 0) begin
           if (mem_op == MEM_LD) begin
@@ -591,7 +630,7 @@ module soc (
         ram[i] <= '0;
       end
     end else begin
-      if (state == MEMACCESS && mem_op != MEM_NONE) begin
+      if (state == MEMACCESS && mem_op != MEM_NONE) begin : memaccess
         unique case (mem_op)
           MEM_LD: begin
             `LOGI($sformatf("load m[%0d]", addr));
