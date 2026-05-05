@@ -115,6 +115,27 @@ module soc (
     ALU_NONE,
     ALU_ADD,
     ALU_SUB,
+    ALU_AND,
+    ALU_OR,
+    ALU_XOR,
+    ALU_SLL,
+    ALU_SRL,
+    ALU_SRA,
+    ALU_SLT,
+    ALU_SLTU,
+    ALU_MUL,
+    ALU_MULH,
+    ALU_DIV,
+    ALU_REM,
+
+    // rv64 32bit word
+    ALU_ADDW,
+    ALU_SUBW,
+    ALU_SLLW,
+    ALU_SRLW,
+    ALU_SRAW,
+
+    // branch
     ALU_BEQ,
     ALU_BNE,
     ALU_BLT,
@@ -225,6 +246,15 @@ module soc (
           unique case (fc)
             {7'b0000000, 3'b000} : alu_op = ALU_ADD;
             {7'b0100000, 3'b000} : alu_op = ALU_SUB;
+            {7'b0000000, 3'b111} : alu_op = ALU_AND;
+            {7'b0000000, 3'b110} : alu_op = ALU_OR;
+            {7'b0000000, 3'b100} : alu_op = ALU_XOR;
+            {7'b0000000, 3'b001} : alu_op = ALU_SLL;
+            {7'b0000000, 3'b101} : alu_op = ALU_SRL;
+            {7'b0100000, 3'b101} : alu_op = ALU_SRA;
+            {7'b0000000, 3'b010} : alu_op = ALU_SLT;
+            {7'b0000000, 3'b011} : alu_op = ALU_SLTU;
+
             default: ;
           endcase
         end
@@ -239,6 +269,8 @@ module soc (
           imm_type = IMM_I;
           unique case (f3)
             3'b000:  alu_op = ALU_ADD;
+            3'b010:  alu_op = ALU_SLT;
+            3'b011:  alu_op = ALU_SLTU;
             default: ;
           endcase
         end
@@ -363,6 +395,7 @@ module soc (
 
   always_comb begin : exec
     logic [63:0] op1, op2;
+    logic [31:0] w_result;
     if (state == EXEC) begin
       br_taken = 1'b0;
       wb_data = '0;
@@ -372,13 +405,42 @@ module soc (
       unique case (alu_op)
         ALU_ADD:  alu_result = op1 + op2;
         ALU_SUB:  alu_result = op1 - op2;
+        ALU_AND:  alu_result = op1 & op2;
+        ALU_OR:   alu_result = op1 | op2;
+        ALU_XOR:  alu_result = op1 ^ op2;
+        ALU_SLL:  alu_result = op1 << op2[5:0];
+        ALU_SRL:  alu_result = op2 >> op2[5:0];
+        ALU_SRA:  alu_result = $signed(op1) >> op2[5:0];
+        ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
+        ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
         ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
         ALU_BEQ:  alu_result = (op1 == op2) ? 1 : 0;
         ALU_BLT:  alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
         ALU_BGE:  alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
         ALU_BLTU: alu_result = (op1 < op2) ? 1 : 0;
         ALU_BGEU: alu_result = (op1 >= op2) ? 1 : 0;
-        default:  alu_result = '0;
+
+        ALU_ADDW: begin
+          w_result   = op1[31:0] + op2[31:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SUBW: begin
+          w_result   = op1[31:0] - op2[31:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SLLW: begin
+          w_result   = op1[31:0] << op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRLW: begin
+          w_result   = op1[31:0] >> op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRAW: begin
+          w_result   = $signed(op1[31:0]) >>> op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        default: alu_result = '0;
       endcase
       // `LOGI($sformatf(
       //       "s[%02d,%02d] rs[%02d, %02d] op[%h,%h] alu:%0d result:%0d",
@@ -535,7 +597,6 @@ module soc (
             `LOGI($sformatf("load m[%0d]", addr));
             unique case (ld_op)
               LD_LB: begin
-                // mem_rdata <= {{56{ram[addr][7]}}, ram[addr][7:0]};
                 mem_rdata <= `B2R(ram, addr);
               end
               LD_LH: begin
