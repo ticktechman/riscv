@@ -515,7 +515,14 @@ module soc (
   localparam int unsigned RAMSIZE = 128;
   logic [7:0] ram[RAMSIZE];
   logic [6:0] addr;
-  reg_t raw;
+  `define B2R(r, a) {{56{r[a][7]}}, r[a][7:0]}
+  `define H2R(r, a) {{48{r[a+1][7]}}, r[a+1], r[a]}
+  `define W2R(r, a) {{32{r[a+3][7]}}, r[a+3], r[a+2], r[a+1], r[a]}
+  `define D2R(r, a) {r[a+7], r[a+6], r[a+5], r[a+4], r[a+3], r[a+2], r[a+1], r[a]}
+  `define BU2R(r, a) {{56'b0}, r[a]}
+  `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
+  `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int i = 0; i < RAMSIZE; i++) begin
@@ -528,27 +535,26 @@ module soc (
             `LOGI($sformatf("load m[%0d]", addr));
             unique case (ld_op)
               LD_LB: begin
-                mem_rdata <= {{56{ram[addr][7]}}, ram[addr][7:0]};
+                // mem_rdata <= {{56{ram[addr][7]}}, ram[addr][7:0]};
+                mem_rdata <= `B2R(ram, addr);
               end
               LD_LH: begin
-                mem_rdata <= {{48{ram[addr+1][7]}}, ram[addr+1], ram[addr]};
+                mem_rdata <= `H2R(ram, addr);
               end
               LD_LW: begin
-                mem_rdata <= {{32{ram[addr+3][7]}}, ram[addr+3], ram[addr+2], ram[addr+1], ram[addr]};
+                mem_rdata <= `W2R(ram, addr);
               end
               LD_LD: begin
-                mem_rdata <= {
-                  ram[addr+7], ram[addr+6], ram[addr+5], ram[addr+4], ram[addr+3], ram[addr+2], ram[addr+1], ram[addr]
-                };
+                mem_rdata = `D2R(ram, addr);
               end
               LD_LBU: begin
-                mem_rdata <= {{56'b0}, ram[addr]};
+                mem_rdata <= `BU2R(ram, addr);
               end
               LD_LHU: begin
-                mem_rdata <= {{48'b0}, ram[addr+1], ram[addr]};
+                mem_rdata <= `HU2R(ram, addr);
               end
               LD_LWU: begin
-                mem_rdata <= {{32'b0}, ram[addr+3], ram[addr+2], ram[addr+1], ram[addr]};
+                mem_rdata <= `WU2R(ram, addr);
               end
             endcase
           end
