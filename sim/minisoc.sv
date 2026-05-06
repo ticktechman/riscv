@@ -238,7 +238,7 @@ module soc (
   // members
   state_e state;
   addr_t pc;
-  reg_t x[REGMAX];
+  // reg_t x[REGMAX];
 
   always_comb begin : decode
     if (state == DECODE) begin
@@ -529,8 +529,8 @@ module soc (
       br_taken = 1'b0;
       wb_data = '0;
       mem_data = '0;
-      op1 = (op_s1 == OP_SRC_REG) ? x[rs1] : pc;
-      op2 = (op_s2 == OP_SRC_REG) ? x[rs2] : imm;
+      op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
+      op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
       unique case (alu_op)
         ALU_ADD:  alu_result = op1 + op2;
         ALU_SUB:  alu_result = op1 - op2;
@@ -584,15 +584,15 @@ module soc (
           // csrrw rd, csr, rs1
           // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
           wb_data   = csr_val;
-          csr_wdata = x[rs1];
+          csr_wdata = rs1_val;
         end
         SYS_CSRRS: begin
           wb_data   = csr_val;
-          csr_wdata = csr_val | x[rs1];
+          csr_wdata = csr_val | rs1_val;
         end
         SYS_CSRRC: begin
           wb_data   = csr_val;
-          csr_wdata = csr_val & (~x[rs1]);
+          csr_wdata = csr_val & (~rs1_val);
         end
         SYS_CSRRWI: begin
           wb_data   = csr_val;
@@ -642,7 +642,7 @@ module soc (
       if (mem_op != MEM_NONE) begin
         mem_addr = alu_result;
         if (mem_op == MEM_SD) begin
-          mem_data = x[rs2];
+          mem_data = rs2_val;
         end
       end
     end
@@ -692,22 +692,20 @@ module soc (
     end
   end
 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin : writeback
-      if (state == WB && reg_write == 1) begin
-        if (rd > 0) begin
-          if (mem_op == MEM_LD) begin
-            x[rd] <= mem_rdata;
-            `LOGI($sformatf("WB: x[%02d]=%h", rd, mem_rdata));
-          end else begin
-            `LOGI($sformatf("WB: x[%02d]=%h", rd, wb_data));
-            x[rd] <= wb_data;
-          end
-        end
-      end
-    end
-  end
+  // register file
+  reg_t rs1_val, rs2_val;
+  registerfile rf1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .we(reg_write),
+    .rd(rd),
+    .wdata(mem_op == MEM_LD ? mem_rdata : wb_data),
+    .rs1(rs1),
+    .rs2(rs2),
+    .rs1_val(rs1_val),
+    .rs2_val(rs2_val)
+  );
 
   // csr
   reg_t csr_val, csr_wdata;
@@ -758,6 +756,43 @@ module soc (
     .data(mem_data)
   );
 
+endmodule
+
+
+//-----------------------------------
+// register files
+//-----------------------------------
+module registerfile (
+  input logic clk,
+  input logic rst_n,
+  input state_e state,
+  input logic we,
+  input logic [4:0] rd,
+  input reg_t wdata,
+
+  input logic [4:0] rs1,
+  input logic [4:0] rs2,
+  output reg_t rs1_val,
+  output reg_t rs2_val
+);
+  reg_t x[REGMAX];
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin : writeback
+      if (state == WB && we == 1) begin
+        if (rd > 0) begin
+          x[rd] <= wdata;
+          `LOGI($sformatf("WB: x[%02d]=%h", rd, wdata));
+        end
+      end
+    end
+  end
+
+  always_comb begin
+    if (32'(rs1) < REGMAX) rs1_val = x[rs1];
+    if (32'(rs2) < REGMAX) rs2_val = x[rs2];
+  end
 endmodule
 
 //-----------------------------------
