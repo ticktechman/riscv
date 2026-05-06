@@ -572,6 +572,7 @@ module soc (
         SYS_ECALL: begin
         end
         SYS_EBREAK: begin
+          $finish;
         end
         SYS_MRET: begin
         end
@@ -756,26 +757,27 @@ module soc (
   localparam ROMSIZE = 64;
   logic [31:0] rom[ROMSIZE], instr;
   initial begin
-    rom[0]  = 32'h00500093;  // addi x1, x0, 5
-    rom[1]  = 32'h00a00113;  // addi x2, x0, 10
-    rom[2]  = 32'h002081b3;  // add  x3, x1, x2
-    rom[3]  = 32'h00318233;  // add  x4, x3, x3
-    rom[4]  = 32'h00403023;  // sd   x4, 0(x0)
-    rom[5]  = 32'h00003283;  // ld   x5, 0(x0)
-    rom[6]  = 32'h30529073;  // csrw mtvec, t0
-    rom[7]  = 32'h00528333;  // add  x6, x5, x5
-    rom[8]  = 32'h00628663;  // beq  x5, x6, +12
-    rom[9]  = 32'h00100393;  // addi x7, x0, 1
-    rom[10] = 32'h00630663;  // beq  x6, x6, +12
-    rom[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
-    rom[12] = 32'h00200493;  // addi x9, x0, 2
-    rom[13] = 32'h008000ef;  // jal  x1, +8
-    rom[14] = 32'h00300513;  // addi x10, x0, 3
-    rom[15] = 32'h00400593;  // addi x11, x0, 4
-    rom[16] = 32'h00008067;  // jalr x0, x1, 0
-    rom[17] = 32'h00b03023;  // sd   x11, 0(x0)
-    rom[18] = 32'h00003603;  // ld   x12, 0(x0)
-    rom[19] = 32'h00100693;  // addi x13, x0, 1
+    // rom[0]  = 32'h00500093;  // addi x1, x0, 5
+    // rom[1]  = 32'h00a00113;  // addi x2, x0, 10
+    // rom[2]  = 32'h002081b3;  // add  x3, x1, x2
+    // rom[3]  = 32'h00318233;  // add  x4, x3, x3
+    // rom[4]  = 32'h00403023;  // sd   x4, 0(x0)
+    // rom[5]  = 32'h00003283;  // ld   x5, 0(x0)
+    // rom[6]  = 32'h30529073;  // csrw mtvec, t0
+    // rom[7]  = 32'h00528333;  // add  x6, x5, x5
+    // rom[8]  = 32'h00628663;  // beq  x5, x6, +12
+    // rom[9]  = 32'h00100393;  // addi x7, x0, 1
+    // rom[10] = 32'h00630663;  // beq  x6, x6, +12
+    // rom[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
+    // rom[12] = 32'h00200493;  // addi x9, x0, 2
+    // rom[13] = 32'h008000ef;  // jal  x1, +8
+    // rom[14] = 32'h00300513;  // addi x10, x0, 3
+    // rom[15] = 32'h00400593;  // addi x11, x0, 4
+    // rom[16] = 32'h00008067;  // jalr x0, x1, 0
+    // rom[17] = 32'h00b03023;  // sd   x11, 0(x0)
+    // rom[18] = 32'h00003603;  // ld   x12, 0(x0)
+    // rom[19] = 32'h00100693;  // addi x13, x0, 1
+    $readmemh("isa/isa.hex", rom);
   end
   assign instr = rom[pc[7:2]];
 
