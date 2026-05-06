@@ -37,7 +37,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(1000)
+    .COUNTER(2000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -140,6 +140,7 @@ module soc (
     .imm(imm),
     .csr_imm(csr_imm),
     .pc(pc),
+    .br_taken(br_taken),
     .br_target(br_target),
     .j_target(j_target),
     .mem_addr(mem_addr),
@@ -404,6 +405,8 @@ module exec (
   input [4:0] csr_imm,
   input addr_t pc,
 
+
+  output logic  br_taken,
   output addr_t br_target,
   output addr_t j_target,
   output addr_t mem_addr,
@@ -415,13 +418,13 @@ module exec (
     reg_t alu_result;
     logic [63:0] op1, op2;
     logic [31:0] w_result;
-    logic br_taken;
     if (state == EXEC) begin
       br_taken = 1'b0;
       wb_data = '0;
       mem_data = '0;
       op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
       op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
+      `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
       unique case (alu_op)
         ALU_ADD:  alu_result = op1 + op2;
         ALU_SUB:  alu_result = op1 - op2;
@@ -984,7 +987,7 @@ module sram (
             endcase
           end
           MEM_SD: begin
-            `LOGI($sformatf("m[%0d]=%h", mem_addr[6:0], mem_data));
+            `LOGI($sformatf("store m[%0d]=%h", mem_addr[6:0], mem_data));
             unique case (sd_op)
               SD_SB: ram[mem_addr[6:0]] <= mem_data[7:0];
               SD_SH: for (logic [6:0] i = 0; i < 2; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
