@@ -148,50 +148,6 @@ module soc (
     .csr_wdata(csr_wdata)
   );
 
-  //---------------------------------
-  // state machine
-  //---------------------------------
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      `LOGW("reset");
-      state <= IDLE;
-      pc <= 64'h8000_0000_0000_0000;
-    end else begin
-      unique case (state)
-        IDLE: begin
-          `LOGI("idle ...");
-          state <= FETCH;
-        end
-        FETCH: begin
-          `LOGI($sformatf("start fetch pc=%h instr=%h", pc, instr));
-          state <= DECODE;
-        end
-        DECODE: begin
-          state <= EXEC;
-        end
-        EXEC: begin
-          state <= MEMACCESS;
-        end
-        MEMACCESS: begin
-          state <= WB;
-        end
-        WB: begin
-          state <= FETCH;
-          if (br_taken) begin
-            pc <= br_target;
-            `LOGI($sformatf("pc to br_target=%h", br_target));
-          end else if (jump) begin
-            `LOGI($sformatf("pc to j_target=%h", j_target));
-            pc <= j_target;
-          end else begin
-            pc <= pc + 4;
-          end
-        end
-        default: ;
-      endcase
-    end
-  end
-
   // register file
   reg_t rs1_val, rs2_val;
   registerfile rf1 (
@@ -256,6 +212,50 @@ module soc (
     .sd_op(sd_op),
     .data(mem_data)
   );
+
+  //---------------------------------
+  // state machine
+  //---------------------------------
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      `LOGW("reset");
+      state <= IDLE;
+      pc <= 64'h8000_0000_0000_0000;
+    end else begin
+      unique case (state)
+        IDLE: begin
+          `LOGI("idle ...");
+          state <= FETCH;
+        end
+        FETCH: begin
+          `LOGI($sformatf("start fetch pc=%h instr=%h", pc, instr));
+          state <= DECODE;
+        end
+        DECODE: begin
+          state <= EXEC;
+        end
+        EXEC: begin
+          state <= MEMACCESS;
+        end
+        MEMACCESS: begin
+          state <= WB;
+        end
+        WB: begin
+          state <= FETCH;
+          if (br_taken) begin
+            pc <= br_target;
+            `LOGI($sformatf("pc to br_target=%h", br_target));
+          end else if (jump) begin
+            `LOGI($sformatf("pc to j_target=%h", j_target));
+            pc <= j_target;
+          end else begin
+            pc <= pc + 4;
+          end
+        end
+        default: ;
+      endcase
+    end
+  end
 
 endmodule
 
