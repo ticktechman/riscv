@@ -644,7 +644,6 @@ module soc (
       end
       if (mem_op != MEM_NONE) begin
         mem_addr = alu_result;
-        addr = mem_addr[6:0];
         if (mem_op == MEM_SD) begin
           mem_data = x[rs2];
         end
@@ -758,36 +757,7 @@ module soc (
     end
   end
 
-  //---------------------------------
   // rom
-  //---------------------------------
-  // localparam ROMSIZE = 64;
-  // logic [31:0] rom[ROMSIZE], instr;
-  // initial begin
-  //   // rom[0]  = 32'h00500093;  // addi x1, x0, 5
-  //   // rom[1]  = 32'h00a00113;  // addi x2, x0, 10
-  //   // rom[2]  = 32'h002081b3;  // add  x3, x1, x2
-  //   // rom[3]  = 32'h00318233;  // add  x4, x3, x3
-  //   // rom[4]  = 32'h00403023;  // sd   x4, 0(x0)
-  //   // rom[5]  = 32'h00003283;  // ld   x5, 0(x0)
-  //   // rom[6]  = 32'h30529073;  // csrw mtvec, t0
-  //   // rom[7]  = 32'h00528333;  // add  x6, x5, x5
-  //   // rom[8]  = 32'h00628663;  // beq  x5, x6, +12
-  //   // rom[9]  = 32'h00100393;  // addi x7, x0, 1
-  //   // rom[10] = 32'h00630663;  // beq  x6, x6, +12
-  //   // rom[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
-  //   // rom[12] = 32'h00200493;  // addi x9, x0, 2
-  //   // rom[13] = 32'h008000ef;  // jal  x1, +8
-  //   // rom[14] = 32'h00300513;  // addi x10, x0, 3
-  //   // rom[15] = 32'h00400593;  // addi x11, x0, 4
-  //   // rom[16] = 32'h00008067;  // jalr x0, x1, 0
-  //   // rom[17] = 32'h00b03023;  // sd   x11, 0(x0)
-  //   // rom[18] = 32'h00003603;  // ld   x12, 0(x0)
-  //   // rom[19] = 32'h00100693;  // addi x13, x0, 1
-  //   $readmemh("isa/isa.hex", rom);
-  // end
-  // assign instr = rom[pc[7:2]];
-
   logic [31:0] instr;
   rom #(
     .HEX("isa/isa.hex")
@@ -798,12 +768,50 @@ module soc (
     .instr(instr)
   );
 
-  //---------------------------------
-  // ram
-  //---------------------------------
+  // sram
+  sram sram1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .mem_addr(mem_addr),
+    .mem_op(mem_op),
+    .ld_op(ld_op),
+    .sd_op(sd_op),
+    .mem_rdata(mem_rdata),
+    .mem_data(mem_data)
+  );
+
+  uart #(
+    .BASE(64'h2000),
+    .MASK(~64'hfff)
+  ) uart1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .addr(mem_addr),
+    .state(state),
+    .mem_op(mem_op),
+    .sd_op(sd_op),
+    .data(mem_data)
+  );
+
+endmodule
+
+//-----------------------------------
+// sram
+//-----------------------------------
+module sram (
+  input logic clk,
+  input logic rst_n,
+  input state_e state,
+  input addr_t mem_addr,
+  input mem_op_e mem_op,
+  input ld_op_e ld_op,
+  input sd_op_e sd_op,
+  input reg_t mem_data,
+  output reg_t mem_rdata
+);
   localparam int unsigned RAMSIZE = 128;
   logic [7:0] ram[RAMSIZE];
-  logic [6:0] addr;
   `define B2R(r, a) {{56{r[a][7]}}, r[a][7:0]}
   `define H2R(r, a) {{48{r[a+1][7]}}, r[a+1], r[a]}
   `define W2R(r, a) {{32{r[a+3][7]}}, r[a+3], r[a+2], r[a+1], r[a]}
@@ -821,57 +829,35 @@ module soc (
       if (state == MEMACCESS && mem_op != MEM_NONE && mem_addr < 64'(RAMSIZE)) begin : memaccess
         unique case (mem_op)
           MEM_LD: begin
-            `LOGI($sformatf("load m[%0d]", addr));
+            `LOGI($sformatf("load m[%0d]", mem_addr[6:0]));
             unique case (ld_op)
-              LD_LB:  mem_rdata <= `B2R(ram, addr);
-              LD_LH:  mem_rdata <= `H2R(ram, addr);
-              LD_LW:  mem_rdata <= `W2R(ram, addr);
-              LD_LD:  mem_rdata = `D2R(ram, addr);
-              LD_LBU: mem_rdata <= `BU2R(ram, addr);
-              LD_LHU: mem_rdata <= `HU2R(ram, addr);
-              LD_LWU: mem_rdata <= `WU2R(ram, addr);
+              LD_LB:  mem_rdata <= `B2R(ram, mem_addr[6:0]);
+              LD_LH:  mem_rdata <= `H2R(ram, mem_addr[6:0]);
+              LD_LW:  mem_rdata <= `W2R(ram, mem_addr[6:0]);
+              LD_LD:  mem_rdata = `D2R(ram, mem_addr[6:0]);
+              LD_LBU: mem_rdata <= `BU2R(ram, mem_addr[6:0]);
+              LD_LHU: mem_rdata <= `HU2R(ram, mem_addr[6:0]);
+              LD_LWU: mem_rdata <= `WU2R(ram, mem_addr[6:0]);
             endcase
           end
           MEM_SD: begin
-            `LOGI($sformatf("m[%0d]=%h", addr, mem_data));
+            `LOGI($sformatf("m[%0d]=%h", mem_addr[6:0], mem_data));
             unique case (sd_op)
-              SD_SB: ram[addr] <= mem_data[7:0];
-              SD_SH: begin
-                for (logic [6:0] i = 0; i < 2; i++) ram[addr+i] <= mem_data[8*i+:8];
-              end
-              SD_SW: begin
-                for (logic [6:0] i = 0; i < 4; i++) ram[addr+i] <= mem_data[8*i+:8];
-              end
-              SD_SD: begin
-                for (logic [6:0] i = 0; i < 8; i++) ram[addr+i] <= mem_data[8*i+:8];
-              end
+              SD_SB: ram[mem_addr[6:0]] <= mem_data[7:0];
+              SD_SH: for (logic [6:0] i = 0; i < 2; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
+              SD_SW: for (logic [6:0] i = 0; i < 4; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
+              SD_SD: for (logic [6:0] i = 0; i < 8; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
             endcase
           end
         endcase
       end
     end
   end
-
-  uart #(
-    .BASE(64'h2000),
-    .MASK(~64'hfff)
-  ) uart1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .addr(mem_addr),
-    .state(state),
-    .mem_op(mem_op),
-    .sd_op(sd_op),
-    .data(mem_data)
-  );
-
 endmodule
-
 
 //-----------------------------------
 // rom
 //-----------------------------------
-
 module rom #(
   parameter string HEX = ""
 ) (
@@ -883,26 +869,6 @@ module rom #(
   localparam ROMSIZE = 64;
   logic [31:0] data[ROMSIZE];
   initial begin
-    // data[0]  = 32'h00500093;  // addi x1, x0, 5
-    // data[1]  = 32'h00a00113;  // addi x2, x0, 10
-    // data[2]  = 32'h002081b3;  // add  x3, x1, x2
-    // data[3]  = 32'h00318233;  // add  x4, x3, x3
-    // data[4]  = 32'h00403023;  // sd   x4, 0(x0)
-    // data[5]  = 32'h00003283;  // ld   x5, 0(x0)
-    // data[6]  = 32'h30529073;  // csrw mtvec, t0
-    // data[7]  = 32'h00528333;  // add  x6, x5, x5
-    // data[8]  = 32'h00628663;  // beq  x5, x6, +12
-    // data[9]  = 32'h00100393;  // addi x7, x0, 1
-    // data[10] = 32'h00630663;  // beq  x6, x6, +12
-    // data[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
-    // data[12] = 32'h00200493;  // addi x9, x0, 2
-    // data[13] = 32'h008000ef;  // jal  x1, +8
-    // data[14] = 32'h00300513;  // addi x10, x0, 3
-    // data[15] = 32'h00400593;  // addi x11, x0, 4
-    // data[16] = 32'h00008067;  // jalr x0, x1, 0
-    // data[17] = 32'h00b03023;  // sd   x11, 0(x0)
-    // data[18] = 32'h00003603;  // ld   x12, 0(x0)
-    // data[19] = 32'h00100693;  // addi x13, x0, 1
     $readmemh("isa/isa.hex", data);
   end
   assign instr = data[pc[7:2]];
