@@ -761,32 +761,42 @@ module soc (
   //---------------------------------
   // rom
   //---------------------------------
-  localparam ROMSIZE = 64;
-  logic [31:0] rom[ROMSIZE], instr;
-  initial begin
-    // rom[0]  = 32'h00500093;  // addi x1, x0, 5
-    // rom[1]  = 32'h00a00113;  // addi x2, x0, 10
-    // rom[2]  = 32'h002081b3;  // add  x3, x1, x2
-    // rom[3]  = 32'h00318233;  // add  x4, x3, x3
-    // rom[4]  = 32'h00403023;  // sd   x4, 0(x0)
-    // rom[5]  = 32'h00003283;  // ld   x5, 0(x0)
-    // rom[6]  = 32'h30529073;  // csrw mtvec, t0
-    // rom[7]  = 32'h00528333;  // add  x6, x5, x5
-    // rom[8]  = 32'h00628663;  // beq  x5, x6, +12
-    // rom[9]  = 32'h00100393;  // addi x7, x0, 1
-    // rom[10] = 32'h00630663;  // beq  x6, x6, +12
-    // rom[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
-    // rom[12] = 32'h00200493;  // addi x9, x0, 2
-    // rom[13] = 32'h008000ef;  // jal  x1, +8
-    // rom[14] = 32'h00300513;  // addi x10, x0, 3
-    // rom[15] = 32'h00400593;  // addi x11, x0, 4
-    // rom[16] = 32'h00008067;  // jalr x0, x1, 0
-    // rom[17] = 32'h00b03023;  // sd   x11, 0(x0)
-    // rom[18] = 32'h00003603;  // ld   x12, 0(x0)
-    // rom[19] = 32'h00100693;  // addi x13, x0, 1
-    $readmemh("isa/isa.hex", rom);
-  end
-  assign instr = rom[pc[7:2]];
+  // localparam ROMSIZE = 64;
+  // logic [31:0] rom[ROMSIZE], instr;
+  // initial begin
+  //   // rom[0]  = 32'h00500093;  // addi x1, x0, 5
+  //   // rom[1]  = 32'h00a00113;  // addi x2, x0, 10
+  //   // rom[2]  = 32'h002081b3;  // add  x3, x1, x2
+  //   // rom[3]  = 32'h00318233;  // add  x4, x3, x3
+  //   // rom[4]  = 32'h00403023;  // sd   x4, 0(x0)
+  //   // rom[5]  = 32'h00003283;  // ld   x5, 0(x0)
+  //   // rom[6]  = 32'h30529073;  // csrw mtvec, t0
+  //   // rom[7]  = 32'h00528333;  // add  x6, x5, x5
+  //   // rom[8]  = 32'h00628663;  // beq  x5, x6, +12
+  //   // rom[9]  = 32'h00100393;  // addi x7, x0, 1
+  //   // rom[10] = 32'h00630663;  // beq  x6, x6, +12
+  //   // rom[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
+  //   // rom[12] = 32'h00200493;  // addi x9, x0, 2
+  //   // rom[13] = 32'h008000ef;  // jal  x1, +8
+  //   // rom[14] = 32'h00300513;  // addi x10, x0, 3
+  //   // rom[15] = 32'h00400593;  // addi x11, x0, 4
+  //   // rom[16] = 32'h00008067;  // jalr x0, x1, 0
+  //   // rom[17] = 32'h00b03023;  // sd   x11, 0(x0)
+  //   // rom[18] = 32'h00003603;  // ld   x12, 0(x0)
+  //   // rom[19] = 32'h00100693;  // addi x13, x0, 1
+  //   $readmemh("isa/isa.hex", rom);
+  // end
+  // assign instr = rom[pc[7:2]];
+
+  logic [31:0] instr;
+  rom #(
+    .HEX("isa/isa.hex")
+  ) rom1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .pc(pc),
+    .instr(instr)
+  );
 
   //---------------------------------
   // ram
@@ -813,35 +823,19 @@ module soc (
           MEM_LD: begin
             `LOGI($sformatf("load m[%0d]", addr));
             unique case (ld_op)
-              LD_LB: begin
-                mem_rdata <= `B2R(ram, addr);
-              end
-              LD_LH: begin
-                mem_rdata <= `H2R(ram, addr);
-              end
-              LD_LW: begin
-                mem_rdata <= `W2R(ram, addr);
-              end
-              LD_LD: begin
-                mem_rdata = `D2R(ram, addr);
-              end
-              LD_LBU: begin
-                mem_rdata <= `BU2R(ram, addr);
-              end
-              LD_LHU: begin
-                mem_rdata <= `HU2R(ram, addr);
-              end
-              LD_LWU: begin
-                mem_rdata <= `WU2R(ram, addr);
-              end
+              LD_LB:  mem_rdata <= `B2R(ram, addr);
+              LD_LH:  mem_rdata <= `H2R(ram, addr);
+              LD_LW:  mem_rdata <= `W2R(ram, addr);
+              LD_LD:  mem_rdata = `D2R(ram, addr);
+              LD_LBU: mem_rdata <= `BU2R(ram, addr);
+              LD_LHU: mem_rdata <= `HU2R(ram, addr);
+              LD_LWU: mem_rdata <= `WU2R(ram, addr);
             endcase
           end
           MEM_SD: begin
             `LOGI($sformatf("m[%0d]=%h", addr, mem_data));
             unique case (sd_op)
-              SD_SB: begin
-                ram[addr] <= mem_data[7:0];
-              end
+              SD_SB: ram[addr] <= mem_data[7:0];
               SD_SH: begin
                 for (logic [6:0] i = 0; i < 2; i++) ram[addr+i] <= mem_data[8*i+:8];
               end
@@ -873,6 +867,50 @@ module soc (
 
 endmodule
 
+
+//-----------------------------------
+// rom
+//-----------------------------------
+
+module rom #(
+  parameter string HEX = ""
+) (
+  input logic clk,
+  input logic rst_n,
+  input addr_t pc,
+  output logic [31:0] instr
+);
+  localparam ROMSIZE = 64;
+  logic [31:0] data[ROMSIZE];
+  initial begin
+    // data[0]  = 32'h00500093;  // addi x1, x0, 5
+    // data[1]  = 32'h00a00113;  // addi x2, x0, 10
+    // data[2]  = 32'h002081b3;  // add  x3, x1, x2
+    // data[3]  = 32'h00318233;  // add  x4, x3, x3
+    // data[4]  = 32'h00403023;  // sd   x4, 0(x0)
+    // data[5]  = 32'h00003283;  // ld   x5, 0(x0)
+    // data[6]  = 32'h30529073;  // csrw mtvec, t0
+    // data[7]  = 32'h00528333;  // add  x6, x5, x5
+    // data[8]  = 32'h00628663;  // beq  x5, x6, +12
+    // data[9]  = 32'h00100393;  // addi x7, x0, 1
+    // data[10] = 32'h00630663;  // beq  x6, x6, +12
+    // data[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
+    // data[12] = 32'h00200493;  // addi x9, x0, 2
+    // data[13] = 32'h008000ef;  // jal  x1, +8
+    // data[14] = 32'h00300513;  // addi x10, x0, 3
+    // data[15] = 32'h00400593;  // addi x11, x0, 4
+    // data[16] = 32'h00008067;  // jalr x0, x1, 0
+    // data[17] = 32'h00b03023;  // sd   x11, 0(x0)
+    // data[18] = 32'h00003603;  // ld   x12, 0(x0)
+    // data[19] = 32'h00100693;  // addi x13, x0, 1
+    $readmemh("isa/isa.hex", data);
+  end
+  assign instr = data[pc[7:2]];
+endmodule
+
+//-----------------------------------
+// uart
+//-----------------------------------
 module uart #(
   parameter addr_t BASE = 64'h2000,
   parameter addr_t MASK = ~64'hfff
