@@ -735,7 +735,7 @@ module soc (
       mie <= '0;
       mip <= '0;
     end else begin
-      if (state == WB && reg_write && sys_op >= SYS_CSRRW) begin
+      if (state == EXEC && reg_write && sys_op >= SYS_CSRRW) begin
         `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
         unique case (csr_idx)
           MSTATUS: mstatus <= csr_wdata;
