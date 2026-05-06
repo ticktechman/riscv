@@ -213,12 +213,7 @@ module soc (
 );
   // id data
   logic [4:0] rs1, rs2, rd;
-  logic [63:0] imm;
-  logic [2:0] f3;
-  logic [6:0] f7;
-  logic [9:0] fc;
   logic br, br_taken, jump;
-  imm_type_e imm_type;
   op_src_e op_s1, op_s2;
   opcode_e opcode;
   alu_op_e alu_op;
@@ -226,6 +221,7 @@ module soc (
   ld_op_e ld_op;
   sd_op_e sd_op;
   logic reg_write;
+  reg_t imm;
 
   sys_op_e sys_op;
   logic [4:0] csr_imm;
@@ -238,7 +234,299 @@ module soc (
   // members
   state_e state;
   addr_t pc;
-  // reg_t x[REGMAX];
+
+  decoder decoder1 (
+    .instr(instr),
+    .state(state),
+    .rs1(rs1),
+    .rs2(rs2),
+    .rd(rd),
+    .alu_op(alu_op),
+    .sys_op(sys_op),
+    .mem_op(mem_op),
+    .ld_op(ld_op),
+    .sd_op(sd_op),
+    .op_s1(op_s1),
+    .op_s2(op_s2),
+    .imm(imm),
+    .reg_write(reg_write),
+    .br(br),
+    .jump(jump),
+    .csr_imm(csr_imm),
+    .csr_idx(csr_idx),
+    .opcode(opcode)
+  );
+
+  always_comb begin : exec
+    logic [63:0] op1, op2;
+    logic [31:0] w_result;
+    if (state == EXEC) begin
+      br_taken = 1'b0;
+      wb_data = '0;
+      mem_data = '0;
+      op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
+      op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
+      unique case (alu_op)
+        ALU_ADD:  alu_result = op1 + op2;
+        ALU_SUB:  alu_result = op1 - op2;
+        ALU_AND:  alu_result = op1 & op2;
+        ALU_OR:   alu_result = op1 | op2;
+        ALU_XOR:  alu_result = op1 ^ op2;
+        ALU_SLL:  alu_result = op1 << op2[5:0];
+        ALU_SRL:  alu_result = op2 >> op2[5:0];
+        ALU_SRA:  alu_result = $signed(op1) >> op2[5:0];
+        ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
+        ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
+        ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
+        ALU_BEQ:  alu_result = (op1 == op2) ? 1 : 0;
+        ALU_BLT:  alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
+        ALU_BGE:  alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
+        ALU_BLTU: alu_result = (op1 < op2) ? 1 : 0;
+        ALU_BGEU: alu_result = (op1 >= op2) ? 1 : 0;
+
+        ALU_ADDW: begin
+          w_result   = op1[31:0] + op2[31:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SUBW: begin
+          w_result   = op1[31:0] - op2[31:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SLLW: begin
+          w_result   = op1[31:0] << op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRLW: begin
+          w_result   = op1[31:0] >> op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRAW: begin
+          w_result   = $signed(op1[31:0]) >>> op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        default: alu_result = '0;
+      endcase
+
+      unique case (sys_op)
+        SYS_ECALL: begin
+        end
+        SYS_EBREAK: begin
+          $finish;
+        end
+        SYS_MRET: begin
+        end
+        SYS_CSRRW: begin
+          `LOGI($sformatf("csrrw"));
+          // csrrw rd, csr, rs1
+          // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
+          wb_data   = csr_val;
+          csr_wdata = rs1_val;
+        end
+        SYS_CSRRS: begin
+          `LOGI($sformatf("csrrs: %h", csr_val));
+          wb_data   = csr_val;
+          csr_wdata = csr_val | rs1_val;
+        end
+        SYS_CSRRC: begin
+          `LOGI($sformatf("csrrc"));
+          wb_data   = csr_val;
+          csr_wdata = csr_val & (~rs1_val);
+        end
+        SYS_CSRRWI: begin
+          wb_data   = csr_val;
+          csr_wdata = {{59{1'b0}}, csr_imm};
+        end
+        SYS_CSRRSI: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val | {{59{1'b0}}, csr_imm};
+        end
+        SYS_CSRRCI: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val & (~{{59{1'b0}}, csr_imm});
+        end
+        default: ;
+      endcase
+
+      // `LOGI($sformatf(
+      //       "s[%02d,%02d] rs[%02d, %02d] op[%h,%h] alu:%0d result:%0d",
+      //       op_s1,
+      //       op_s2,
+      //       rs1,
+      //       rs2,
+      //       op1,
+      //       op2,
+      //       alu_op,
+      //       alu_result
+      //       ));
+      if (reg_write) begin
+        if (alu_op != ALU_NONE) begin
+          wb_data = alu_result;
+        end
+      end
+      if (br == 1) begin
+        br_taken = alu_result[0];
+        if (br_taken) begin
+          br_target = pc + imm;
+        end
+      end
+      if (opcode == OPCODE_JAL) begin
+        // rd = PC+4; PC=PC+imm;
+        wb_data  = pc + 4;
+        j_target = alu_result;
+      end
+      if (opcode == OPCODE_JALR) begin
+        // rd = PC+4; PC = (rs1 + imm) & ~1 ;
+        wb_data  = pc + 4;
+        j_target = alu_result & ~1;
+      end
+      if (mem_op != MEM_NONE) begin
+        mem_addr = alu_result;
+        if (mem_op == MEM_SD) begin
+          mem_data = rs2_val;
+        end
+      end
+    end
+  end
+
+  //---------------------------------
+  // state machine
+  //---------------------------------
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      `LOGW("reset");
+      state <= IDLE;
+      pc <= 64'h8000_0000_0000_0000;
+    end else begin
+      unique case (state)
+        IDLE: begin
+          `LOGI("idle ...");
+          state <= FETCH;
+        end
+        FETCH: begin
+          `LOGI($sformatf("start fetch pc=%h instr=%h", pc, instr));
+          state <= DECODE;
+        end
+        DECODE: begin
+          state <= EXEC;
+        end
+        EXEC: begin
+          state <= MEMACCESS;
+        end
+        MEMACCESS: begin
+          state <= WB;
+        end
+        WB: begin
+          state <= FETCH;
+          if (br_taken) begin
+            pc <= br_target;
+            `LOGI($sformatf("pc to br_target=%h", br_target));
+          end else if (jump) begin
+            `LOGI($sformatf("pc to j_target=%h", j_target));
+            pc <= j_target;
+          end else begin
+            pc <= pc + 4;
+          end
+        end
+        default: ;
+      endcase
+    end
+  end
+
+  // register file
+  reg_t rs1_val, rs2_val;
+  registerfile rf1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .we(reg_write),
+    .rd(rd),
+    .wdata(mem_op == MEM_LD ? mem_rdata : wb_data),
+    .rs1(rs1),
+    .rs2(rs2),
+    .rs1_val(rs1_val),
+    .rs2_val(rs2_val)
+  );
+
+  // csr
+  reg_t csr_val, csr_wdata;
+  csr csr1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .sys_op(sys_op),
+    .csr_wdata(csr_wdata),
+    .csr_idx(csr_idx),
+    .csr_val(csr_val)
+  );
+
+  // rom
+  logic [31:0] instr;
+  rom #(
+    .HEX("isa/isa.hex")
+    // .HEX("isa/csr.hex")
+  ) rom1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .pc(pc),
+    .instr(instr)
+  );
+
+  // sram
+  sram sram1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .mem_addr(mem_addr),
+    .mem_op(mem_op),
+    .ld_op(ld_op),
+    .sd_op(sd_op),
+    .mem_rdata(mem_rdata),
+    .mem_data(mem_data)
+  );
+
+  uart #(
+    .BASE(64'h2000),
+    .MASK(~64'hfff)
+  ) uart1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .addr(mem_addr),
+    .state(state),
+    .mem_op(mem_op),
+    .sd_op(sd_op),
+    .data(mem_data)
+  );
+
+endmodule
+
+//-----------------------------------
+// decoder
+//-----------------------------------
+module decoder (
+  input logic [31:0] instr,
+  input state_e state,
+  output logic [4:0] rs1,
+  output logic [4:0] rs2,
+  output logic [4:0] rd,
+  output alu_op_e alu_op,
+  output sys_op_e sys_op,
+  output mem_op_e mem_op,
+  output ld_op_e ld_op,
+  output sd_op_e sd_op,
+  output op_src_e op_s1,
+  output op_src_e op_s2,
+  output reg_t imm,
+  output logic reg_write,
+  output logic br,
+  output logic jump,
+  output logic [4:0] csr_imm,
+  output logic [11:0] csr_idx,
+  output opcode_e opcode
+);
+  logic [2:0] f3;
+  logic [6:0] f7;
+  logic [9:0] fc;
+  imm_type_e imm_type;
 
   always_comb begin : decode
     if (state == DECODE) begin
@@ -521,248 +809,7 @@ module soc (
       endcase
     end
   end
-
-  always_comb begin : exec
-    logic [63:0] op1, op2;
-    logic [31:0] w_result;
-    if (state == EXEC) begin
-      br_taken = 1'b0;
-      wb_data = '0;
-      mem_data = '0;
-      op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
-      op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
-      unique case (alu_op)
-        ALU_ADD:  alu_result = op1 + op2;
-        ALU_SUB:  alu_result = op1 - op2;
-        ALU_AND:  alu_result = op1 & op2;
-        ALU_OR:   alu_result = op1 | op2;
-        ALU_XOR:  alu_result = op1 ^ op2;
-        ALU_SLL:  alu_result = op1 << op2[5:0];
-        ALU_SRL:  alu_result = op2 >> op2[5:0];
-        ALU_SRA:  alu_result = $signed(op1) >> op2[5:0];
-        ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
-        ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
-        ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
-        ALU_BEQ:  alu_result = (op1 == op2) ? 1 : 0;
-        ALU_BLT:  alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
-        ALU_BGE:  alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
-        ALU_BLTU: alu_result = (op1 < op2) ? 1 : 0;
-        ALU_BGEU: alu_result = (op1 >= op2) ? 1 : 0;
-
-        ALU_ADDW: begin
-          w_result   = op1[31:0] + op2[31:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SUBW: begin
-          w_result   = op1[31:0] - op2[31:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SLLW: begin
-          w_result   = op1[31:0] << op2[4:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SRLW: begin
-          w_result   = op1[31:0] >> op2[4:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SRAW: begin
-          w_result   = $signed(op1[31:0]) >>> op2[4:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        default: alu_result = '0;
-      endcase
-
-      unique case (sys_op)
-        SYS_ECALL: begin
-        end
-        SYS_EBREAK: begin
-          $finish;
-        end
-        SYS_MRET: begin
-        end
-        SYS_CSRRW: begin
-          `LOGI($sformatf("csrrw"));
-          // csrrw rd, csr, rs1
-          // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
-          wb_data   = csr_val;
-          csr_wdata = rs1_val;
-        end
-        SYS_CSRRS: begin
-          `LOGI($sformatf("csrrs: %h", csr_val));
-          wb_data   = csr_val;
-          csr_wdata = csr_val | rs1_val;
-        end
-        SYS_CSRRC: begin
-          `LOGI($sformatf("csrrc"));
-          wb_data   = csr_val;
-          csr_wdata = csr_val & (~rs1_val);
-        end
-        SYS_CSRRWI: begin
-          wb_data   = csr_val;
-          csr_wdata = {{59{1'b0}}, csr_imm};
-        end
-        SYS_CSRRSI: begin
-          wb_data   = csr_val;
-          csr_wdata = csr_val | {{59{1'b0}}, csr_imm};
-        end
-        SYS_CSRRCI: begin
-          wb_data   = csr_val;
-          csr_wdata = csr_val & (~{{59{1'b0}}, csr_imm});
-        end
-        default: ;
-      endcase
-
-      // `LOGI($sformatf(
-      //       "s[%02d,%02d] rs[%02d, %02d] op[%h,%h] alu:%0d result:%0d",
-      //       op_s1,
-      //       op_s2,
-      //       rs1,
-      //       rs2,
-      //       op1,
-      //       op2,
-      //       alu_op,
-      //       alu_result
-      //       ));
-      if (reg_write) begin
-        if (alu_op != ALU_NONE) begin
-          wb_data = alu_result;
-        end
-      end
-      if (br == 1) begin
-        br_taken = alu_result[0];
-        if (br_taken) begin
-          br_target = pc + imm;
-        end
-      end
-      if (opcode == OPCODE_JAL) begin
-        // rd = PC+4; PC=PC+imm;
-        wb_data  = pc + 4;
-        j_target = alu_result;
-      end
-      if (opcode == OPCODE_JALR) begin
-        // rd = PC+4; PC = (rs1 + imm) & ~1 ;
-        wb_data  = pc + 4;
-        j_target = alu_result & ~1;
-      end
-      if (mem_op != MEM_NONE) begin
-        mem_addr = alu_result;
-        if (mem_op == MEM_SD) begin
-          mem_data = rs2_val;
-        end
-      end
-    end
-  end
-
-  //---------------------------------
-  // state machine
-  //---------------------------------
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      `LOGW("reset");
-      state <= IDLE;
-      pc <= 64'h8000_0000_0000_0000;
-    end else begin
-      unique case (state)
-        IDLE: begin
-          `LOGI("idle ...");
-          state <= FETCH;
-        end
-        FETCH: begin
-          `LOGI($sformatf("start fetch pc=%h instr=%h", pc, instr));
-          state <= DECODE;
-        end
-        DECODE: begin
-          state <= EXEC;
-        end
-        EXEC: begin
-          state <= MEMACCESS;
-        end
-        MEMACCESS: begin
-          state <= WB;
-        end
-        WB: begin
-          state <= FETCH;
-          if (br_taken) begin
-            pc <= br_target;
-            `LOGI($sformatf("pc to br_target=%h", br_target));
-          end else if (jump) begin
-            `LOGI($sformatf("pc to j_target=%h", j_target));
-            pc <= j_target;
-          end else begin
-            pc <= pc + 4;
-          end
-        end
-        default: ;
-      endcase
-    end
-  end
-
-  // register file
-  reg_t rs1_val, rs2_val;
-  registerfile rf1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .state(state),
-    .we(reg_write),
-    .rd(rd),
-    .wdata(mem_op == MEM_LD ? mem_rdata : wb_data),
-    .rs1(rs1),
-    .rs2(rs2),
-    .rs1_val(rs1_val),
-    .rs2_val(rs2_val)
-  );
-
-  // csr
-  reg_t csr_val, csr_wdata;
-  csr csr1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .state(state),
-    .sys_op(sys_op),
-    .csr_wdata(csr_wdata),
-    .csr_idx(csr_idx),
-    .csr_val(csr_val)
-  );
-
-  // rom
-  logic [31:0] instr;
-  rom #(
-    .HEX("isa/isa.hex")
-  ) rom1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .pc(pc),
-    .instr(instr)
-  );
-
-  // sram
-  sram sram1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .state(state),
-    .mem_addr(mem_addr),
-    .mem_op(mem_op),
-    .ld_op(ld_op),
-    .sd_op(sd_op),
-    .mem_rdata(mem_rdata),
-    .mem_data(mem_data)
-  );
-
-  uart #(
-    .BASE(64'h2000),
-    .MASK(~64'hfff)
-  ) uart1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .addr(mem_addr),
-    .state(state),
-    .mem_op(mem_op),
-    .sd_op(sd_op),
-    .data(mem_data)
-  );
-
 endmodule
-
 
 //-----------------------------------
 // register files
@@ -929,8 +976,7 @@ module rom #(
   localparam ROMSIZE = 64;
   logic [31:0] data[ROMSIZE];
   initial begin
-    // $readmemh("isa/isa.hex", data);
-    $readmemh("isa/csr.hex", data);
+    $readmemh(HEX, data);
   end
   assign instr = data[pc[7:2]];
 endmodule
