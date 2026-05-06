@@ -94,7 +94,7 @@ module soc (
   reg_t imm;
 
   // exec data
-  addr_t mem_addr, br_target, j_target;
+  addr_t mem_addr, pc_target;
   reg_t wb_data, mem_data, mem_rdata;
 
   // members
@@ -141,8 +141,7 @@ module soc (
     .csr_imm(csr_imm),
     .pc(pc),
     .br_taken(br_taken),
-    .br_target(br_target),
-    .j_target(j_target),
+    .pc_target(pc_target),
     .mem_addr(mem_addr),
     .mem_data(mem_data),
     .wb_data(wb_data),
@@ -235,15 +234,7 @@ module soc (
         MEMACCESS: state <= WB;
         WB: begin
           state <= FETCH;
-          if (br_taken) begin
-            pc <= br_target;
-            `LOGI($sformatf("branch target=%h", br_target));
-          end else if (jump) begin
-            `LOGI($sformatf("jal target=%h", j_target));
-            pc <= j_target;
-          end else begin
-            pc <= pc + 4;
-          end
+          pc <= pc_target != 0 ? pc_target : pc + 4;
         end
         default: ;
       endcase
@@ -385,158 +376,6 @@ typedef enum {
   OP_SRC_PC
 } op_src_e;
 
-//-----------------------------------
-// exec
-//-----------------------------------
-module exec (
-  input opcode_e opcode,
-  input state_e state,
-  input logic reg_write,
-  input logic br,
-  input alu_op_e alu_op,
-  input sys_op_e sys_op,
-  input mem_op_e mem_op,
-  input op_src_e op_s1,
-  input op_src_e op_s2,
-  input reg_t rs1_val,
-  input reg_t rs2_val,
-  input reg_t csr_val,
-  input reg_t imm,
-  input [4:0] csr_imm,
-  input addr_t pc,
-
-
-  output logic  br_taken,
-  output addr_t br_target,
-  output addr_t j_target,
-  output addr_t mem_addr,
-  output reg_t  wb_data,
-  output reg_t  mem_data,
-  output reg_t  csr_wdata
-);
-  always_comb begin : exec
-    reg_t alu_result;
-    logic [63:0] op1, op2;
-    logic [31:0] w_result;
-    if (state == EXEC) begin
-      br_taken = 1'b0;
-      wb_data = '0;
-      mem_data = '0;
-      op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
-      op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
-      `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
-      unique case (alu_op)
-        ALU_ADD:  alu_result = op1 + op2;
-        ALU_SUB:  alu_result = op1 - op2;
-        ALU_AND:  alu_result = op1 & op2;
-        ALU_OR:   alu_result = op1 | op2;
-        ALU_XOR:  alu_result = op1 ^ op2;
-        ALU_SLL:  alu_result = op1 << op2[5:0];
-        ALU_SRL:  alu_result = op2 >> op2[5:0];
-        ALU_SRA:  alu_result = $signed(op1) >> op2[5:0];
-        ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
-        ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
-        ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
-        ALU_BEQ:  alu_result = (op1 == op2) ? 1 : 0;
-        ALU_BLT:  alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
-        ALU_BGE:  alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
-        ALU_BLTU: alu_result = (op1 < op2) ? 1 : 0;
-        ALU_BGEU: alu_result = (op1 >= op2) ? 1 : 0;
-
-        ALU_ADDW: begin
-          w_result   = op1[31:0] + op2[31:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SUBW: begin
-          w_result   = op1[31:0] - op2[31:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SLLW: begin
-          w_result   = op1[31:0] << op2[4:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SRLW: begin
-          w_result   = op1[31:0] >> op2[4:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        ALU_SRAW: begin
-          w_result   = $signed(op1[31:0]) >>> op2[4:0];
-          alu_result = {{32{w_result[31]}}, w_result};
-        end
-        default: alu_result = '0;
-      endcase
-
-      unique case (sys_op)
-        SYS_ECALL: begin
-        end
-        SYS_EBREAK: begin
-          $finish;
-        end
-        SYS_MRET: begin
-        end
-        SYS_CSRRW: begin
-          `LOGI($sformatf("csrrw"));
-          // csrrw rd, csr, rs1
-          // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
-          wb_data   = csr_val;
-          csr_wdata = rs1_val;
-        end
-        SYS_CSRRS: begin
-          `LOGI($sformatf("csrrs: %h", csr_val));
-          wb_data   = csr_val;
-          csr_wdata = csr_val | rs1_val;
-        end
-        SYS_CSRRC: begin
-          `LOGI($sformatf("csrrc"));
-          wb_data   = csr_val;
-          csr_wdata = csr_val & (~rs1_val);
-        end
-        SYS_CSRRWI: begin
-          wb_data   = csr_val;
-          csr_wdata = {{59{1'b0}}, csr_imm};
-        end
-        SYS_CSRRSI: begin
-          wb_data   = csr_val;
-          csr_wdata = csr_val | {{59{1'b0}}, csr_imm};
-        end
-        SYS_CSRRCI: begin
-          wb_data   = csr_val;
-          csr_wdata = csr_val & (~{{59{1'b0}}, csr_imm});
-        end
-        default: ;
-      endcase
-
-      if (reg_write) begin
-        if (alu_op != ALU_NONE) begin
-          wb_data = alu_result;
-        end
-      end
-      if (br == 1) begin
-        br_taken = alu_result[0];
-        if (br_taken) begin
-          br_target = pc + imm;
-        end
-      end
-      if (opcode == OPCODE_JAL) begin
-        // rd = PC+4; PC=PC+imm;
-        wb_data  = pc + 4;
-        j_target = alu_result;
-      end else if (opcode == OPCODE_JALR) begin
-        // rd = PC+4; PC = (rs1 + imm) & ~1 ;
-        wb_data  = pc + 4;
-        j_target = alu_result & ~1;
-      end
-
-      if (mem_op != MEM_NONE) begin
-        mem_addr = alu_result;
-        if (mem_op == MEM_SD) begin
-          mem_data = rs2_val;
-        end
-      end
-    end
-  end
-
-endmodule
 
 //-----------------------------------
 // decoder
@@ -848,6 +687,159 @@ module decoder (
       endcase
     end
   end
+endmodule
+
+//-----------------------------------
+// exec
+//-----------------------------------
+module exec (
+  input opcode_e opcode,
+  input state_e state,
+  input logic reg_write,
+  input logic br,
+  input alu_op_e alu_op,
+  input sys_op_e sys_op,
+  input mem_op_e mem_op,
+  input op_src_e op_s1,
+  input op_src_e op_s2,
+  input reg_t rs1_val,
+  input reg_t rs2_val,
+  input reg_t csr_val,
+  input reg_t imm,
+  input [4:0] csr_imm,
+  input addr_t pc,
+
+
+  output logic  br_taken,
+  output addr_t pc_target,
+  output addr_t mem_addr,
+  output reg_t  wb_data,
+  output reg_t  mem_data,
+  output reg_t  csr_wdata
+);
+  always_comb begin : exec
+    reg_t alu_result;
+    logic [63:0] op1, op2;
+    logic [31:0] w_result;
+    if (state == EXEC) begin
+      br_taken = 1'b0;
+      wb_data = '0;
+      mem_data = '0;
+      pc_target = '0;
+      op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
+      op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
+      `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
+      unique case (alu_op)
+        ALU_ADD:  alu_result = op1 + op2;
+        ALU_SUB:  alu_result = op1 - op2;
+        ALU_AND:  alu_result = op1 & op2;
+        ALU_OR:   alu_result = op1 | op2;
+        ALU_XOR:  alu_result = op1 ^ op2;
+        ALU_SLL:  alu_result = op1 << op2[5:0];
+        ALU_SRL:  alu_result = op2 >> op2[5:0];
+        ALU_SRA:  alu_result = $signed(op1) >> op2[5:0];
+        ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
+        ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
+        ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
+        ALU_BEQ:  alu_result = (op1 == op2) ? 1 : 0;
+        ALU_BLT:  alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
+        ALU_BGE:  alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
+        ALU_BLTU: alu_result = (op1 < op2) ? 1 : 0;
+        ALU_BGEU: alu_result = (op1 >= op2) ? 1 : 0;
+
+        ALU_ADDW: begin
+          w_result   = op1[31:0] + op2[31:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SUBW: begin
+          w_result   = op1[31:0] - op2[31:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SLLW: begin
+          w_result   = op1[31:0] << op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRLW: begin
+          w_result   = op1[31:0] >> op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRAW: begin
+          w_result   = $signed(op1[31:0]) >>> op2[4:0];
+          alu_result = {{32{w_result[31]}}, w_result};
+        end
+        default: alu_result = '0;
+      endcase
+
+      unique case (sys_op)
+        SYS_ECALL: begin
+        end
+        SYS_EBREAK: begin
+          $finish;
+        end
+        SYS_MRET: begin
+        end
+        SYS_CSRRW: begin
+          `LOGI($sformatf("csrrw"));
+          // csrrw rd, csr, rs1
+          // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
+          wb_data   = csr_val;
+          csr_wdata = rs1_val;
+        end
+        SYS_CSRRS: begin
+          `LOGI($sformatf("csrrs: %h", csr_val));
+          wb_data   = csr_val;
+          csr_wdata = csr_val | rs1_val;
+        end
+        SYS_CSRRC: begin
+          `LOGI($sformatf("csrrc"));
+          wb_data   = csr_val;
+          csr_wdata = csr_val & (~rs1_val);
+        end
+        SYS_CSRRWI: begin
+          wb_data   = csr_val;
+          csr_wdata = {{59{1'b0}}, csr_imm};
+        end
+        SYS_CSRRSI: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val | {{59{1'b0}}, csr_imm};
+        end
+        SYS_CSRRCI: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val & (~{{59{1'b0}}, csr_imm});
+        end
+        default: ;
+      endcase
+
+      if (reg_write) begin
+        if (alu_op != ALU_NONE) begin
+          wb_data = alu_result;
+        end
+      end
+      if (br == 1) begin
+        br_taken = alu_result[0];
+        if (br_taken) begin
+          pc_target = pc + imm;
+        end
+      end
+      if (opcode == OPCODE_JAL) begin
+        // rd = PC+4; PC=PC+imm;
+        wb_data   = pc + 4;
+        pc_target = alu_result;
+      end else if (opcode == OPCODE_JALR) begin
+        // rd = PC+4; PC = (rs1 + imm) & ~1 ;
+        wb_data   = pc + 4;
+        pc_target = alu_result & ~1;
+      end
+
+      if (mem_op != MEM_NONE) begin
+        mem_addr = alu_result;
+        if (mem_op == MEM_SD) begin
+          mem_data = rs2_val;
+        end
+      end
+    end
+  end
+
 endmodule
 
 //-----------------------------------
