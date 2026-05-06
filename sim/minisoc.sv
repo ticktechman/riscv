@@ -834,24 +834,13 @@ module soc (
                 ram[addr] <= mem_data[7:0];
               end
               SD_SH: begin
-                ram[addr]   <= mem_data[7:0];
-                ram[addr+1] <= mem_data[15:8];
+                for (logic [6:0] i = 0; i < 2; i++) ram[addr+i] <= mem_data[8*i+:8];
               end
               SD_SW: begin
-                ram[addr]   <= mem_data[7:0];
-                ram[addr+1] <= mem_data[15:8];
-                ram[addr+2] <= mem_data[23:16];
-                ram[addr+3] <= mem_data[31:24];
+                for (logic [6:0] i = 0; i < 4; i++) ram[addr+i] <= mem_data[8*i+:8];
               end
               SD_SD: begin
-                ram[addr]   <= mem_data[7:0];
-                ram[addr+1] <= mem_data[15:8];
-                ram[addr+2] <= mem_data[23:16];
-                ram[addr+3] <= mem_data[31:24];
-                ram[addr+4] <= mem_data[39:32];
-                ram[addr+5] <= mem_data[47:40];
-                ram[addr+6] <= mem_data[55:48];
-                ram[addr+7] <= mem_data[63:56];
+                for (logic [6:0] i = 0; i < 8; i++) ram[addr+i] <= mem_data[8*i+:8];
               end
             endcase
           end
