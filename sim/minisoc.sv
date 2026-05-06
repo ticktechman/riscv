@@ -211,9 +211,6 @@ module soc (
   input logic clk,
   input logic rst_n
 );
-
-
-
   // id data
   logic [4:0] rs1, rs2, rd;
   logic [63:0] imm;
@@ -711,51 +708,18 @@ module soc (
       end
     end
   end
-  //---------------------------------
-  // CSR
-  //---------------------------------
-  reg_t mstatus, mtvec, mepc, mcause, mie, mip;
+
+  // csr
   reg_t csr_val, csr_wdata;
-  always_comb begin
-    if (state == DECODE) begin
-      csr_val = '0;
-      if (csr_idx > 0) begin
-        unique case (csr_idx)
-          MSTATUS: csr_val = mstatus;
-          MTVEC: csr_val = mtvec;
-          MEPC: csr_val = mepc;
-          MCAUSE: csr_val = mcause;
-          MIE: csr_val = mie;
-          MIP: csr_val = mip;
-          default: ;
-        endcase
-        `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
-      end
-    end
-  end
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      mstatus <= '0;
-      mtvec <= '0;
-      mepc <= '0;
-      mcause <= '0;
-      mie <= '0;
-      mip <= '0;
-    end else begin
-      if (state == EXEC && reg_write && sys_op >= SYS_CSRRW) begin
-        `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
-        unique case (csr_idx)
-          MSTATUS: mstatus <= csr_wdata;
-          MTVEC: mtvec <= csr_wdata;
-          MEPC: mepc <= csr_wdata;
-          MCAUSE: mcause <= csr_wdata;
-          MIE: mie <= csr_wdata;
-          MIP: mip <= csr_wdata;
-          default: ;
-        endcase
-      end
-    end
-  end
+  csr csr1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .sys_op(sys_op),
+    .csr_wdata(csr_wdata),
+    .csr_idx(csr_idx),
+    .csr_val(csr_val)
+  );
 
   // rom
   logic [31:0] instr;
@@ -794,6 +758,61 @@ module soc (
     .data(mem_data)
   );
 
+endmodule
+
+//-----------------------------------
+// csr
+//-----------------------------------
+module csr (
+  input logic clk,
+  input logic rst_n,
+  input state_e state,
+  input sys_op_e sys_op,
+  input reg_t csr_wdata,
+  input [11:0] csr_idx,
+  output reg_t csr_val
+);
+  reg_t mstatus, mtvec, mepc, mcause, mie, mip;
+  always_comb begin
+    if (state == DECODE) begin
+      csr_val = '0;
+      if (csr_idx > 0) begin
+        unique case (csr_idx)
+          MSTATUS: csr_val = mstatus;
+          MTVEC: csr_val = mtvec;
+          MEPC: csr_val = mepc;
+          MCAUSE: csr_val = mcause;
+          MIE: csr_val = mie;
+          MIP: csr_val = mip;
+          default: ;
+        endcase
+        `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
+      end
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mstatus <= '0;
+      mtvec <= '0;
+      mepc <= '0;
+      mcause <= '0;
+      mie <= '0;
+      mip <= '0;
+    end else begin
+      if (state == EXEC && sys_op >= SYS_CSRRW) begin
+        `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
+        unique case (csr_idx)
+          MSTATUS: mstatus <= csr_wdata;
+          MTVEC: mtvec <= csr_wdata;
+          MEPC: mepc <= csr_wdata;
+          MCAUSE: mcause <= csr_wdata;
+          MIE: mie <= csr_wdata;
+          MIP: mip <= csr_wdata;
+          default: ;
+        endcase
+      end
+    end
+  end
 endmodule
 
 //-----------------------------------
