@@ -112,23 +112,23 @@ typedef enum logic [6:0] {
 
 typedef enum {
   ALU_NONE,
-  ALU_ADD,
+  ALU_ADD,   // 1
   ALU_SUB,
   ALU_AND,
   ALU_OR,
-  ALU_XOR,
+  ALU_XOR,   // 5
   ALU_SLL,
   ALU_SRL,
   ALU_SRA,
   ALU_SLT,
-  ALU_SLTU,
+  ALU_SLTU,  // 10
 
   // rv64 32bit word
   ALU_ADDW,
   ALU_SUBW,
   ALU_SLLW,
   ALU_SRLW,
-  ALU_SRAW,
+  ALU_SRAW,  // 15
 
   // branch
   ALU_BEQ,
@@ -469,39 +469,39 @@ module soc (
             3'b001: begin
               // csrrw rd, csr, rs1
               // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
+              csr_idx = instr[31:20];
               reg_write = 1;
               sys_op = SYS_CSRRW;
-              csr_idx = instr[31:20];
             end
             3'b010: begin
+              csr_idx = instr[31:20];
               reg_write = 1;
               sys_op = SYS_CSRRS;
-              csr_idx = instr[31:20];
             end
             3'b011: begin  // CSRRC
+              csr_idx = instr[31:20];
               sys_op    = SYS_CSRRC;
               reg_write = 1;
-              csr_idx = instr[31:20];
             end
 
             3'b101: begin  // CSRRWI
+              csr_idx = instr[31:20];
               sys_op    = SYS_CSRRWI;
               reg_write = 1;
-              csr_idx = instr[31:20];
               csr_imm = rs1;
             end
 
             3'b110: begin  // CSRRSI
+              csr_idx = instr[31:20];
               sys_op    = SYS_CSRRSI;
               reg_write = 1;
-              csr_idx = instr[31:20];
               csr_imm = rs1;
             end
 
             3'b111: begin  // CSRRCI
+              csr_idx = instr[31:20];
               sys_op    = SYS_CSRRCI;
               reg_write = 1;
-              csr_idx = instr[31:20];
               csr_imm = rs1;
             end
             default: ;
@@ -581,16 +581,19 @@ module soc (
         SYS_MRET: begin
         end
         SYS_CSRRW: begin
+          `LOGI($sformatf("csrrw"));
           // csrrw rd, csr, rs1
           // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
           wb_data   = csr_val;
           csr_wdata = rs1_val;
         end
         SYS_CSRRS: begin
+          `LOGI($sformatf("csrrs: %h", csr_val));
           wb_data   = csr_val;
           csr_wdata = csr_val | rs1_val;
         end
         SYS_CSRRC: begin
+          `LOGI($sformatf("csrrc"));
           wb_data   = csr_val;
           csr_wdata = csr_val & (~rs1_val);
         end
@@ -621,7 +624,9 @@ module soc (
       //       alu_result
       //       ));
       if (reg_write) begin
-        wb_data = alu_result;
+        if (alu_op != ALU_NONE) begin
+          wb_data = alu_result;
+        end
       end
       if (br == 1) begin
         br_taken = alu_result[0];
@@ -809,7 +814,7 @@ module csr (
 );
   reg_t mstatus, mtvec, mepc, mcause, mie, mip;
   always_comb begin
-    if (state == DECODE) begin
+    if (state == EXEC && csr_idx > 0) begin
       csr_val = '0;
       if (csr_idx > 0) begin
         unique case (csr_idx)
@@ -821,8 +826,9 @@ module csr (
           MIP: csr_val = mip;
           default: ;
         endcase
-        `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
+        // `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
       end
+      `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
     end
   end
   always_ff @(posedge clk or negedge rst_n) begin
@@ -923,7 +929,8 @@ module rom #(
   localparam ROMSIZE = 64;
   logic [31:0] data[ROMSIZE];
   initial begin
-    $readmemh("isa/isa.hex", data);
+    // $readmemh("isa/isa.hex", data);
+    $readmemh("isa/csr.hex", data);
   end
   assign instr = data[pc[7:2]];
 endmodule
