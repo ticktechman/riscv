@@ -23,8 +23,19 @@ _start:
     bne x4, x5, fail
 
 pass:
-    j pass        # 死循环（PASS）
+    lui t0, 0x2
+    li t1, 'P'
+    sb t1, 0(t0)
+    li t1, '\n'
+    sb t1, 0(t0)
+    j end
 
 fail:
-    ebreak
-    j fail        # 死循环（FAIL）
+    lui t0, 0x2
+    li t1, 'F'
+    sb t1, 0(t0)
+    li t1, '\n'
+    sb t1, 0(t0)
+    j end
+end:
+  ebreak

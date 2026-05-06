@@ -13,9 +13,16 @@
 
 `timescale 1ns / 100ps
 
+`define DEBUG_LOG
+`ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
 `define LOGE(msg) $display("[E|%9t|%m] %s", $realtime, msg)
+`else
+`define LOGI(msg)
+`define LOGW(msg)
+`define LOGE(msg)
+`endif
 
 //-------------------------------------
 // Testbench
@@ -801,7 +808,7 @@ module soc (
         ram[i] <= '0;
       end
     end else begin
-      if (state == MEMACCESS && mem_op != MEM_NONE) begin : memaccess
+      if (state == MEMACCESS && mem_op != MEM_NONE && mem_addr < 64'(RAMSIZE)) begin : memaccess
         unique case (mem_op)
           MEM_LD: begin
             `LOGI($sformatf("load m[%0d]", addr));
@@ -847,6 +854,19 @@ module soc (
             endcase
           end
         endcase
+      end
+    end
+  end
+
+  //-------------------------
+  // uart
+  //-------------------------
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (state == MEMACCESS && mem_op == MEM_SD && sd_op == SD_SB && mem_addr == 64'h2000) begin : uart
+        `LOGI("uart write");
+        $write("%c", mem_data[7:0]);
       end
     end
   end
