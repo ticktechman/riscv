@@ -29,7 +29,7 @@ all: $(SIM)
 
 mini: obj_dir/Vmini
 mini.run: obj_dir/Vmini
-	$< +verilator+quiet
+	@$< +verilator+quiet
 
 $(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
