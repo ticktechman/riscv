@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -71,139 +71,6 @@ module clkgen #(
   always #1 clk = ~clk;
 endmodule
 
-typedef logic [63:0] addr_t;
-localparam int unsigned REGMAX = 32;
-
-typedef logic [63:0] reg_t;
-
-typedef enum {
-  IDLE,
-  FETCH,
-  DECODE,
-  EXEC,
-  MEMACCESS,
-  WB
-} state_e;
-
-typedef enum {
-  IMM_NONE,
-  IMM_I,
-  IMM_S,
-  IMM_U,
-  IMM_J,
-  IMM_B
-} imm_type_e;
-
-typedef enum logic [6:0] {
-  OPCODE_LOAD      = 7'b0000011,  // Load (lb, lw, ld, lh...)
-  OPCODE_FENCE     = 7'b0001111,  // FENCE, FENCE.I
-  OPCODE_OP_IMM    = 7'b0010011,  // ALU reg-imm (addi, xori, slli...)
-  OPCODE_AUIPC     = 7'b0010111,  // AUIPC
-  OPCODE_OP_IMM_32 = 7'b0011011,  // RV64 reg-imm word ops (addiw, slliw...)
-  OPCODE_STORE     = 7'b0100011,  // Store (sb, sw, sd...)
-  OPCODE_OP        = 7'b0110011,  // ALU reg-reg (add, sub, mul, div...)
-  OPCODE_LUI       = 7'b0110111,  // LUI
-  OPCODE_OP_32     = 7'b0111011,  // RV64 reg-reg word ops (addw, mulw...)
-  OPCODE_BRANCH    = 7'b1100011,  // Branch (beq, bne, blt...)
-  OPCODE_JALR      = 7'b1100111,  // JALR
-  OPCODE_JAL       = 7'b1101111,  // JAL
-  OPCODE_SYSTEM    = 7'b1110011   // ECALL, EBREAK, CSRR*
-} opcode_e;
-
-typedef enum {
-  ALU_NONE,
-  ALU_ADD,   // 1
-  ALU_SUB,
-  ALU_AND,
-  ALU_OR,
-  ALU_XOR,   // 5
-  ALU_SLL,
-  ALU_SRL,
-  ALU_SRA,
-  ALU_SLT,
-  ALU_SLTU,  // 10
-
-  // rv64 32bit word
-  ALU_ADDW,
-  ALU_SUBW,
-  ALU_SLLW,
-  ALU_SRLW,
-  ALU_SRAW,  // 15
-
-  // branch
-  ALU_BEQ,
-  ALU_BNE,
-  ALU_BLT,
-  ALU_BGE,
-  ALU_BLTU,
-  ALU_BGEU
-} alu_op_e;
-
-typedef enum {
-  SYS_NONE,
-  SYS_ECALL,
-  SYS_EBREAK,
-  SYS_MRET,
-  SYS_SRET,
-  SYS_URET,
-  SYS_CSRRW,
-  SYS_CSRRS,
-  SYS_CSRRC,
-  SYS_CSRRWI,
-  SYS_CSRRSI,
-  SYS_CSRRCI
-} sys_op_e;
-
-typedef enum logic [11:0] {
-  MSTATUS = 12'h300,
-  MTVEC   = 12'h305,
-  MEPC    = 12'h341,
-  MCAUSE  = 12'h342,
-  MIE     = 12'h304,
-  MIP     = 12'h344
-} csr_e;
-
-typedef enum {
-  MEM_NONE,
-  MEM_LD,
-  MEM_SD
-} mem_op_e;
-
-typedef enum {
-  LD_NONE,
-  LD_LB,
-  LD_LH,
-  LD_LW,
-  LD_LD,
-  LD_LBU,
-  LD_LHU,
-  LD_LWU
-} ld_op_e;
-
-typedef enum {
-  SD_NONE,
-  SD_SB,
-  SD_SH,
-  SD_SW,
-  SD_SD
-} sd_op_e;
-
-typedef enum {
-  B_NONE,
-  B_BEQ,
-  B_BNE,
-  B_BLT,
-  B_GE,
-  B_BLTU,
-  B_BGEU
-} branch_op_e;
-
-typedef enum {
-  OP_SRC_NONE,
-  OP_SRC_REG,
-  OP_SRC_IMM,
-  OP_SRC_PC
-} op_src_e;
 //-------------------------------------
 // mini
 //-------------------------------------
@@ -355,8 +222,8 @@ module soc (
   // rom
   logic [31:0] instr;
   rom #(
-    .HEX("isa/isa.hex")
-    // .HEX("isa/csr.hex")
+    // .HEX("isa/isa.hex")
+    .HEX("isa/csr.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -392,10 +259,142 @@ module soc (
 
 endmodule
 
+localparam int unsigned REGMAX = 32;
+typedef logic [63:0] addr_t;
+typedef logic [63:0] reg_t;
+
+typedef enum {
+  IDLE,
+  FETCH,
+  DECODE,
+  EXEC,
+  MEMACCESS,
+  WB
+} state_e;
+
+typedef enum {
+  IMM_NONE,
+  IMM_I,
+  IMM_S,
+  IMM_U,
+  IMM_J,
+  IMM_B
+} imm_type_e;
+
+typedef enum logic [6:0] {
+  OPCODE_LOAD      = 7'b0000011,  // Load (lb, lw, ld, lh...)
+  OPCODE_FENCE     = 7'b0001111,  // FENCE, FENCE.I
+  OPCODE_OP_IMM    = 7'b0010011,  // ALU reg-imm (addi, xori, slli...)
+  OPCODE_AUIPC     = 7'b0010111,  // AUIPC
+  OPCODE_OP_IMM_32 = 7'b0011011,  // RV64 reg-imm word ops (addiw, slliw...)
+  OPCODE_STORE     = 7'b0100011,  // Store (sb, sw, sd...)
+  OPCODE_OP        = 7'b0110011,  // ALU reg-reg (add, sub, mul, div...)
+  OPCODE_LUI       = 7'b0110111,  // LUI
+  OPCODE_OP_32     = 7'b0111011,  // RV64 reg-reg word ops (addw, mulw...)
+  OPCODE_BRANCH    = 7'b1100011,  // Branch (beq, bne, blt...)
+  OPCODE_JALR      = 7'b1100111,  // JALR
+  OPCODE_JAL       = 7'b1101111,  // JAL
+  OPCODE_SYSTEM    = 7'b1110011   // ECALL, EBREAK, CSRR*
+} opcode_e;
+
+typedef enum {
+  ALU_NONE,
+  ALU_ADD,   // 1
+  ALU_SUB,
+  ALU_AND,
+  ALU_OR,
+  ALU_XOR,   // 5
+  ALU_SLL,
+  ALU_SRL,
+  ALU_SRA,
+  ALU_SLT,
+  ALU_SLTU,  // 10
+
+  // rv64 32bit word
+  ALU_ADDW,
+  ALU_SUBW,
+  ALU_SLLW,
+  ALU_SRLW,
+  ALU_SRAW,  // 15
+
+  // branch
+  ALU_BEQ,
+  ALU_BNE,
+  ALU_BLT,
+  ALU_BGE,
+  ALU_BLTU,
+  ALU_BGEU
+} alu_op_e;
+
+typedef enum {
+  SYS_NONE,
+  SYS_ECALL,
+  SYS_EBREAK,
+  SYS_MRET,
+  SYS_SRET,
+  SYS_URET,
+  SYS_CSRRW,
+  SYS_CSRRS,
+  SYS_CSRRC,
+  SYS_CSRRWI,
+  SYS_CSRRSI,
+  SYS_CSRRCI
+} sys_op_e;
+
+typedef enum logic [11:0] {
+  MSTATUS = 12'h300,
+  MTVEC   = 12'h305,
+  MEPC    = 12'h341,
+  MCAUSE  = 12'h342,
+  MIE     = 12'h304,
+  MIP     = 12'h344
+} csr_e;
+
+typedef enum {
+  MEM_NONE,
+  MEM_LD,
+  MEM_SD
+} mem_op_e;
+
+typedef enum {
+  LD_NONE,
+  LD_LB,
+  LD_LH,
+  LD_LW,
+  LD_LD,
+  LD_LBU,
+  LD_LHU,
+  LD_LWU
+} ld_op_e;
+
+typedef enum {
+  SD_NONE,
+  SD_SB,
+  SD_SH,
+  SD_SW,
+  SD_SD
+} sd_op_e;
+
+typedef enum {
+  B_NONE,
+  B_BEQ,
+  B_BNE,
+  B_BLT,
+  B_GE,
+  B_BLTU,
+  B_BGEU
+} branch_op_e;
+
+typedef enum {
+  OP_SRC_NONE,
+  OP_SRC_REG,
+  OP_SRC_IMM,
+  OP_SRC_PC
+} op_src_e;
+
 //-----------------------------------
 // exec
 //-----------------------------------
-
 module exec (
   input opcode_e opcode,
   input state_e state,
