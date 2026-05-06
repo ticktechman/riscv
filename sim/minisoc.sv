@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -223,30 +223,21 @@ module soc (
       pc <= 64'h8000_0000_0000_0000;
     end else begin
       unique case (state)
-        IDLE: begin
-          `LOGI("idle ...");
-          state <= FETCH;
-        end
+        IDLE: state <= FETCH;
         FETCH: begin
-          `LOGI($sformatf("start fetch pc=%h instr=%h", pc, instr));
+          `LOGI($sformatf("fetch pc=%h instr=%h", pc, instr));
           state <= DECODE;
         end
-        DECODE: begin
-          state <= EXEC;
-        end
-        EXEC: begin
-          state <= MEMACCESS;
-        end
-        MEMACCESS: begin
-          state <= WB;
-        end
+        DECODE: state <= EXEC;
+        EXEC: state <= MEMACCESS;
+        MEMACCESS: state <= WB;
         WB: begin
           state <= FETCH;
           if (br_taken) begin
             pc <= br_target;
-            `LOGI($sformatf("pc to br_target=%h", br_target));
+            `LOGI($sformatf("branch target=%h", br_target));
           end else if (jump) begin
-            `LOGI($sformatf("pc to j_target=%h", j_target));
+            `LOGI($sformatf("jal target=%h", j_target));
             pc <= j_target;
           end else begin
             pc <= pc + 4;
@@ -411,12 +402,13 @@ module exec (
   input reg_t imm,
   input [4:0] csr_imm,
   input addr_t pc,
+
   output addr_t br_target,
   output addr_t j_target,
   output addr_t mem_addr,
-  output reg_t wb_data,
-  output reg_t mem_data,
-  output reg_t csr_wdata
+  output reg_t  wb_data,
+  output reg_t  mem_data,
+  output reg_t  csr_wdata
 );
   always_comb begin : exec
     reg_t alu_result;
