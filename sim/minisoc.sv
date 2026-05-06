@@ -141,6 +141,30 @@ module soc (
   } alu_op_e;
 
   typedef enum {
+    SYS_NONE,
+    SYS_ECALL,
+    SYS_EBREAK,
+    SYS_MRET,
+    SYS_SRET,
+    SYS_URET,
+    SYS_CSRRW,
+    SYS_CSRRS,
+    SYS_CSRRC,
+    SYS_CSRRWI,
+    SYS_CSRRSI,
+    SYS_CSRRCI
+  } sys_op_e;
+
+  typedef enum logic [11:0] {
+    MSTATUS = 12'h300,
+    MTVEC   = 12'h305,
+    MEPC    = 12'h341,
+    MCAUSE  = 12'h342,
+    MIE     = 12'h304,
+    MIP     = 12'h344
+  } csr_e;
+
+  typedef enum {
     MEM_NONE,
     MEM_LD,
     MEM_SD
@@ -199,6 +223,10 @@ module soc (
   sd_op_e sd_op;
   logic reg_write;
 
+  sys_op_e sys_op;
+  logic [4:0] csr_imm;
+  logic [11:0] csr_idx;
+
   // exec data
   addr_t mem_addr, br_target, j_target;
   reg_t alu_result, wb_data, mem_data, mem_rdata;
@@ -207,11 +235,11 @@ module soc (
   state_e state;
   addr_t pc;
   reg_t x[REGMAX];
-  reg_t csr[REGMAX];
 
   always_comb begin : decode
     if (state == DECODE) begin
       alu_op = ALU_NONE;
+      sys_op = SYS_NONE;
       mem_op = MEM_NONE;
       ld_op = LD_NONE;
       sd_op = SD_NONE;
@@ -221,6 +249,8 @@ module soc (
       reg_write = 0;
       br = 1'b0;
       jump = 1'b0;
+      csr_imm = '0;
+      csr_idx = '0;
 
       rs1 = instr[19:15];
       rs2 = instr[24:20];
@@ -418,6 +448,62 @@ module soc (
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_IMM;
         end
+
+        OPCODE_SYSTEM: begin
+          `LOGI("SYSTEM");
+          unique case (f3)
+            3'b000: begin
+              unique case (instr[31:20])
+                12'h000: sys_op = SYS_ECALL;
+                12'h001: sys_op = SYS_EBREAK;
+                12'h002: sys_op = SYS_URET;
+                12'h102: sys_op = SYS_SRET;
+                12'h302: sys_op = SYS_MRET;
+                default: ;
+              endcase
+            end
+            3'b001: begin
+              // csrrw rd, csr, rs1
+              // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
+              reg_write = 1;
+              sys_op = SYS_CSRRW;
+              csr_idx = instr[31:20];
+            end
+            3'b010: begin
+              reg_write = 1;
+              sys_op = SYS_CSRRS;
+              csr_idx = instr[31:20];
+            end
+            3'b011: begin  // CSRRC
+              sys_op    = SYS_CSRRC;
+              reg_write = 1;
+              csr_idx = instr[31:20];
+            end
+
+            3'b101: begin  // CSRRWI
+              sys_op    = SYS_CSRRWI;
+              reg_write = 1;
+              csr_idx = instr[31:20];
+              csr_imm = rs1;
+            end
+
+            3'b110: begin  // CSRRSI
+              sys_op    = SYS_CSRRSI;
+              reg_write = 1;
+              csr_idx = instr[31:20];
+              csr_imm = rs1;
+            end
+
+            3'b111: begin  // CSRRCI
+              sys_op    = SYS_CSRRCI;
+              reg_write = 1;
+              csr_idx = instr[31:20];
+              csr_imm = rs1;
+            end
+            default: ;
+          endcase
+        end
+
         default: ;
       endcase
 
@@ -481,6 +567,43 @@ module soc (
         end
         default: alu_result = '0;
       endcase
+
+      unique case (sys_op)
+        SYS_ECALL: begin
+        end
+        SYS_EBREAK: begin
+        end
+        SYS_MRET: begin
+        end
+        SYS_CSRRW: begin
+          // csrrw rd, csr, rs1
+          // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
+          wb_data   = csr_val;
+          csr_wdata = x[rs1];
+        end
+        SYS_CSRRS: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val | x[rs1];
+        end
+        SYS_CSRRC: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val & (~x[rs1]);
+        end
+        SYS_CSRRWI: begin
+          wb_data   = csr_val;
+          csr_wdata = {{59{1'b0}}, csr_imm};
+        end
+        SYS_CSRRSI: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val | {{59{1'b0}}, csr_imm};
+        end
+        SYS_CSRRCI: begin
+          wb_data   = csr_val;
+          csr_wdata = csr_val & (~{{59{1'b0}}, csr_imm});
+        end
+        default: ;
+      endcase
+
       // `LOGI($sformatf(
       //       "s[%02d,%02d] rs[%02d, %02d] op[%h,%h] alu:%0d result:%0d",
       //       op_s1,
@@ -581,6 +704,51 @@ module soc (
       end
     end
   end
+  //---------------------------------
+  // CSR
+  //---------------------------------
+  reg_t mstatus, mtvec, mepc, mcause, mie, mip;
+  reg_t csr_val, csr_wdata;
+  always_comb begin
+    if (state == DECODE) begin
+      csr_val = '0;
+      if (csr_idx > 0) begin
+        unique case (csr_idx)
+          MSTATUS: csr_val = mstatus;
+          MTVEC: csr_val = mtvec;
+          MEPC: csr_val = mepc;
+          MCAUSE: csr_val = mcause;
+          MIE: csr_val = mie;
+          MIP: csr_val = mip;
+          default: ;
+        endcase
+        `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
+      end
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mstatus <= '0;
+      mtvec <= '0;
+      mepc <= '0;
+      mcause <= '0;
+      mie <= '0;
+      mip <= '0;
+    end else begin
+      if (state == WB && reg_write && sys_op >= SYS_CSRRW) begin
+        `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
+        unique case (csr_idx)
+          MSTATUS: mstatus <= csr_wdata;
+          MTVEC: mtvec <= csr_wdata;
+          MEPC: mepc <= csr_wdata;
+          MCAUSE: mcause <= csr_wdata;
+          MIE: mie <= csr_wdata;
+          MIP: mip <= csr_wdata;
+          default: ;
+        endcase
+      end
+    end
+  end
 
   //---------------------------------
   // rom
@@ -594,19 +762,20 @@ module soc (
     rom[3]  = 32'h00318233;  // add  x4, x3, x3
     rom[4]  = 32'h00403023;  // sd   x4, 0(x0)
     rom[5]  = 32'h00003283;  // ld   x5, 0(x0)
-    rom[6]  = 32'h00528333;  // add  x6, x5, x5
-    rom[7]  = 32'h00628663;  // beq  x5, x6, +12
-    rom[8]  = 32'h00100393;  // addi x7, x0, 1
-    rom[9]  = 32'h00630663;  // beq  x6, x6, +12
-    rom[10] = 32'h06300413;  // addi x8, x0, 99 (flushed)
-    rom[11] = 32'h00200493;  // addi x9, x0, 2
-    rom[12] = 32'h008000ef;  // jal  x1, +8
-    rom[13] = 32'h00300513;  // addi x10, x0, 3
-    rom[14] = 32'h00400593;  // addi x11, x0, 4
-    rom[15] = 32'h00008067;  // jalr x0, x1, 0
-    rom[16] = 32'h00b03023;  // sd   x11, 0(x0)
-    rom[17] = 32'h00003603;  // ld   x12, 0(x0)
-    rom[18] = 32'h00100693;  // addi x13, x0, 1
+    rom[6]  = 32'h30529073;  // csrw mtvec, t0
+    rom[7]  = 32'h00528333;  // add  x6, x5, x5
+    rom[8]  = 32'h00628663;  // beq  x5, x6, +12
+    rom[9]  = 32'h00100393;  // addi x7, x0, 1
+    rom[10] = 32'h00630663;  // beq  x6, x6, +12
+    rom[11] = 32'h06300413;  // addi x8, x0, 99 (flushed)
+    rom[12] = 32'h00200493;  // addi x9, x0, 2
+    rom[13] = 32'h008000ef;  // jal  x1, +8
+    rom[14] = 32'h00300513;  // addi x10, x0, 3
+    rom[15] = 32'h00400593;  // addi x11, x0, 4
+    rom[16] = 32'h00008067;  // jalr x0, x1, 0
+    rom[17] = 32'h00b03023;  // sd   x11, 0(x0)
+    rom[18] = 32'h00003603;  // ld   x12, 0(x0)
+    rom[19] = 32'h00100693;  // addi x13, x0, 1
   end
   assign instr = rom[pc[7:2]];
 
