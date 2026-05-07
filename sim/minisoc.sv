@@ -88,8 +88,6 @@ module soc (
   opcode_e opcode;
   alu_op_e alu_op;
   mem_op_e mem_op;
-  ld_op_e ld_op;
-  sd_op_e sd_op;
   sys_op_e sys_op;
   reg_t imm;
 
@@ -110,8 +108,6 @@ module soc (
     .alu_op(alu_op),
     .sys_op(sys_op),
     .mem_op(mem_op),
-    .ld_op(ld_op),
-    .sd_op(sd_op),
     .op_s1(op_s1),
     .op_s2(op_s2),
     .imm(imm),
@@ -156,7 +152,7 @@ module soc (
     .state(state),
     .we(reg_write),
     .rd(rd),
-    .wdata(mem_op == MEM_LD ? mem_rdata : wb_data),
+    .wdata((mem_op > MEM_NONE && mem_op < MEM_SEP) ? mem_rdata : wb_data),
     .rs1(rs1),
     .rs2(rs2),
     .rs1_val(rs1_val),
@@ -178,9 +174,9 @@ module soc (
   // rom
   logic [31:0] instr;
   rom #(
-    // .HEX("isa/isa.hex")
+    .HEX("isa/isa.hex")
     // .HEX("isa/csr.hex")
-    .HEX("isa/mem.hex")
+    // .HEX("isa/mem.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -195,8 +191,6 @@ module soc (
     .state(state),
     .mem_addr(mem_addr),
     .mem_op(mem_op),
-    .ld_op(ld_op),
-    .sd_op(sd_op),
     .mem_rdata(mem_rdata),
     .mem_data(mem_data)
   );
@@ -210,7 +204,6 @@ module soc (
     .addr(mem_addr),
     .state(state),
     .mem_op(mem_op),
-    .sd_op(sd_op),
     .data(mem_data)
   );
 
@@ -336,28 +329,20 @@ typedef enum logic [11:0] {
 
 typedef enum {
   MEM_NONE,
-  MEM_LD,
-  MEM_SD
-} mem_op_e;
-
-typedef enum {
-  LD_NONE,
   LD_LB,
   LD_LH,
   LD_LW,
   LD_LD,
   LD_LBU,
   LD_LHU,
-  LD_LWU
-} ld_op_e;
-
-typedef enum {
-  SD_NONE,
+  LD_LWU,
+  MEM_SEP,
   SD_SB,
   SD_SH,
   SD_SW,
   SD_SD
-} sd_op_e;
+} mem_op_e;
+
 
 typedef enum {
   B_NONE,
@@ -389,8 +374,6 @@ module decoder (
   output alu_op_e alu_op,
   output sys_op_e sys_op,
   output mem_op_e mem_op,
-  output ld_op_e ld_op,
-  output sd_op_e sd_op,
   output op_src_e op_s1,
   output op_src_e op_s2,
   output reg_t imm,
@@ -411,8 +394,6 @@ module decoder (
       alu_op = ALU_NONE;
       sys_op = SYS_NONE;
       mem_op = MEM_NONE;
-      ld_op = LD_NONE;
-      sd_op = SD_NONE;
       imm_type = IMM_NONE;
       op_s1 = OP_SRC_NONE;
       op_s2 = OP_SRC_NONE;
@@ -520,19 +501,18 @@ module decoder (
           // ALU: addr= rs1 + offset
           // rd = mem[addr]
           reg_write = 1;
-          mem_op = MEM_LD;
           alu_op = ALU_ADD;
           imm_type = IMM_I;
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_IMM;
           unique case (f3)
-            3'b000:  ld_op = LD_LB;
-            3'b001:  ld_op = LD_LH;
-            3'b010:  ld_op = LD_LW;
-            3'b011:  ld_op = LD_LD;
-            3'b100:  ld_op = LD_LBU;
-            3'b101:  ld_op = LD_LHU;
-            3'b110:  ld_op = LD_LWU;
+            3'b000:  mem_op = LD_LB;
+            3'b001:  mem_op = LD_LH;
+            3'b010:  mem_op = LD_LW;
+            3'b011:  mem_op = LD_LD;
+            3'b100:  mem_op = LD_LBU;
+            3'b101:  mem_op = LD_LHU;
+            3'b110:  mem_op = LD_LWU;
             default: ;
           endcase
         end
@@ -542,16 +522,15 @@ module decoder (
           // ALU: addr = rs1 + imm;
           // mem[addr] = rs2
           reg_write = 1;
-          mem_op = MEM_SD;
           alu_op = ALU_ADD;
           imm_type = IMM_S;
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_IMM;
           unique case (f3)
-            3'b000:  sd_op = SD_SB;
-            3'b001:  sd_op = SD_SH;
-            3'b010:  sd_op = SD_SW;
-            3'b011:  sd_op = SD_SD;
+            3'b000:  mem_op = SD_SB;
+            3'b001:  mem_op = SD_SH;
+            3'b010:  mem_op = SD_SW;
+            3'b011:  mem_op = SD_SD;
             default: ;
           endcase
         end
@@ -833,9 +812,7 @@ module exec (
 
       if (mem_op != MEM_NONE) begin
         mem_addr = alu_result;
-        if (mem_op == MEM_SD) begin
-          mem_data = rs2_val;
-        end
+        if (mem_op > MEM_SEP) mem_data = rs2_val;
       end
     end
   end
@@ -943,8 +920,6 @@ module sram (
   input state_e state,
   input addr_t mem_addr,
   input mem_op_e mem_op,
-  input ld_op_e ld_op,
-  input sd_op_e sd_op,
   input reg_t mem_data,
   output reg_t mem_rdata
 );
@@ -966,27 +941,17 @@ module sram (
     end else begin
       if (state == MEMACCESS && mem_op != MEM_NONE && mem_addr < 64'(RAMSIZE)) begin
         unique case (mem_op)
-          MEM_LD: begin
-            `LOGI($sformatf("load m[%0d]", mem_addr[6:0]));
-            unique case (ld_op)
-              LD_LB:  mem_rdata <= `B2R(ram, mem_addr[6:0]);
-              LD_LH:  mem_rdata <= `H2R(ram, mem_addr[6:0]);
-              LD_LW:  mem_rdata <= `W2R(ram, mem_addr[6:0]);
-              LD_LD:  mem_rdata = `D2R(ram, mem_addr[6:0]);
-              LD_LBU: mem_rdata <= `BU2R(ram, mem_addr[6:0]);
-              LD_LHU: mem_rdata <= `HU2R(ram, mem_addr[6:0]);
-              LD_LWU: mem_rdata <= `WU2R(ram, mem_addr[6:0]);
-            endcase
-          end
-          MEM_SD: begin
-            `LOGI($sformatf("store m[%0d]=%h", mem_addr[6:0], mem_data));
-            unique case (sd_op)
-              SD_SB: ram[mem_addr[6:0]] <= mem_data[7:0];
-              SD_SH: for (logic [6:0] i = 0; i < 2; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
-              SD_SW: for (logic [6:0] i = 0; i < 4; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
-              SD_SD: for (logic [6:0] i = 0; i < 8; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
-            endcase
-          end
+          LD_LB:  mem_rdata <= `B2R(ram, mem_addr[6:0]);
+          LD_LH:  mem_rdata <= `H2R(ram, mem_addr[6:0]);
+          LD_LW:  mem_rdata <= `W2R(ram, mem_addr[6:0]);
+          LD_LD:  mem_rdata <= `D2R(ram, mem_addr[6:0]);
+          LD_LBU: mem_rdata <= `BU2R(ram, mem_addr[6:0]);
+          LD_LHU: mem_rdata <= `HU2R(ram, mem_addr[6:0]);
+          LD_LWU: mem_rdata <= `WU2R(ram, mem_addr[6:0]);
+          SD_SB:  ram[mem_addr[6:0]] <= mem_data[7:0];
+          SD_SH:  for (logic [6:0] i = 0; i < 2; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
+          SD_SW:  for (logic [6:0] i = 0; i < 4; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
+          SD_SD:  for (logic [6:0] i = 0; i < 8; i++) ram[mem_addr[6:0]+i] <= mem_data[8*i+:8];
         endcase
       end
     end
@@ -1024,7 +989,6 @@ module uart #(
   input addr_t addr,
   input state_e state,
   input mem_op_e mem_op,
-  input sd_op_e sd_op,
   input reg_t data
 );
 
@@ -1033,7 +997,7 @@ module uart #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (enable && mem_op == MEM_SD && sd_op == SD_SB) begin
+      if (enable && mem_op == SD_SB) begin
         $write("%c", data[7:0]);
       end
     end
