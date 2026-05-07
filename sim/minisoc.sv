@@ -176,8 +176,8 @@ module soc (
   rom #(
     .SIZE(1024),
     // .HEX("isa/isa.hex")
-    // .HEX("isa/csr.hex")
-    .HEX("isa/mem.hex")
+    .HEX("isa/csr.hex")
+    // .HEX("isa/mem.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -872,18 +872,15 @@ module csr (
   always_comb begin
     if (state == EXEC && csr_idx > 0) begin
       csr_val = '0;
-      if (csr_idx > 0) begin
-        unique case (csr_idx)
-          MSTATUS: csr_val = mstatus;
-          MTVEC: csr_val = mtvec;
-          MEPC: csr_val = mepc;
-          MCAUSE: csr_val = mcause;
-          MIE: csr_val = mie;
-          MIP: csr_val = mip;
-          default: ;
-        endcase
-        // `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
-      end
+      unique case (csr_idx)
+        MSTATUS: csr_val = mstatus;
+        MTVEC: csr_val = mtvec;
+        MEPC: csr_val = mepc;
+        MCAUSE: csr_val = mcause;
+        MIE: csr_val = mie;
+        MIP: csr_val = mip;
+        default: ;
+      endcase
       `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
     end
   end
