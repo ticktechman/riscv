@@ -1004,7 +1004,7 @@ module uart #(
 );
 
   logic enable;
-  assign enable = ((addr & ~MASK) == BASE && state == MEMACCESS) ? 1 : 0;
+  assign enable = ((addr & ~MASK) == BASE && state == MEMACCESS);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
