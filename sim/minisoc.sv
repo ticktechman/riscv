@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -164,6 +164,7 @@ module soc (
   csr csr1 (
     .clk(clk),
     .rst_n(rst_n),
+    .pc(pc),
     .state(state),
     .sys_op(sys_op),
     .csr_wdata(csr_wdata),
@@ -176,8 +177,9 @@ module soc (
   rom #(
     .SIZE(1024),
     // .HEX("isa/isa.hex")
-    .HEX("isa/csr.hex")
+    // .HEX("isa/csr.hex")
     // .HEX("isa/mem.hex")
+    .HEX("isa/ecall.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -605,11 +607,18 @@ module decoder (
           unique case (f3)
             3'b000: begin
               unique case (instr[31:20])
-                12'h000: sys_op = SYS_ECALL;
+                12'h000: begin
+                  // read mtvec for pc_target
+                  sys_op  = SYS_ECALL;
+                  csr_idx = MTVEC;
+                end
                 12'h001: sys_op = SYS_EBREAK;
                 12'h002: sys_op = SYS_URET;
                 12'h102: sys_op = SYS_SRET;
-                12'h302: sys_op = SYS_MRET;
+                12'h302: begin
+                  csr_idx = MEPC;
+                  sys_op  = SYS_MRET;
+                end
                 default: ;
               endcase
             end
@@ -753,11 +762,15 @@ module exec (
 
       unique case (sys_op)
         SYS_ECALL: begin
+          // record mcause=11; mepc = pc + 4; mpie=mstatus; mie = 0; pc=mtvec;
+          pc_target = csr_val;
         end
         SYS_EBREAK: begin
           $finish;
         end
         SYS_MRET: begin
+          // pc = mepc;
+          pc_target = csr_val;
         end
         SYS_CSRRW: begin
           `LOGI($sformatf("csrrw"));
@@ -863,6 +876,7 @@ endmodule
 module csr (
   input logic clk,
   input logic rst_n,
+  input addr_t pc,
   input state_e state,
   input sys_op_e sys_op,
   input reg_t csr_wdata,
@@ -896,17 +910,24 @@ module csr (
       mip <= '0;
       mhartid <= '0;
     end else begin
-      if (state == EXEC && sys_op >= SYS_CSRRW) begin
-        `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
-        unique case (csr_idx)
-          MSTATUS: mstatus <= csr_wdata;
-          MTVEC: mtvec <= csr_wdata;
-          MEPC: mepc <= csr_wdata;
-          MCAUSE: mcause <= csr_wdata;
-          MIE: mie <= csr_wdata;
-          MIP: mip <= csr_wdata;
-          default: ;
-        endcase
+      if (state == EXEC) begin
+        // record mcause=11; mepc = pc + 4; mpie=mstatus; mie = 0; pc=mtvec;
+        if (sys_op == SYS_ECALL) begin
+          `LOGI("ECALL");
+          mcause = 11;  // ecall from m mode
+          mepc   = pc;
+        end else if (sys_op >= SYS_CSRRW) begin
+          `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
+          unique case (csr_idx)
+            MSTATUS: mstatus <= csr_wdata;
+            MTVEC: mtvec <= csr_wdata;
+            MEPC: mepc <= csr_wdata;
+            MCAUSE: mcause <= csr_wdata;
+            MIE: mie <= csr_wdata;
+            MIP: mip <= csr_wdata;
+            default: ;
+          endcase
+        end
       end
     end
   end
