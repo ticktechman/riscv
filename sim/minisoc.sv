@@ -973,6 +973,7 @@ module rom #(
   logic [31:0] data[ROMSIZE];
   initial begin
     $readmemh(HEX, data);
+    `LOGI($sformatf("load %s", HEX));
   end
   assign instr = data[pc[7:2]];
 endmodule
