@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -37,7 +37,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(2000)
+    .COUNTER(20000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -175,11 +175,12 @@ module soc (
   // rom
   logic [31:0] instr;
   rom #(
-    .SIZE(1024),
+    .SIZE(4096),
     // .HEX("isa/isa.hex")
     // .HEX("isa/csr.hex")
     // .HEX("isa/mem.hex")
-    .HEX("isa/ecall.hex")
+    // .HEX("isa/ecall.hex")
+    .HEX("isa/rv64ui-p-add.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -202,6 +203,16 @@ module soc (
     .BASE(64'h2000),
     .MASK(64'hfff)
   ) uart1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .addr(mem_addr),
+    .state(state),
+    .mem_op(mem_op),
+    .data(mem_data)
+  );
+
+  // for rvtest
+  rvtest rvt1 (
     .clk(clk),
     .rst_n(rst_n),
     .addr(mem_addr),
@@ -1039,4 +1050,43 @@ module uart #(
   end
 
 endmodule
+
+//-----------------------------------
+// rvtest
+//-----------------------------------
+module rvtest (
+  input logic clk,
+  input logic rst_n,
+  input addr_t addr,
+  input state_e state,
+  input mem_op_e mem_op,
+  input reg_t data
+);
+
+  addr_t BASE = 64'h8000_0000_0000_1000;
+  addr_t MASK = 64'hfff;
+
+  logic enable;
+  addr_t offset;
+  assign enable = ((addr & ~MASK) == BASE && state == MEMACCESS);
+  assign offset = addr - BASE;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (enable && mem_op == SD_SW) begin
+        if (offset == 0) begin
+          if (data[31:0] == 32'd1) begin
+            $display("PASS");
+          end else begin
+            $display($sformatf("FAIL: %0d", data[31:0]));
+          end
+          $finish;
+        end
+      end
+    end
+  end
+
+endmodule
+
 /******************************************************************************/
