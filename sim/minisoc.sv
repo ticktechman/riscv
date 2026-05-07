@@ -916,7 +916,9 @@ endmodule
 // sram
 //-----------------------------------
 module sram #(
-  parameter SIZE = 1024
+  parameter SIZE = 1024,
+  parameter addr_t BASE = 64'b0,
+  parameter addr_t MASK = 64'h3ff
 ) (
   input logic clk,
   input logic rst_n,
@@ -927,8 +929,10 @@ module sram #(
   output reg_t mem_rdata
 );
   localparam int unsigned BITS = $clog2(SIZE);
+  logic enable;
 
   logic [7:0] ram[SIZE];
+  addr_t offset;
   `define B2R(r, a) {{56{r[a][7]}}, r[a][7:0]}
   `define H2R(r, a) {{48{r[a+1][7]}}, r[a+1], r[a]}
   `define W2R(r, a) {{32{r[a+3][7]}}, r[a+3], r[a+2], r[a+1], r[a]}
@@ -937,25 +941,27 @@ module sram #(
   `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
   `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
 
+  assign enable = (mem_addr & ~MASK) == BASE;
+  assign offset = mem_addr - BASE;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int i = 0; i < SIZE; i++) begin
         ram[i] <= '0;
       end
     end else begin
-      if (state == MEMACCESS && mem_op != MEM_NONE && mem_addr < 64'(SIZE)) begin
+      if (state == MEMACCESS && mem_op != MEM_NONE && enable) begin
         unique case (mem_op)
-          LD_LB:  mem_rdata <= `B2R(ram, mem_addr[BITS-1:0]);
-          LD_LH:  mem_rdata <= `H2R(ram, mem_addr[BITS-1:0]);
-          LD_LW:  mem_rdata <= `W2R(ram, mem_addr[BITS-1:0]);
-          LD_LD:  mem_rdata <= `D2R(ram, mem_addr[BITS-1:0]);
-          LD_LBU: mem_rdata <= `BU2R(ram, mem_addr[BITS-1:0]);
-          LD_LHU: mem_rdata <= `HU2R(ram, mem_addr[BITS-1:0]);
-          LD_LWU: mem_rdata <= `WU2R(ram, mem_addr[BITS-1:0]);
-          SD_SB:  ram[mem_addr[BITS-1:0]] <= mem_data[7:0];
-          SD_SH:  for (logic [BITS-1:0] i = 0; i < 2; i++) ram[mem_addr[BITS-1:0]+i] <= mem_data[8*i+:8];
-          SD_SW:  for (logic [BITS-1:0] i = 0; i < 4; i++) ram[mem_addr[BITS-1:0]+i] <= mem_data[8*i+:8];
-          SD_SD:  for (logic [BITS-1:0] i = 0; i < 8; i++) ram[mem_addr[BITS-1:0]+i] <= mem_data[8*i+:8];
+          LD_LB:  mem_rdata <= `B2R(ram, offset[BITS-1:0]);
+          LD_LH:  mem_rdata <= `H2R(ram, offset[BITS-1:0]);
+          LD_LW:  mem_rdata <= `W2R(ram, offset[BITS-1:0]);
+          LD_LD:  mem_rdata <= `D2R(ram, offset[BITS-1:0]);
+          LD_LBU: mem_rdata <= `BU2R(ram, offset[BITS-1:0]);
+          LD_LHU: mem_rdata <= `HU2R(ram, offset[BITS-1:0]);
+          LD_LWU: mem_rdata <= `WU2R(ram, offset[BITS-1:0]);
+          SD_SB:  ram[offset[BITS-1:0]] <= mem_data[7:0];
+          SD_SH:  for (logic [BITS-1:0] i = 0; i < 2; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
+          SD_SW:  for (logic [BITS-1:0] i = 0; i < 4; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
+          SD_SD:  for (logic [BITS-1:0] i = 0; i < 8; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
         endcase
       end
     end
