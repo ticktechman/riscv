@@ -325,7 +325,8 @@ typedef enum logic [11:0] {
   MEPC    = 12'h341,
   MCAUSE  = 12'h342,
   MIE     = 12'h304,
-  MIP     = 12'h344
+  MIP     = 12'h344,
+  MHARTID = 12'hf14
 } csr_e;
 
 typedef enum {
@@ -868,7 +869,7 @@ module csr (
   input [11:0] csr_idx,
   output reg_t csr_val
 );
-  reg_t mstatus, mtvec, mepc, mcause, mie, mip;
+  reg_t mstatus, mtvec, mepc, mcause, mie, mip, mhartid;
   always_comb begin
     if (state == EXEC && csr_idx > 0) begin
       csr_val = '0;
@@ -879,6 +880,7 @@ module csr (
         MCAUSE: csr_val = mcause;
         MIE: csr_val = mie;
         MIP: csr_val = mip;
+        MHARTID: csr_val = mhartid;
         default: ;
       endcase
       `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
@@ -892,6 +894,7 @@ module csr (
       mcause <= '0;
       mie <= '0;
       mip <= '0;
+      mhartid <= '0;
     end else begin
       if (state == EXEC && sys_op >= SYS_CSRRW) begin
         `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
