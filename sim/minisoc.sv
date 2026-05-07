@@ -198,7 +198,7 @@ module soc (
 
   uart #(
     .BASE(64'h2000),
-    .MASK(~64'hfff)
+    .MASK(64'hfff)
   ) uart1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -996,7 +996,7 @@ endmodule
 //-----------------------------------
 module uart #(
   parameter addr_t BASE = 64'h2000,
-  parameter addr_t MASK = ~64'hfff
+  parameter addr_t MASK = 64'hfff
 ) (
   input logic clk,
   input logic rst_n,
@@ -1007,7 +1007,7 @@ module uart #(
 );
 
   logic enable;
-  assign enable = ((addr & MASK) == BASE && state == MEMACCESS) ? 1 : 0;
+  assign enable = ((addr & ~MASK) == BASE && state == MEMACCESS) ? 1 : 0;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
