@@ -174,9 +174,9 @@ module soc (
   // rom
   logic [31:0] instr;
   rom #(
-    .HEX("isa/isa.hex")
+    // .HEX("isa/isa.hex")
     // .HEX("isa/csr.hex")
-    // .HEX("isa/mem.hex")
+    .HEX("isa/mem.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -969,13 +969,15 @@ module rom #(
   input addr_t pc,
   output logic [31:0] instr
 );
-  localparam ROMSIZE = 64;
+  localparam int unsigned ROMSIZE = 256;
+  localparam int unsigned BITS = $clog2(ROMSIZE);
   logic [31:0] data[ROMSIZE];
   initial begin
     $readmemh(HEX, data);
     `LOGI($sformatf("load %s", HEX));
   end
-  assign instr = data[pc[7:2]];
+  assign instr = data[pc[BITS+1:2]];
+
 endmodule
 
 //-----------------------------------
