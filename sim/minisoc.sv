@@ -175,7 +175,7 @@ module soc (
   // rom
   logic [31:0] instr;
   rom #(
-    .SIZE(4096),
+    .SIZE(8192),
     // .HEX("isa/isa.hex")
     // .HEX("isa/csr.hex")
     // .HEX("isa/mem.hex")
@@ -475,19 +475,16 @@ module decoder (
           imm_type = IMM_I;
           unique case (f3)
             3'b000:  alu_op = ALU_ADD;
+            3'b001:  alu_op = ALU_SLL;
             3'b010:  alu_op = ALU_SLT;
             3'b011:  alu_op = ALU_SLTU;
             3'b100:  alu_op = ALU_XOR;
             3'b110:  alu_op = ALU_OR;
+            3'b101:  alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
             3'b111:  alu_op = ALU_AND;
             default: ;
           endcase
-          unique case (fc)
-            {7'b0000000, 3'b001} : alu_op = ALU_SLL;
-            {7'b0000000, 3'b101} : alu_op = ALU_SRL;
-            {7'b0100000, 3'b101} : alu_op = ALU_SRA;
-            default: ;
-          endcase
+          `LOGI($sformatf("aluop:%0d", alu_op));
         end
         OPCODE_OP_IMM_32: begin
           `LOGI("OP_IMM32");
@@ -536,7 +533,7 @@ module decoder (
           // 00403023: sd x4, 0(x0)
           // ALU: addr = rs1 + imm;
           // mem[addr] = rs2
-          reg_write = 1;
+          reg_write = 0;
           alu_op = ALU_ADD;
           imm_type = IMM_S;
           op_s1 = OP_SRC_REG;
@@ -737,8 +734,8 @@ module exec (
         ALU_OR:   alu_result = op1 | op2;
         ALU_XOR:  alu_result = op1 ^ op2;
         ALU_SLL:  alu_result = op1 << op2[5:0];
-        ALU_SRL:  alu_result = op2 >> op2[5:0];
-        ALU_SRA:  alu_result = $signed(op1) >> op2[5:0];
+        ALU_SRL:  alu_result = op1 >> op2[5:0];
+        ALU_SRA:  alu_result = $signed(op1) >>> op2[5:0];
         ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
         ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
         ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
@@ -949,7 +946,9 @@ endmodule
 //-----------------------------------
 module sram #(
   parameter SIZE = 1024,
-  parameter addr_t BASE = 64'b0,
+  // parameter addr_t BASE = 64'b0,
+  // parameter addr_t BASE = 64'h8000_0000_0000_3000,
+  parameter addr_t BASE = 64'h8000_0000_0000_2000,
   parameter addr_t MASK = 64'h3ff
 ) (
   input logic clk,
@@ -973,15 +972,29 @@ module sram #(
   `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
   `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
 
+  integer fd;
+  string hex_file;
+  initial begin
+    $value$plusargs("hex_file=%s", hex_file);
+    if (hex_file != "") begin
+      fd = $fopen({hex_file, ".data"}, "r");
+      if (fd != 0) begin
+        $fclose(fd);
+        $readmemh({hex_file, ".data"}, ram);
+        $display("ram load %s bits:%0d", {hex_file, ".data"}, BITS);
+      end
+    end
+  end
   assign enable = (mem_addr & ~MASK) == BASE;
   assign offset = mem_addr - BASE;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int i = 0; i < SIZE; i++) begin
-        ram[i] <= '0;
+        // ram[i] <= '0;
       end
     end else begin
       if (state == MEMACCESS && mem_op != MEM_NONE && enable) begin
+        `LOGI($sformatf("offset:%h op:%0d data: %h", offset, mem_op, mem_data));
         unique case (mem_op)
           LD_LB:  mem_rdata <= `B2R(ram, offset[BITS-1:0]);
           LD_LH:  mem_rdata <= `H2R(ram, offset[BITS-1:0]);
@@ -1016,8 +1029,15 @@ module rom #(
   localparam int unsigned BITS = $clog2(ROMSIZE);
   logic [31:0] data[ROMSIZE];
   initial begin
-    $readmemh(HEX, data);
-    `LOGI($sformatf("load %s", HEX));
+    string hex_file;
+    $value$plusargs("hex_file=%s", hex_file);
+    if (hex_file != "") begin
+      $readmemh(hex_file, data);
+    end else begin
+      $readmemh(HEX, data);
+    end
+    // `LOGI($sformatf("load %s %s", HEX, hex_file));
+    $display($sformatf("load %s", hex_file));
   end
   assign instr = data[pc[BITS+1:2]];
 
@@ -1054,6 +1074,13 @@ endmodule
 //-----------------------------------
 // rvtest
 //-----------------------------------
+`define COLOR_NONE "\033[0m"
+`define RED "\033[31m"
+`define GREEN "\033[32m"
+`define YELLOW "\033[33m"
+`define BLUE "\033[34m"
+`define CYAN "\033[36m"
+`define WHITE "\033[37m"
 module rvtest (
   input logic clk,
   input logic rst_n,
@@ -1063,6 +1090,7 @@ module rvtest (
   input reg_t data
 );
 
+  // addr_t BASE = 64'h8000_0000_0000_2000;
   addr_t BASE = 64'h8000_0000_0000_1000;
   addr_t MASK = 64'hfff;
 
@@ -1077,9 +1105,9 @@ module rvtest (
       if (enable && mem_op == SD_SW) begin
         if (offset == 0) begin
           if (data[31:0] == 32'd1) begin
-            $display("PASS");
+            $display("%sPASS%s", `GREEN, `COLOR_NONE);
           end else begin
-            $display($sformatf("FAIL: %0d", data[31:0]));
+            $display($sformatf("%sFAIL%s: %0d", `RED, `COLOR_NONE, data[31:0]));
           end
           $finish;
         end
