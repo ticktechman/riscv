@@ -938,28 +938,21 @@ module mult (
   always_comb begin
     result = '0;
     if (state == EXEC) begin
-      if (alu_op == ALU_MUL) begin
-        result = full[63:0];
-      end else if (alu_op >= ALU_MULH && alu_op <= ALU_MULHU) begin
-        result = full[127:64];
-      end else if (alu_op == ALU_MULW) begin
-        result = {{32{full[31]}}, full[31:0]};
-      end
+      unique case (alu_op)
+        ALU_MUL: begin
+          result = full[63:0];
+        end
+        ALU_MULW: begin
+          result = {{32{full[31]}}, full[31:0]};
+        end
+        ALU_MULH, ALU_MULHSU, ALU_MULHU: begin
+          result = {{32{full[31]}}, full[31:0]};
+          result = full[127:64];
+        end
+        default: ;
+      endcase
     end
   end
-
-  // always_ff @(posedge clk or negedge rst_n) begin
-  //   if (!rst_n) begin
-  //     result <= '0;
-  //   end else begin
-  //     if (alu_op == ALU_MUL) begin
-  //       result <= full[63:0];
-  //     end else if (alu_op >= ALU_MULH && alu_op <= ALU_MULHU) begin
-  //       result <= full[127:64];
-  //     end
-  //   end
-  // end
-
 
 endmodule
 
