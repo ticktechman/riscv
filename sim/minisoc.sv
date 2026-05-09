@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -121,6 +121,8 @@ module soc (
 
 
   exec exec1 (
+    .clk(clk),
+    .rst_n(rst_n),
     .opcode(opcode),
     .state(state),
     .reg_write(reg_write),
@@ -177,10 +179,11 @@ module soc (
   rom #(
     .SIZE(8192),
     // .HEX("isa/isa.hex")
+    .HEX("isa/mul.hex")
     // .HEX("isa/csr.hex")
     // .HEX("isa/mem.hex")
     // .HEX("isa/ecall.hex")
-    .HEX("isa/rv64ui-p-add.hex")
+    // .HEX("isa/rv64ui-p-add.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -314,7 +317,23 @@ typedef enum {
   ALU_BLT,
   ALU_BGE,
   ALU_BLTU,
-  ALU_BGEU
+  ALU_BGEU,
+
+  ALU_MUL,     // rs1 * rs2
+  ALU_MULH,    // rs1 * rs2 high 64bit
+  ALU_MULHSU,  // rs1(s) * rs2(u) high 64bit
+  ALU_MULHU,   // rs1(u) * rs2(u) high 64bit
+  ALU_DIV,     // rs1(s) / rs2(s)
+  ALU_DIVU,    // rs1(u) / rs2(u)
+  ALU_REM,     // rs1(s) % rs2(s)
+  ALU_REMU,    // rs1(u) % rs2(u)
+
+  // 32bit
+  ALU_MULW,   // rd[0:31] = rs1[31:0] * rs2[31:0]; rd[31] -> rd[63:32]
+  ALU_DIVW,   // rd[0:31] = rs1[31:0](s) / rs2[31:0](s); rd[31] -> rd[63:32]
+  ALU_DIVUW,  // rd[0:31] = rs1[31:0](u) / rs2[31:0](u); rd[31] -> rd[63:32]
+  ALU_REMW,   // rd[0:31] = rs1[31:0](s) % rs2[31:0](s); rd[31] -> rd[63:32]
+  ALU_REMUW   // rd[0:31] = rs1[31:0](u) % rs2[31:0](u); rd[31] -> rd[63:32]
 } alu_op_e;
 
 typedef enum {
@@ -446,6 +465,14 @@ module decoder (
             {7'b0100000, 3'b101} : alu_op = ALU_SRA;
             {7'b0000000, 3'b010} : alu_op = ALU_SLT;
             {7'b0000000, 3'b011} : alu_op = ALU_SLTU;
+            {7'b0000001, 3'b000} : alu_op = ALU_MUL;
+            {7'b0000001, 3'b001} : alu_op = ALU_MULH;
+            {7'b0000001, 3'b010} : alu_op = ALU_MULHSU;
+            {7'b0000001, 3'b011} : alu_op = ALU_MULHU;
+            {7'b0000001, 3'b100} : alu_op = ALU_DIV;
+            {7'b0000001, 3'b101} : alu_op = ALU_DIVU;
+            {7'b0000001, 3'b110} : alu_op = ALU_REM;
+            {7'b0000001, 3'b111} : alu_op = ALU_REMU;
 
             default: ;
           endcase
@@ -461,6 +488,11 @@ module decoder (
             {7'b0000000, 3'b001} : alu_op = ALU_SLLW;
             {7'b0000000, 3'b101} : alu_op = ALU_SRLW;
             {7'b0100000, 3'b101} : alu_op = ALU_SRAW;
+            {7'b0000001, 3'b000} : alu_op = ALU_MULW;
+            {7'b0000001, 3'b100} : alu_op = ALU_DIVW;
+            {7'b0000001, 3'b101} : alu_op = ALU_DIVUW;
+            {7'b0000001, 3'b110} : alu_op = ALU_REMW;
+            {7'b0000001, 3'b111} : alu_op = ALU_REMUW;
             default: ;
           endcase
         end
@@ -691,6 +723,8 @@ endmodule
 // exec
 //-----------------------------------
 module exec (
+  input logic clk,
+  input logic rst_n,
   input opcode_e opcode,
   input state_e state,
   input logic reg_write,
@@ -715,10 +749,22 @@ module exec (
   output reg_t  mem_data,
   output reg_t  csr_wdata
 );
+  reg_t alu_result;
+  reg_t mult_result;
+  logic [63:0] op1, op2;
+  logic [31:0] w_result;
+
+  mult mult1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .alu_op(alu_op),
+    .op1(rs1_val),
+    .op2(rs2_val),
+    .result(mult_result)
+  );
+
   always_comb begin : exec
-    reg_t alu_result;
-    logic [63:0] op1, op2;
-    logic [31:0] w_result;
     if (state == EXEC) begin
       br_taken = 1'b0;
       wb_data = '0;
@@ -726,6 +772,7 @@ module exec (
       pc_target = '0;
       op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
       op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
+
       `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
       unique case (alu_op)
         ALU_ADD:  alu_result = op1 + op2;
@@ -814,7 +861,11 @@ module exec (
 
       if (reg_write) begin
         if (alu_op != ALU_NONE) begin
-          wb_data = alu_result;
+          if (alu_op inside {ALU_MUL, ALU_MULH, ALU_MULHU, ALU_MULHSU, ALU_MULW}) begin
+            wb_data = mult_result;
+          end else begin
+            wb_data = alu_result;
+          end
         end
       end
       if (br == 1) begin
@@ -839,6 +890,89 @@ module exec (
       end
     end
   end
+
+endmodule
+
+//-----------------------------------
+// multiplier
+//-----------------------------------
+module mult (
+  input logic clk,
+  input logic rst_n,
+  input state_e state,
+  input alu_op_e alu_op,
+  input reg_t op1,
+  input reg_t op2,
+  output reg_t result
+);
+
+  logic signed [64:0] opa, opb;
+  logic signed [129:0] full;
+  always_comb begin
+    if (state == EXEC) begin
+      opa = '0;
+      opb = '0;
+      unique case (alu_op)
+        ALU_MULHU: begin
+          opa = {1'b0, op1};
+          opb = {1'b0, op2};
+        end
+        ALU_MULHSU: begin
+          opa = {op1[63], op1};
+          opb = {1'b0, op2};
+        end
+        ALU_MUL, ALU_MULH: begin
+          opa = {op1[63], op1};
+          opb = {op2[63], op2};
+        end
+        ALU_MULW: begin
+          opa = {{33{op1[31]}}, op1[31:0]};
+          opb = {{33{op2[31]}}, op2[31:0]};
+        end
+        default: ;
+      endcase
+    end
+  end
+  assign full = opa * opb;
+
+  always_comb begin
+    result = '0;
+    if (state == EXEC) begin
+      if (alu_op == ALU_MUL) begin
+        result = full[63:0];
+      end else if (alu_op >= ALU_MULH && alu_op <= ALU_MULHU) begin
+        result = full[127:64];
+      end else if (alu_op == ALU_MULW) begin
+        result = {{32{full[31]}}, full[31:0]};
+      end
+    end
+  end
+
+  // always_ff @(posedge clk or negedge rst_n) begin
+  //   if (!rst_n) begin
+  //     result <= '0;
+  //   end else begin
+  //     if (alu_op == ALU_MUL) begin
+  //       result <= full[63:0];
+  //     end else if (alu_op >= ALU_MULH && alu_op <= ALU_MULHU) begin
+  //       result <= full[127:64];
+  //     end
+  //   end
+  // end
+
+
+endmodule
+
+//-----------------------------------
+// dividor
+//-----------------------------------
+module divider (
+  input  logic clk,
+  input  logic rst_n,
+  output reg_t quotient,
+  output reg_t remainder,
+  output logic done
+);
 
 endmodule
 
@@ -1033,11 +1167,12 @@ module rom #(
     $value$plusargs("hex_file=%s", hex_file);
     if (hex_file != "") begin
       $readmemh(hex_file, data);
+      $display($sformatf("load %s", hex_file));
     end else begin
       $readmemh(HEX, data);
+      $display($sformatf("load %s", HEX));
     end
     // `LOGI($sformatf("load %s %s", HEX, hex_file));
-    $display($sformatf("load %s", hex_file));
   end
   assign instr = data[pc[BITS+1:2]];
 
