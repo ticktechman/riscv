@@ -132,6 +132,18 @@ module top;
     in_vld = 0;
     check_result("Fast Path (|A|<|B|)", 64'd0);
 
+    // -- case 7 64bit minimal number / -1 Overflow
+    @(posedge clk);
+    op_a     = 64'h8000_0000_0000_0000;
+    op_b     = 64'hFFFF_FFFF_FFFF_FFFF;
+    funct3   = 3'b100;  // DIV 指令
+    is_rv64w = 0;  // 64位模式
+    in_vld   = 1;
+    while (!in_rdy) @(posedge clk);
+    @(posedge clk);
+    in_vld = 0;
+    check_result("64bit DIV Overflow (MinNeg/-1)", 64'h8000_0000_0000_0000);
+
     repeat (10) @(posedge clk);
     $display("\n[ALL TESTS FINISHED SUCCESSFULLY]");
     $finish;
