@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -84,6 +84,7 @@ module soc (
   logic [11:0] csr_idx;
   logic br, br_taken, jump;
   logic reg_write;
+  logic exec_done;
   op_src_e op_s1, op_s2;
   opcode_e opcode;
   alu_op_e alu_op;
@@ -143,7 +144,8 @@ module soc (
     .mem_addr(mem_addr),
     .mem_data(mem_data),
     .wb_data(wb_data),
-    .csr_wdata(csr_wdata)
+    .csr_wdata(csr_wdata),
+    .done(exec_done)
   );
 
   // register file
@@ -179,7 +181,8 @@ module soc (
   rom #(
     .SIZE(8192),
     // .HEX("isa/isa.hex")
-    .HEX("isa/mul.hex")
+    // .HEX("isa/mul.hex")
+    .HEX("isa/div.hex")
     // .HEX("isa/csr.hex")
     // .HEX("isa/mem.hex")
     // .HEX("isa/ecall.hex")
@@ -239,8 +242,15 @@ module soc (
           `LOGI($sformatf("fetch pc=%h instr=%h", pc, instr));
           state <= DECODE;
         end
-        DECODE: state <= EXEC;
-        EXEC: state <= MEMACCESS;
+        DECODE: begin
+          state <= EXEC;
+        end
+        EXEC: begin
+          `LOGI($sformatf("exec_done: %b", exec_done));
+          if (exec_done) begin
+            state <= MEMACCESS;
+          end
+        end
         MEMACCESS: state <= WB;
         WB: begin
           state <= FETCH;
@@ -316,7 +326,7 @@ typedef enum {
   ALU_BNE,
   ALU_BLT,
   ALU_BGE,
-  ALU_BLTU,
+  ALU_BLTU,  // 20
   ALU_BGEU,
 
   ALU_MUL,     // rs1 * rs2
@@ -747,12 +757,15 @@ module exec (
   output addr_t mem_addr,
   output reg_t  wb_data,
   output reg_t  mem_data,
-  output reg_t  csr_wdata
+  output reg_t  csr_wdata,
+  output logic  done
 );
   reg_t alu_result;
   reg_t mult_result;
+  reg_t div_result;
   logic [63:0] op1, op2;
   logic [31:0] w_result;
+  logic divdone;
 
   mult mult1 (
     .clk(clk),
@@ -763,6 +776,18 @@ module exec (
     .op2(rs2_val),
     .result(mult_result)
   );
+
+  divider div1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .alu_op(alu_op),
+    .op1(rs1_val),
+    .op2(rs2_val),
+    .result(div_result),
+    .done(done)
+  );
+
 
   always_comb begin : exec
     if (state == EXEC) begin
@@ -863,6 +888,8 @@ module exec (
         if (alu_op != ALU_NONE) begin
           if (alu_op inside {ALU_MUL, ALU_MULH, ALU_MULHU, ALU_MULHSU, ALU_MULW}) begin
             wb_data = mult_result;
+          end else if (alu_op inside {ALU_DIV, ALU_DIVU, ALU_DIVW, ALU_DIVUW, ALU_REM, ALU_REMW, ALU_REMU, ALU_REMUW}) begin
+            wb_data = div_result;
           end else begin
             wb_data = alu_result;
           end
@@ -960,12 +987,150 @@ endmodule
 // dividor
 //-----------------------------------
 module divider (
-  input  logic clk,
-  input  logic rst_n,
-  output reg_t quotient,
-  output reg_t remainder,
+  input logic clk,
+  input logic rst_n,
+  input state_e state,
+  input alu_op_e alu_op,
+  input reg_t op1,
+  input reg_t op2,
+  output reg_t result,
   output logic done
 );
+
+  typedef enum logic [1:0] {
+    IDLE   = 2'b00,
+    DIVIDE = 2'b01,
+    FINISH = 2'b10
+  } state_t;
+  state_t state_q, state_d;
+
+  logic [63:0] a_q, a_d, b_q, b_d, quot_q, quot_d;
+  logic [5:0] cnt_q, cnt_d;
+  logic res_inv_q, res_inv_d, rem_inv_q, rem_inv_d;
+  logic is_rem_q, is_rem_d, is_div_zero_q, is_div_zero_d;
+
+  // 预处理：符号位提取与绝对值转换
+  logic [63:0] op_a_abs, op_b_abs;
+  logic a_sign, b_sign, is_signed;
+  logic is_rv64w;
+
+  assign is_rv64w = alu_op inside {ALU_DIVW, ALU_REMW, ALU_REMUW, ALU_DIVUW};
+  assign is_signed = alu_op inside {ALU_DIV, ALU_DIVW, ALU_REM, ALU_REMW};
+  assign a_sign    = is_rv64w ? op1[31] : op1[63];
+  assign b_sign    = is_rv64w ? op2[31] : op2[63];
+
+  always_comb begin
+    logic [63:0] v1, v2;
+    v1 = is_rv64w ? (is_signed ? {{32{op1[31]}}, op1[31:0]} : {32'b0, op1[31:0]}) : op1;
+    v2 = is_rv64w ? (is_signed ? {{32{op2[31]}}, op2[31:0]} : {32'b0, op2[31:0]}) : op2;
+    op_a_abs = (is_signed && a_sign) ? (~v1 + 64'd1) : v1;
+    op_b_abs = (is_signed && b_sign) ? (~v2 + 64'd1) : v2;
+  end
+
+  // 前导零计数 (LZC) 用于跳过冗余周期
+  function automatic logic [5:0] count_lz(logic [63:0] val);
+    logic [5:0] count;
+    count = 6'd0;
+    for (int i = 63; i >= 0; i--) begin
+      if (val[i]) break;
+      count = count + 6'd1;
+    end
+    return count;
+  endfunction
+
+  logic [5:0] lzc_a, lzc_b, shift_amt;
+  assign lzc_a = count_lz(op_a_abs);
+  assign lzc_b = count_lz(op_b_abs);
+  assign shift_amt = (lzc_b > lzc_a) ? (lzc_b - lzc_a) : 6'd0;
+
+  // 试减逻辑
+  logic [64:0] sub_res;
+  assign sub_res = {1'b0, a_q} - {1'b0, b_q};
+
+  // 状态机逻辑
+  always_comb begin
+    state_d = state_q;
+    a_d = a_q;
+    b_d = b_q;
+    quot_d = quot_q;
+    cnt_d = cnt_q;
+    is_div_zero_d = is_div_zero_q;
+    is_rem_d = is_rem_q;
+    res_inv_d = res_inv_q;
+    rem_inv_d = rem_inv_q;
+    done = 1'b0;
+
+    case (state_q)
+      IDLE: begin
+        if (state == EXEC) begin
+          is_div_zero_d = (op_b_abs == 64'b0);
+          is_rem_d      = alu_op inside {ALU_REM, ALU_REMUW, ALU_REMW, ALU_REMU};
+          res_inv_d     = is_signed && (a_sign ^ b_sign) && (op_b_abs != 64'b0);
+          rem_inv_d     = is_signed && a_sign;
+          a_d           = op_a_abs;
+          b_d           = op_b_abs << shift_amt;
+          quot_d        = 64'b0;
+          cnt_d         = shift_amt;
+          if (op_a_abs < op_b_abs || op_b_abs == 64'b0) state_d = FINISH;
+          else state_d = DIVIDE;
+        end
+      end
+      DIVIDE: begin
+        if (!sub_res[64]) begin
+          a_d    = sub_res[63:0];
+          quot_d = {quot_q[64-2:0], 1'b1};
+        end else begin
+          quot_d = {quot_q[64-2:0], 1'b0};
+        end
+        b_d = {1'b0, b_q[63:1]};
+        if (cnt_q == 6'd0) state_d = FINISH;
+        else cnt_d = cnt_q - 6'd1;
+      end
+      FINISH: begin
+        done = 1'b1;
+        if (state == EXEC) state_d = IDLE;
+      end
+      default: state_d = IDLE;
+    endcase
+  end
+
+  // 时序更新
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state_q <= IDLE;
+      a_q <= 0;
+      b_q <= 0;
+      quot_q <= 0;
+      cnt_q <= 0;
+      is_div_zero_q <= 0;
+      is_rem_q <= 0;
+      res_inv_q <= 0;
+      rem_inv_q <= 0;
+    end else begin
+      state_q <= state_d;
+      a_q <= a_d;
+      b_q <= b_d;
+      quot_q <= quot_d;
+      cnt_q <= cnt_d;
+      is_div_zero_q <= is_div_zero_d;
+      is_rem_q <= is_rem_d;
+      res_inv_q <= res_inv_d;
+      rem_inv_q <= rem_inv_d;
+    end
+  end
+
+  // 结果修正与符号处理
+  always_comb begin
+    logic [63:0] q_signed, r_signed, pre_res;
+    q_signed = res_inv_q ? (~quot_q + 64'd1) : quot_q;
+    r_signed = rem_inv_q ? (~a_q + 64'd1) : a_q;
+    if (is_div_zero_q) begin
+      q_signed = 64'hFFFF_FFFF_FFFF_FFFF;
+      r_signed = is_rv64w ? {{32{op1[31]}}, op1[31:0]} : op1;
+    end
+    pre_res = is_rem_q ? r_signed : q_signed;
+    result  = is_rv64w ? {{32{pre_res[31]}}, pre_res[31:0]} : pre_res;
+  end
 
 endmodule
 
