@@ -984,7 +984,7 @@ module mult (
 endmodule
 
 //-----------------------------------
-// dividor
+// divider
 //-----------------------------------
 module divider (
   input logic clk,
@@ -1009,7 +1009,7 @@ module divider (
   logic res_inv_q, res_inv_d, rem_inv_q, rem_inv_d;
   logic is_rem_q, is_rem_d, is_div_zero_q, is_div_zero_d;
 
-  // 预处理：符号位提取与绝对值转换
+  // preprocess
   logic [63:0] op_a_abs, op_b_abs;
   logic a_sign, b_sign, is_signed;
   logic is_rv64w;
@@ -1027,7 +1027,7 @@ module divider (
     op_b_abs = (is_signed && b_sign) ? (~v2 + 64'd1) : v2;
   end
 
-  // 前导零计数 (LZC) 用于跳过冗余周期
+  // leader zero counter to reduce loop
   function automatic logic [5:0] count_lz(logic [63:0] val);
     logic [5:0] count;
     count = 6'd0;
@@ -1043,11 +1043,11 @@ module divider (
   assign lzc_b = count_lz(op_b_abs);
   assign shift_amt = (lzc_b > lzc_a) ? (lzc_b - lzc_a) : 6'd0;
 
-  // 试减逻辑
+  // try sub
   logic [64:0] sub_res;
   assign sub_res = {1'b0, a_q} - {1'b0, b_q};
 
-  // 状态机逻辑
+  // fsm
   always_comb begin
     state_d = state_q;
     a_d = a_q;
@@ -1094,7 +1094,6 @@ module divider (
     endcase
   end
 
-  // 时序更新
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state_q <= IDLE;
@@ -1119,7 +1118,7 @@ module divider (
     end
   end
 
-  // 结果修正与符号处理
+  // result and sign bit
   always_comb begin
     logic [63:0] q_signed, r_signed, pre_res;
     q_signed = res_inv_q ? (~quot_q + 64'd1) : quot_q;
@@ -1370,10 +1369,6 @@ endmodule
 `define COLOR_NONE "\033[0m"
 `define RED "\033[31m"
 `define GREEN "\033[32m"
-`define YELLOW "\033[33m"
-`define BLUE "\033[34m"
-`define CYAN "\033[36m"
-`define WHITE "\033[37m"
 module rvtest (
   input logic clk,
   input logic rst_n,
