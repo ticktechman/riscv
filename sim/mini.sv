@@ -9,7 +9,7 @@
  *******************************************************************************
  */
 
-// build:  verilator --timing --binary --trace -o mini --top-module top mini.sv
+// build:  verilator -j 0 --timing --binary --trace -o mini --top-module top mini.sv && ./obj_dir/mini
 
 `timescale 1ns / 100ps
 
