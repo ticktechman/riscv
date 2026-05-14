@@ -1426,10 +1426,16 @@ module csr (
             end
             M_SUPER: begin
               mcause <= EXC_ECALL_S_MODE;
-              trap_target <= mtvec;
-              mepc <= pc;
-              mode <= M_MACHINE;
-              mstatus.fields.MPP <= 2'b01;
+              if (medeleg.fields.ecall_from_s_mode) begin
+                trap_target <= mtvec;
+                sepc <= pc;
+                mstatus.fields.SPP <= 1'b1;
+              end else begin
+                trap_target <= mtvec;
+                mepc <= pc;
+                mode <= M_MACHINE;
+                mstatus.fields.MPP <= 2'b01;
+              end
             end
             M_MACHINE: begin
               mcause <= EXC_ECALL_M_MODE;
