@@ -165,6 +165,7 @@ module soc (
 
   // csr
   reg_t csr_val, csr_wdata;
+  logic irqs, irqt, irqe;
   csr csr1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -173,7 +174,10 @@ module soc (
     .sys_op(sys_op),
     .csr_wdata(csr_wdata),
     .csr_idx(csr_idx),
-    .csr_val(csr_val)
+    .csr_val(csr_val),
+    .irq_software(irqs),
+    .irq_timer(irqt),
+    .irq_external(irqe)
   );
 
   // rom
@@ -361,14 +365,33 @@ typedef enum {
   SYS_CSRRCI
 } sys_op_e;
 
+// reg_t mstatus, mtvec, mtval, mepc, mcause, mie, mip, mhartid, medeleg, mideleg, misa, mscratch;
+// reg_t stvec, stval, sepc, scause, sscratch, satp;
 typedef enum logic [11:0] {
-  MSTATUS = 12'h300,
-  MTVEC   = 12'h305,
-  MEPC    = 12'h341,
-  MCAUSE  = 12'h342,
-  MIE     = 12'h304,
-  MIP     = 12'h344,
-  MHARTID = 12'hf14
+  // csr register in M mode
+  MSTATUS  = 12'h300,
+  MISA     = 12'h301,
+  MEDELEG  = 12'h302,
+  MIDELEG  = 12'h303,
+  MIE      = 12'h304,
+  MTVEC    = 12'h305,
+  MSCRATCH = 12'h340,
+  MEPC     = 12'h341,
+  MCAUSE   = 12'h342,
+  MTVAL    = 12'h343,
+  MIP      = 12'h344,
+  MHARTID  = 12'hf14,
+
+  // csr register in s mode
+  SSTATUS  = 12'h100,
+  SIE      = 12'h104,
+  STVEC    = 12'h105,
+  SSCRATCH = 12'h140,
+  SEPC     = 12'h141,
+  SCAUSE   = 12'h142,
+  STVAL    = 12'h143,
+  SIP      = 12'h144,
+  SATP     = 12'h180
 } csr_e;
 
 typedef enum {
@@ -1180,20 +1203,68 @@ module csr (
   input sys_op_e sys_op,
   input reg_t csr_wdata,
   input [11:0] csr_idx,
-  output reg_t csr_val
+  output reg_t csr_val,
+
+  input logic irq_software,
+  input logic irq_timer,
+  input logic irq_external
 );
-  reg_t mstatus, mtvec, mepc, mcause, mie, mip, mhartid;
+  // handle irq
+  // handle exceptions
+  // handle csr register rw
+  // handle mmu
+  // handle privilege level change
+
+  typedef enum logic [1:0] {
+    M_USER,
+    M_SUPER,
+    M_MACHINE
+  } mode_e;
+
+  `define USIP 0
+  `define SSIP 1
+  `define MSIP 3
+  `define STIP 5
+  `define MTIP 7
+  `define SEIP 9
+  `define MEIP 11
+  `define SSTATUS_MASK 64'h3000DFFC7
+  `define SIE_MASK 64'h0222
+  `define SIP_MASK 64'h0222
+
+  reg_t mstatus, mtvec, mtval, mepc, mcause, mie, mip, mhartid, medeleg, mideleg, misa, mscratch;
+  reg_t stvec, stval, sepc, scause, sscratch, satp;
+  reg_t cycle;
+  mode_e mode;
+
+  logic irq_taken;
+  assign irq_taken = irq_software | irq_timer | irq_external;
+
   always_comb begin
+    csr_val = '0;
     if (state == EXEC && csr_idx > 0) begin
-      csr_val = '0;
       unique case (csr_idx)
         MSTATUS: csr_val = mstatus;
+        MISA: csr_val = misa;
+        MEDELEG: csr_val = medeleg;
+        MIDELEG: csr_val = mideleg;
+        MIE: csr_val = mie;
         MTVEC: csr_val = mtvec;
+        MSCRATCH: csr_val = mscratch;
         MEPC: csr_val = mepc;
         MCAUSE: csr_val = mcause;
-        MIE: csr_val = mie;
+        MTVAL: csr_val = mtval;
         MIP: csr_val = mip;
         MHARTID: csr_val = mhartid;
+        SSTATUS: csr_val = mstatus & `SSTATUS_MASK;
+        SIE: csr_val = mie & `SIE_MASK;
+        STVEC: csr_val = stvec;
+        SSCRATCH: csr_val = sscratch;
+        SEPC: csr_val = sepc;
+        SCAUSE: csr_val = scause;
+        STVAL: csr_val = stval;
+        SIP: csr_val = mip & `SIP_MASK;
+        SATP: csr_val = satp;
         default: ;
       endcase
       `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
@@ -1202,34 +1273,64 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mstatus <= '0;
+      misa <= '0;
+      medeleg <= '0;
+      mideleg <= '0;
       mtvec <= '0;
+      mtval <= '0;
+      mscratch <= '0;
       mepc <= '0;
       mcause <= '0;
       mie <= '0;
       mip <= '0;
       mhartid <= '0;
+      mode <= M_MACHINE;
+      stvec <= '0;
+      sscratch <= '0;
+      stval <= '0;
+      scause <= '0;
+      satp <= '0;
     end else begin
       if (state == EXEC) begin
         // record mcause=11; mepc = pc + 4; mpie=mstatus; mie = 0; pc=mtvec;
         if (sys_op == SYS_ECALL) begin
           `LOGI("ECALL");
-          mcause = 11;  // ecall from m mode
-          mepc   = pc;
+          mcause <= 11;  // ecall from m mode
+          mepc   <= pc;
+        end else if (sys_op == SYS_MRET) begin
+          `LOGI("MRET");
+        end else if (sys_op == SYS_SRET) begin
+          `LOGI("SRET");
         end else if (sys_op >= SYS_CSRRW) begin
           `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
           unique case (csr_idx)
             MSTATUS: mstatus <= csr_wdata;
+            MEDELEG: medeleg <= csr_wdata;
+            MIDELEG: mideleg <= csr_wdata;
+            MIE: mie <= csr_wdata;
             MTVEC: mtvec <= csr_wdata;
+            MSCRATCH: mscratch <= csr_wdata;
+            MIP: mip <= csr_wdata;
             MEPC: mepc <= csr_wdata;
             MCAUSE: mcause <= csr_wdata;
-            MIE: mie <= csr_wdata;
-            MIP: mip <= csr_wdata;
+            MTVAL: mtval <= csr_wdata;
+
+            SSTATUS: mstatus <= csr_wdata & `SSTATUS_MASK;
+            SIE: mie <= csr_wdata & `SIE_MASK;
+            STVEC: stvec <= csr_wdata;
+            SSCRATCH: sscratch <= csr_wdata;
+            SEPC: sepc <= csr_wdata;
+            SCAUSE: scause <= csr_wdata;
+            STVAL: stval <= csr_wdata;
+            SIP: mip <= csr_wdata & `SIP_MASK;
+            SATP: satp <= csr_wdata;
             default: ;
           endcase
         end
       end
     end
   end
+
 endmodule
 
 //-----------------------------------
