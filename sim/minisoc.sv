@@ -1348,7 +1348,8 @@ module csr (
   `define MTIP 7
   `define SEIP 9
   `define MEIP 11
-  `define SSTATUS_MASK 64'h3000DFFC7
+  `define SSTATUS_READ_MASK 64'h8000_0000_000A_63F2
+  `define SSTATUS_WRITE_MASK 64'h0000_0000_000A_61F2
   `define SIE_MASK 64'h0222
   `define SIP_MASK 64'h0222
 
@@ -1380,7 +1381,7 @@ module csr (
         MTVAL: csr_val = mtval;
         MIP: csr_val = mip.value;
         MHARTID: csr_val = mhartid;
-        SSTATUS: csr_val = mstatus.value & `SSTATUS_MASK;
+        SSTATUS: csr_val = mstatus.value & `SSTATUS_READ_MASK;
         SIE: csr_val = mie.value & `SIE_MASK;
         STVEC: csr_val = stvec;
         SSCRATCH: csr_val = sscratch;
@@ -1441,7 +1442,7 @@ module csr (
             M_SUPER: begin
               mcause <= EXC_ECALL_S_MODE;
               if (medeleg.fields.ecall_from_s_mode) begin
-                trap_target <= mtvec;
+                trap_target <= stvec;
                 sepc <= pc;
                 mstatus.fields.SPP <= 1'b1;
                 mstatus.fields.SPIE <= mstatus.fields.SIE;
@@ -1493,7 +1494,7 @@ module csr (
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
-            SSTATUS: mstatus.value <= csr_wdata & `SSTATUS_MASK;
+            SSTATUS: mstatus.value <= csr_wdata & `SSTATUS_WRITE_MASK;
             SIE: mie.value <= csr_wdata & `SIE_MASK;
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
