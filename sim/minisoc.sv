@@ -136,6 +136,7 @@ module soc (
     .rs1_val(rs1_val),
     .rs2_val(rs2_val),
     .csr_val(csr_val),
+    .trap_target(trap_target),
     .imm(imm),
     .csr_imm(csr_imm),
     .pc(pc),
@@ -165,6 +166,7 @@ module soc (
 
   // csr
   reg_t csr_val, csr_wdata;
+  reg_t trap_target;
   logic irqs, irqt, irqe;
   csr csr1 (
     .clk(clk),
@@ -175,6 +177,7 @@ module soc (
     .csr_wdata(csr_wdata),
     .csr_idx(csr_idx),
     .csr_val(csr_val),
+    .trap_target(trap_target),
     .irq_software(irqs),
     .irq_timer(irqt),
     .irq_external(irqe)
@@ -428,6 +431,63 @@ typedef enum {
   OP_SRC_PC
 } op_src_e;
 
+typedef enum logic [63:0] {
+  EXC_INSTR_ADDR_MISALIGNED = 64'h0,  // 指令地址未对齐
+  EXC_INSTR_ACCESS_FAULT    = 64'h1,  // 取指访问故障
+  EXC_ILLEGAL_INSTRUCTION   = 64'h2,  // 非法指令
+  EXC_BREAKPOINT            = 64'h3,  // 断点
+  EXC_LOAD_ADDR_MISALIGNED  = 64'h4,  // 加载地址未对齐
+  EXC_LOAD_ACCESS_FAULT     = 64'h5,  // 加载访问故障
+  EXC_STORE_ADDR_MISALIGNED = 64'h6,  // 存储/AMO地址未对齐
+  EXC_STORE_ACCESS_FAULT    = 64'h7,  // 存储/AMO访问故障
+  EXC_ECALL_U_MODE          = 64'h8,  // U模式环境调用
+  EXC_ECALL_S_MODE          = 64'h9,  // S模式环境调用
+  EXC_ECALL_M_MODE          = 64'hB,  // M模式环境调用
+  EXC_INSTR_PAGE_FAULT      = 64'hC,  // 指令页面错误
+  EXC_LOAD_PAGE_FAULT       = 64'hD,  // 加载页面错误
+  EXC_STORE_PAGE_FAULT      = 64'hF,  // 存储/AMO页面错误
+
+  INTR_SUPERVISOR_SW  = 64'h8000_0000_0000_0001,  // 监督级软件中断
+  INTR_MACHINE_SW     = 64'h8000_0000_0000_0003,  // 机器级软件中断
+  INTR_SUPERVISOR_TMR = 64'h8000_0000_0000_0005,  // 监督级定时器中断
+  INTR_MACHINE_TMR    = 64'h8000_0000_0000_0007,  // 机器级定时器中断
+  INTR_SUPERVISOR_EXT = 64'h8000_0000_0000_0009,  // 监督级外部中断
+  INTR_MACHINE_EXT    = 64'h8000_0000_0000_000B   // 机器级外部中断
+} mcause_e;
+
+typedef struct packed {
+  logic        SD;              // [63] Dirty state (read-only)
+  logic [19:0] reserved_62_43;  // [62:43] Reserved
+  logic        MDT;             // [42] M-mode Trap Disable
+  logic [5:0]  reserved_41_36;  // [41:36] Reserved
+  logic [1:0]  SXL;             // [35:34] Supervisor Mode XLEN
+  logic [1:0]  UXL;             // [33:32] User Mode XLEN
+  logic [8:0]  reserved_31_23;  // [31:23] Reserved
+  logic        TSR;             // [22] Trap SRET
+  logic        TW;              // [21] Timeout Wait
+  logic        TVM;             // [20] Trap Virtual Memory
+  logic        MXR;             // [19] Make eXecutable Readable
+  logic        SUM;             // [18] permit Supervisor User Memory access
+  logic        MPRV;            // [17] Modify PRiVilege
+  logic [1:0]  XS;              // [16:15] Extension State
+  logic [1:0]  FS;              // [14:13] Floating-point Unit State
+  logic [1:0]  MPP;             // [12:11] Machine Previous Privilege
+  logic        SPP;             // [10] Supervisor Previous Privilege
+  logic        MPIE;            // [9] Machine Previous Interrupt Enable
+  logic        reserved_8;      // [8] Reserved (UBE)
+  logic        SPIE;            // [7] Supervisor Previous Interrupt Enable
+  logic        reserved_6;      // [6] Reserved (UPE)
+  logic        UPIE;            // [5] User Previous Interrupt Enable
+  logic        MIE;             // [4] Machine Interrupt Enable
+  logic        reserved_3;      // [3] Reserved
+  logic        SIE;             // [2] Supervisor Interrupt Enable
+  logic        reserved_1;      // [1] Reserved
+  logic        UIE;             // [0] User Interrupt Enable
+} mstatus_rv64_t;
+typedef union packed {
+  mstatus_rv64_t fields;  // Access via bit-fields
+  logic [63:0]   value;   // Access as a whole 64-bit register
+} mstatus_t;
 
 //-----------------------------------
 // decoder
@@ -682,15 +742,13 @@ module decoder (
               unique case (instr[31:20])
                 12'h000: begin
                   // read mtvec for pc_target
-                  sys_op  = SYS_ECALL;
-                  csr_idx = MTVEC;
+                  sys_op = SYS_ECALL;
                 end
                 12'h001: sys_op = SYS_EBREAK;
                 12'h002: sys_op = SYS_URET;
                 12'h102: sys_op = SYS_SRET;
                 12'h302: begin
-                  csr_idx = MEPC;
-                  sys_op  = SYS_MRET;
+                  sys_op = SYS_MRET;
                 end
                 default: ;
               endcase
@@ -770,6 +828,7 @@ module exec (
   input reg_t rs1_val,
   input reg_t rs2_val,
   input reg_t csr_val,
+  input reg_t trap_target,
   input reg_t imm,
   input [4:0] csr_imm,
   input addr_t pc,
@@ -866,14 +925,14 @@ module exec (
       unique case (sys_op)
         SYS_ECALL: begin
           // record mcause=11; mepc = pc + 4; mpie=mstatus; mie = 0; pc=mtvec;
-          pc_target = csr_val;
+          pc_target = trap_target;
         end
         SYS_EBREAK: begin
           $finish;
         end
         SYS_MRET: begin
           // pc = mepc;
-          pc_target = csr_val;
+          pc_target = trap_target;
         end
         SYS_CSRRW: begin
           `LOGI($sformatf("csrrw"));
@@ -1204,6 +1263,7 @@ module csr (
   input reg_t csr_wdata,
   input [11:0] csr_idx,
   output reg_t csr_val,
+  output reg_t trap_target,
 
   input logic irq_software,
   input logic irq_timer,
@@ -1232,7 +1292,8 @@ module csr (
   `define SIE_MASK 64'h0222
   `define SIP_MASK 64'h0222
 
-  reg_t mstatus, mtvec, mtval, mepc, mcause, mie, mip, mhartid, medeleg, mideleg, misa, mscratch;
+  mstatus_t mstatus;
+  reg_t mtvec, mtval, mepc, mcause, mie, mip, mhartid, medeleg, mideleg, misa, mscratch;
   reg_t stvec, stval, sepc, scause, sscratch, satp;
   reg_t cycle;
   mode_e mode;
@@ -1244,7 +1305,7 @@ module csr (
     csr_val = '0;
     if (state == EXEC && csr_idx > 0) begin
       unique case (csr_idx)
-        MSTATUS: csr_val = mstatus;
+        MSTATUS: csr_val = mstatus.value;
         MISA: csr_val = misa;
         MEDELEG: csr_val = medeleg;
         MIDELEG: csr_val = mideleg;
@@ -1256,7 +1317,7 @@ module csr (
         MTVAL: csr_val = mtval;
         MIP: csr_val = mip;
         MHARTID: csr_val = mhartid;
-        SSTATUS: csr_val = mstatus & `SSTATUS_MASK;
+        SSTATUS: csr_val = mstatus.value & `SSTATUS_MASK;
         SIE: csr_val = mie & `SIE_MASK;
         STVEC: csr_val = stvec;
         SSCRATCH: csr_val = sscratch;
@@ -1272,7 +1333,7 @@ module csr (
   end
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      mstatus <= '0;
+      mstatus.value <= '0;
       misa <= '0;
       medeleg <= '0;
       mideleg <= '0;
@@ -1295,16 +1356,47 @@ module csr (
         // record mcause=11; mepc = pc + 4; mpie=mstatus; mie = 0; pc=mtvec;
         if (sys_op == SYS_ECALL) begin
           `LOGI("ECALL");
-          mcause <= 11;  // ecall from m mode
-          mepc   <= pc;
+          unique case (mode)
+            M_USER: begin
+              mcause <= EXC_ECALL_U_MODE;
+              if (|(medeleg & (EXC_ECALL_U_MODE << 1))) begin
+                sepc <= pc;
+                trap_target <= stvec;
+                mode <= M_SUPER;
+                mstatus.fields.SPP <= 1'b0;
+              end else begin
+                mepc <= pc;
+                trap_target <= mtvec;
+                mode <= M_MACHINE;
+                mstatus.fields.MPP <= 2'b00;
+              end
+            end
+            M_SUPER: begin
+              mcause <= EXC_ECALL_S_MODE;
+              trap_target <= mtvec;
+              mepc <= pc;
+              mode <= M_MACHINE;
+              mstatus.fields.MPP <= 2'b01;
+            end
+            M_MACHINE: begin
+              mcause <= EXC_ECALL_M_MODE;
+              trap_target <= mtvec;
+              mepc <= pc;
+              mode <= M_MACHINE;
+            end
+          endcase
         end else if (sys_op == SYS_MRET) begin
           `LOGI("MRET");
+          // restore privilege
+          mcause <= '0;
+          mode <= mode_e'(mstatus.fields.MPP);
+          trap_target <= mepc;
         end else if (sys_op == SYS_SRET) begin
           `LOGI("SRET");
         end else if (sys_op >= SYS_CSRRW) begin
           `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
           unique case (csr_idx)
-            MSTATUS: mstatus <= csr_wdata;
+            MSTATUS: mstatus.value <= csr_wdata;
             MEDELEG: medeleg <= csr_wdata;
             MIDELEG: mideleg <= csr_wdata;
             MIE: mie <= csr_wdata;
@@ -1315,7 +1407,7 @@ module csr (
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
-            SSTATUS: mstatus <= csr_wdata & `SSTATUS_MASK;
+            SSTATUS: mstatus.value <= csr_wdata & `SSTATUS_MASK;
             SIE: mie <= csr_wdata & `SIE_MASK;
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
