@@ -1427,11 +1427,15 @@ module csr (
                 trap_target <= stvec;
                 mode <= M_SUPER;
                 mstatus.fields.SPP <= 1'b0;
+                mstatus.fields.SPIE <= mstatus.fields.SIE;
+                mstatus.fields.SIE <= 1'b0;
               end else begin
                 mepc <= pc;
                 trap_target <= mtvec;
                 mode <= M_MACHINE;
                 mstatus.fields.MPP <= 2'b00;
+                mstatus.fields.MPIE <= mstatus.fields.MIE;
+                mstatus.fields.MIE <= 1'b0;
               end
             end
             M_SUPER: begin
@@ -1440,11 +1444,15 @@ module csr (
                 trap_target <= mtvec;
                 sepc <= pc;
                 mstatus.fields.SPP <= 1'b1;
+                mstatus.fields.SPIE <= mstatus.fields.SIE;
+                mstatus.fields.SIE <= 1'b0;
               end else begin
                 trap_target <= mtvec;
                 mepc <= pc;
                 mode <= M_MACHINE;
                 mstatus.fields.MPP <= 2'b01;
+                mstatus.fields.MPIE <= mstatus.fields.MIE;
+                mstatus.fields.MIE <= 1'b0;
               end
             end
             M_MACHINE: begin
@@ -1452,6 +1460,8 @@ module csr (
               trap_target <= mtvec;
               mepc <= pc;
               mode <= M_MACHINE;
+              mstatus.fields.MPIE <= mstatus.fields.MIE;
+              mstatus.fields.MIE <= 1'b0;
             end
           endcase
         end else if (sys_op == SYS_MRET) begin
@@ -1460,11 +1470,15 @@ module csr (
           mcause <= '0;
           mode <= mode_e'(mstatus.fields.MPP);
           trap_target <= mepc;
+          mstatus.fields.MIE <= mstatus.fields.MPIE;
+          mstatus.fields.MPIE <= 1'b0;
         end else if (sys_op == SYS_SRET) begin
           `LOGI("SRET");
           mcause <= '0;
           mode <= mstatus.fields.SPP ? M_SUPER : M_USER;
           trap_target <= sepc;
+          mstatus.fields.SIE <= mstatus.fields.SPIE;
+          mstatus.fields.SPIE <= 1'b0;
         end else if (sys_op >= SYS_CSRRW) begin
           `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
           unique case (csr_idx)
