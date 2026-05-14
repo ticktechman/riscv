@@ -8,6 +8,8 @@
 ###############################################################################
 .PHONY: all build test install doc
 
+HEX_FILES := $(wildcard $(CURDIR)/riscv-tests/*.hex)
+
 V_FLAGS = --timing --cc --exe --trace --build -I../
 SV_SRCS = \
 		top.sv \
@@ -30,6 +32,10 @@ all: $(SIM)
 mini: obj_dir/Vmini
 mini.run: obj_dir/Vmini
 	@$< +verilator+quiet
+mini.test: obj_dir/Vmini
+	@$(foreach one, $(HEX_FILES), \
+		$< +verilator+quiet +hex_file=$(one); \
+	)
 
 $(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
