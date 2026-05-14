@@ -456,13 +456,20 @@ typedef enum logic [63:0] {
 } mcause_e;
 
 typedef struct packed {
-  logic         SD;              // [63] Dirty state (read-only)
-  logic [62:43] reserved_62_43;  // [62:43] Reserved
+  logic         SD;              // [63] Dirty state
+  logic [62:43] reserved_62_43;  // [62:43] WPRI
   logic         MDT;             // [42] M-mode Trap Disable
-  logic [41:36] reserved_41_36;  // [41:36] Reserved
+  logic         MPELP;           // [41] M-mode Previous Landing Pad
+  logic         reserved_40;     // [40] WPRI
+  logic         MPV;             // [39] M-mode Previous Virtualization
+  logic         GVA;             // [38] Guest Virtual Address
+  logic         MBE;             // [37] Memory Privilege Big Endian
+  logic         SBE;             // [36] Supervisor Big Endian
   logic [35:34] SXL;             // [35:34] Supervisor Mode XLEN
   logic [33:32] UXL;             // [33:32] User Mode XLEN
-  logic [31:23] reserved_31_23;  // [31:23] Reserved
+  logic [31:25] reserved_31_25;  // [31:25] WPRI
+  logic         SDT;             // [24] Store/Load Trap (or SDT)
+  logic         SPELP;           // [23] Supervisor Previous Landing Pad
   logic         TSR;             // [22] Trap SRET
   logic         TW;              // [21] Timeout Wait
   logic         TVM;             // [20] Trap Virtual Memory
@@ -471,18 +478,17 @@ typedef struct packed {
   logic         MPRV;            // [17] Modify PRiVilege
   logic [16:15] XS;              // [16:15] Extension State
   logic [14:13] FS;              // [14:13] Floating-point Unit State
-  logic [12:11] MPP;             // [12:11] Machine Previous Privilege
-  logic         SPP;             // [10] Supervisor Previous Privilege
-  logic         MPIE;            // [9] Machine Previous Interrupt Enable
-  logic         reserved_8;      // [8] Reserved (UBE)
-  logic         SPIE;            // [7] Supervisor Previous Interrupt Enable
-  logic         reserved_6;      // [6] Reserved (UPE)
-  logic         UPIE;            // [5] User Previous Interrupt Enable
-  logic         MIE;             // [4] Machine Interrupt Enable
-  logic         reserved_3;      // [3] Reserved
-  logic         SIE;             // [2] Supervisor Interrupt Enable
-  logic         reserved_1;      // [1] Reserved
-  logic         UIE;             // [0] User Interrupt Enable
+  logic [12:11] MPP;             // [12:11] Machine Previous Privilege mode
+  logic [10:9]  VS;              // [10:9] Vector Extension State (Added!)
+  logic         SPP;             // [8] Supervisor Previous Privilege mode
+  logic         MPIE;            // [7] Machine Previous Interrupt Enable
+  logic         UBE;             // [6] User Mode Big Endian
+  logic         SPIE;            // [5] Supervisor Previous Interrupt Enable
+  logic         reserved_4;      // [4] WPRI
+  logic         MIE;             // [3] Machine Interrupt Enable
+  logic         reserved_2;      // [2] WPRI
+  logic         SIE;             // [1] Supervisor Interrupt Enable
+  logic         reserved_0;      // [0] WPRI
 } mstatus_rv64_t;
 
 typedef union packed {
@@ -491,15 +497,20 @@ typedef union packed {
 } mstatus_u;
 
 typedef struct packed {
-  logic [63:48] reserved_63_48;            // [63:48] Reserved for custom use / reserved
-  logic         reserved_47;               // [47]   Reserved
-  logic [46:24] custom_46_24;              // [46:24] Designated for custom use
-  logic [23:16] reserved_23_16;            // [23:16] Reserved
+  logic [63:48] custom_63_48;              // [63:48] Designated for custom use / reserved
+  logic [47:32] reserved_47_32;            // [47:32] reserved
+  logic [31:24] custom_31_24;              // [31:24] Designated for custom use
+  logic [23:20] reserved_23_20;            // [23:20] Reserved
+  logic         hardware_error;            // [19]   hardware error
+  logic         software_check;            // [18]   software check
+  logic         reserved_17;               // [17]   Reserved
+  logic         double_trap;               // [16]   double trap
   logic         store_amo_page_fault;      // [15]   Store/AMO page fault
   logic         reserved_14;               // [14]   Reserved
   logic         load_page_fault;           // [13]   Load page fault
   logic         instruction_page_fault;    // [12]  Instruction page fault
-  logic [11:10] reserved_11_10;            // [11:10] Reserved
+  logic         ecall_from_m_mode;         // [11:10] Reserved
+  logic         reserved_10;               // [10] Reserved
   logic         ecall_from_s_mode;         // [9]    Environment call from S-mode
   logic         ecall_from_u_mode;         // [8]    Environment call from U-mode
   logic         store_amo_access_fault;    // [7]   Store/AMO access fault
@@ -518,26 +529,25 @@ typedef union packed {
 } medeleg_u;
 
 typedef struct packed {
-  logic [63:12] reserved_63_12;                 // [63:12] Reserved / Designated for platform use
-  logic         machine_external_interrupt;     // [11] Machine external interrupt
-  logic         reserved_10;                    // [10]   Reserved
-  logic         supervisor_external_interrupt;  // [9]  Supervisor external interrupt
-  logic         reserved_8;                     // [8]    Reserved
-  logic         machine_timer_interrupt;        // [7]  Machine timer interrupt
-  logic         reserved_6;                     // [6]    Reserved
-  logic         supervisor_timer_interrupt;     // [5]  Supervisor timer interrupt
-  logic         reserved_4;                     // [4]    Reserved
-  logic         machine_software_interrupt;     // [3]  Machine software interrupt
-  logic         reserved_2;                     // [2]    Reserved
-  logic         supervisor_software_interrupt;  // [1]  Supervisor software interrupt
-  logic         reserved_0;                     // [0]    Reserved
-} mideleg_rv64_t;
+  logic [63:12] reserved_63_12;  // [63:12] Reserved / Designated for platform use
+  logic         MEI;             // [11] Machine external interrupt
+  logic         reserved_10;     // [10]   Reserved
+  logic         SEI;             // [9]  Supervisor external interrupt
+  logic         reserved_8;      // [8]    Reserved
+  logic         MTI;             // [7]  Machine timer interrupt
+  logic         reserved_6;      // [6]    Reserved
+  logic         STI;             // [5]  Supervisor timer interrupt
+  logic         reserved_4;      // [4]    Reserved
+  logic         MSI;             // [3]  Machine software interrupt
+  logic         reserved_2;      // [2]    Reserved
+  logic         SSI;             // [1]  Supervisor software interrupt
+  logic         reserved_0;      // [0]    Reserved
+} mintr_rv64_t;
 
 typedef union packed {
-  mideleg_rv64_t fields;
-  logic [63:0]   value;
-} mideleg_u;
-
+  mintr_rv64_t fields;
+  logic [63:0] value;
+} mintr_u;
 
 //-----------------------------------
 // decoder
@@ -1344,9 +1354,9 @@ module csr (
 
   mstatus_u mstatus;
   medeleg_u medeleg;
-  mideleg_u mideleg;
+  mintr_u mideleg, mie, mip;
 
-  reg_t mtvec, mtval, mepc, mcause, mie, mip, mhartid, misa, mscratch;
+  reg_t mtvec, mtval, mepc, mcause, mhartid, misa, mscratch;
   reg_t stvec, stval, sepc, scause, sscratch, satp;
   reg_t cycle;
   mode_e mode;
@@ -1362,22 +1372,22 @@ module csr (
         MISA: csr_val = misa;
         MEDELEG: csr_val = medeleg.value;
         MIDELEG: csr_val = mideleg.value;
-        MIE: csr_val = mie;
+        MIE: csr_val = mie.value;
         MTVEC: csr_val = mtvec;
         MSCRATCH: csr_val = mscratch;
         MEPC: csr_val = mepc;
         MCAUSE: csr_val = mcause;
         MTVAL: csr_val = mtval;
-        MIP: csr_val = mip;
+        MIP: csr_val = mip.value;
         MHARTID: csr_val = mhartid;
         SSTATUS: csr_val = mstatus.value & `SSTATUS_MASK;
-        SIE: csr_val = mie & `SIE_MASK;
+        SIE: csr_val = mie.value & `SIE_MASK;
         STVEC: csr_val = stvec;
         SSCRATCH: csr_val = sscratch;
         SEPC: csr_val = sepc;
         SCAUSE: csr_val = scause;
         STVAL: csr_val = stval;
-        SIP: csr_val = mip & `SIP_MASK;
+        SIP: csr_val = mip.value & `SIP_MASK;
         SATP: csr_val = satp;
         default: ;
       endcase
@@ -1395,8 +1405,8 @@ module csr (
       mscratch <= '0;
       mepc <= '0;
       mcause <= '0;
-      mie <= '0;
-      mip <= '0;
+      mie.value <= '0;
+      mip.value <= '0;
       mhartid <= '0;
       mode <= M_MACHINE;
       stvec <= '0;
@@ -1461,22 +1471,22 @@ module csr (
             MSTATUS: mstatus.value <= csr_wdata;
             MEDELEG: medeleg.value <= csr_wdata;
             MIDELEG: mideleg.value <= csr_wdata;
-            MIE: mie <= csr_wdata;
+            MIE: mie.value <= csr_wdata;
             MTVEC: mtvec <= csr_wdata;
             MSCRATCH: mscratch <= csr_wdata;
-            MIP: mip <= csr_wdata;
+            MIP: mip.value <= csr_wdata;
             MEPC: mepc <= csr_wdata;
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
             SSTATUS: mstatus.value <= csr_wdata & `SSTATUS_MASK;
-            SIE: mie <= csr_wdata & `SIE_MASK;
+            SIE: mie.value <= csr_wdata & `SIE_MASK;
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
             SEPC: sepc <= csr_wdata;
             SCAUSE: scause <= csr_wdata;
             STVAL: stval <= csr_wdata;
-            SIP: mip <= csr_wdata & `SIP_MASK;
+            SIP: mip.value <= csr_wdata & `SIP_MASK;
             SATP: satp <= csr_wdata;
             default: ;
           endcase
