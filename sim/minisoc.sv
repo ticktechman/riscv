@@ -1542,7 +1542,7 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (mstatus.fields.MIE && m_intr.value != reg_t'(0)) begin
+      if (state == WB && mstatus.fields.MIE && m_intr.value != reg_t'(0)) begin
         // int m-mode
         mstatus.fields.MPP <= mode;
         mstatus.fields.MPIE <= mstatus.fields.MIE;
@@ -1551,7 +1551,7 @@ module csr (
         mepc <= pc;
         mcause <= mintr2cause(m_intr);
         trap_target <= mtvec;
-      end else if (mstatus.fields.SIE && s_intr.value != reg_t'(0)) begin
+      end else if (state == WB && mstatus.fields.SIE && s_intr.value != reg_t'(0)) begin
         // int s-mode
         mstatus.fields.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
         mstatus.fields.SPIE <= mstatus.fields.SIE;
