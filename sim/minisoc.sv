@@ -39,7 +39,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(20000)
+    .COUNTER(10000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
