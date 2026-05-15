@@ -28,12 +28,14 @@
 // Testbench
 //-------------------------------------
 module top ();
-  logic clk, rst_n;
+  logic clk, rst_n, intr;
 
   initial begin
     $dumpfile("mini.vcd");
     $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
+    intr = 1'b0;
+    #1000 intr = 1'b1;
   end
 
   clkgen #(
@@ -45,7 +47,8 @@ module top ();
 
   soc soc1 (
     .clk(clk),
-    .rst_n(rst_n)
+    .rst_n(rst_n),
+    .intr(intr)
   );
 
 endmodule
@@ -76,7 +79,8 @@ endmodule
 //-------------------------------------
 module soc (
   input logic clk,
-  input logic rst_n
+  input logic rst_n,
+  input logic intr
 );
   // id data
   logic [4:0] rs1, rs2, rd;
@@ -121,6 +125,7 @@ module soc (
   );
 
 
+  logic halt;
   exec exec1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -146,7 +151,8 @@ module soc (
     .mem_data(mem_data),
     .wb_data(wb_data),
     .csr_wdata(csr_wdata),
-    .done(exec_done)
+    .done(exec_done),
+    .halt(halt)
   );
 
   // register file
@@ -167,7 +173,7 @@ module soc (
   // csr
   reg_t csr_val, csr_wdata;
   reg_t trap_target;
-  logic irqs, irqt, irqe;
+  logic irqs, irqt, irqe, interrupted;
   csr csr1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -180,7 +186,8 @@ module soc (
     .trap_target(trap_target),
     .irq_software(irqs),
     .irq_timer(irqt),
-    .irq_external(irqe)
+    .irq_external(intr),
+    .interrupted(interrupted)
   );
 
   // rom
@@ -260,8 +267,16 @@ module soc (
         end
         MEMACCESS: state <= WB;
         WB: begin
-          state <= FETCH;
-          pc <= pc_target != 0 ? pc_target : pc + 4;
+          if (!halt) begin
+            state <= FETCH;
+            pc <= pc_target != 0 ? pc_target : pc + 4;
+          end else begin
+            if (interrupted) begin
+              `LOGI("INT");
+              state <= FETCH;
+              pc <= pc_target != 0 ? pc_target : pc + 4;
+            end
+          end
         end
         default: ;
       endcase
@@ -280,7 +295,8 @@ typedef enum {
   DECODE,
   EXEC,
   MEMACCESS,
-  WB
+  WB,
+  HALT
 } state_e;
 
 typedef enum {
@@ -359,6 +375,7 @@ typedef enum {
   SYS_EBREAK,
   SYS_MRET,
   SYS_SRET,
+  SYS_WFI,
   SYS_URET,
   SYS_CSRRW,
   SYS_CSRRS,
@@ -800,16 +817,12 @@ module decoder (
           unique case (f3)
             3'b000: begin
               unique case (instr[31:20])
-                12'h000: begin
-                  // read mtvec for pc_target
-                  sys_op = SYS_ECALL;
-                end
+                12'h000: sys_op = SYS_ECALL;
                 12'h001: sys_op = SYS_EBREAK;
                 12'h002: sys_op = SYS_URET;
                 12'h102: sys_op = SYS_SRET;
-                12'h302: begin
-                  sys_op = SYS_MRET;
-                end
+                12'h105: sys_op = SYS_WFI;
+                12'h302: sys_op = SYS_MRET;
                 default: ;
               endcase
             end
@@ -900,7 +913,8 @@ module exec (
   output reg_t  wb_data,
   output reg_t  mem_data,
   output reg_t  csr_wdata,
-  output logic  done
+  output logic  done,
+  output logic  halt
 );
   reg_t alu_result;
   reg_t mult_result;
@@ -939,6 +953,7 @@ module exec (
       pc_target = '0;
       op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
       op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
+      halt = 1'b0;
 
       `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
       unique case (alu_op)
@@ -993,6 +1008,10 @@ module exec (
         SYS_MRET: begin
           // pc = mepc;
           pc_target = trap_target;
+        end
+        SYS_WFI: begin
+          `LOGI("WFI");
+          halt = 1'b1;
         end
         SYS_CSRRW: begin
           `LOGI($sformatf("csrrw"));
@@ -1326,9 +1345,10 @@ module csr (
   output reg_t csr_val,
   output reg_t trap_target,
 
-  input logic irq_software,
-  input logic irq_timer,
-  input logic irq_external
+  input  logic irq_software,
+  input  logic irq_timer,
+  input  logic irq_external,
+  output logic interrupted
 );
   // handle irq
   // handle exceptions
@@ -1543,6 +1563,7 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
+      interrupted <= 1'b0;
       if (state == WB && mstatus.fields.MIE && m_intr.value != reg_t'(0)) begin
         // int m-mode
         mstatus.fields.MPP <= mode;
@@ -1552,6 +1573,7 @@ module csr (
         mepc <= pc;
         mcause <= mintr2cause(m_intr);
         trap_target <= mtvec;
+        interrupted <= 1'b1;
       end else if (state == WB && mstatus.fields.SIE && s_intr.value != reg_t'(0)) begin
         // int s-mode
         mstatus.fields.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
@@ -1561,6 +1583,7 @@ module csr (
         sepc <= pc;
         scause <= sintr2cause(s_intr);
         trap_target <= stvec;
+        interrupted <= 1'b1;
       end
     end
   end

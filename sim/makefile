@@ -31,7 +31,7 @@ all: $(SIM)
 
 mini: obj_dir/Vmini
 mini.run: obj_dir/Vmini
-	@$< +verilator+quiet
+	@$< +verilator+quiet +hex_file=$(CURDIR)/isa/wfi.hex
 mini.test: obj_dir/Vmini
 	@$(foreach one, $(HEX_FILES), \
 		$< +verilator+quiet +hex_file=$(one); \
