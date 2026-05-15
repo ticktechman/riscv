@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -1154,8 +1154,9 @@ module divider (
   // preprocess
   logic [63:0] op_a_abs, op_b_abs;
   logic a_sign, b_sign, is_signed;
-  logic is_rv64w;
+  logic is_divider, is_rv64w;
 
+  assign is_divider = alu_op inside {ALU_DIVW, ALU_REMW, ALU_REMUW, ALU_DIVUW, ALU_DIV, ALU_DIVU, ALU_REM, ALU_REMU};
   assign is_rv64w = alu_op inside {ALU_DIVW, ALU_REMW, ALU_REMUW, ALU_DIVUW};
   assign is_signed = alu_op inside {ALU_DIV, ALU_DIVW, ALU_REM, ALU_REMW};
   assign a_sign    = is_rv64w ? op1[31] : op1[63];
@@ -1213,7 +1214,7 @@ module divider (
           b_d           = op_b_abs << shift_amt;
           quot_d        = 64'b0;
           cnt_d         = shift_amt;
-          if (op_a_abs < op_b_abs || op_b_abs == 64'b0) state_d = FINISH;
+          if (!is_divider || op_a_abs < op_b_abs || op_b_abs == 64'b0) state_d = FINISH;
           else state_d = DIVIDE;
         end
       end
