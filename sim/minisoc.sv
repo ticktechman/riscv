@@ -509,7 +509,7 @@ typedef struct packed {
   logic         reserved_14;               // [14]   Reserved
   logic         load_page_fault;           // [13]   Load page fault
   logic         instruction_page_fault;    // [12]  Instruction page fault
-  logic         ecall_from_m_mode;         // [11:10] Reserved
+  logic         ecall_from_m_mode;         // [11] ecall from m-mode
   logic         reserved_10;               // [10] Reserved
   logic         ecall_from_s_mode;         // [9]    Environment call from S-mode
   logic         ecall_from_u_mode;         // [8]    Environment call from U-mode
@@ -1362,9 +1362,6 @@ module csr (
   reg_t cycle;
   mode_e mode;
 
-  logic irq_taken;
-  assign irq_taken = irq_software | irq_timer | irq_external;
-
   always_comb begin
     csr_val = '0;
     if (state == EXEC && csr_idx > 0) begin
@@ -1395,6 +1392,7 @@ module csr (
       `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
     end
   end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mstatus.value <= '0;
@@ -1422,8 +1420,8 @@ module csr (
           `LOGI("ECALL");
           unique case (mode)
             M_USER: begin
-              mcause <= EXC_ECALL_U_MODE;
               if (medeleg.fields.ecall_from_u_mode) begin
+                scause <= EXC_ECALL_U_MODE;
                 sepc <= pc;
                 trap_target <= stvec;
                 mode <= M_SUPER;
@@ -1431,6 +1429,7 @@ module csr (
                 mstatus.fields.SPIE <= mstatus.fields.SIE;
                 mstatus.fields.SIE <= 1'b0;
               end else begin
+                mcause <= EXC_ECALL_U_MODE;
                 mepc <= pc;
                 trap_target <= mtvec;
                 mode <= M_MACHINE;
@@ -1440,14 +1439,15 @@ module csr (
               end
             end
             M_SUPER: begin
-              mcause <= EXC_ECALL_S_MODE;
               if (medeleg.fields.ecall_from_s_mode) begin
+                scause <= EXC_ECALL_S_MODE;
                 trap_target <= stvec;
                 sepc <= pc;
                 mstatus.fields.SPP <= 1'b1;
                 mstatus.fields.SPIE <= mstatus.fields.SIE;
                 mstatus.fields.SIE <= 1'b0;
               end else begin
+                mcause <= EXC_ECALL_S_MODE;
                 trap_target <= mtvec;
                 mepc <= pc;
                 mode <= M_MACHINE;
@@ -1461,6 +1461,7 @@ module csr (
               trap_target <= mtvec;
               mepc <= pc;
               mode <= M_MACHINE;
+              mstatus.fields.MPP <= 2'b10;
               mstatus.fields.MPIE <= mstatus.fields.MIE;
               mstatus.fields.MIE <= 1'b0;
             end
@@ -1509,6 +1510,79 @@ module csr (
       end
     end
   end
+
+  mstatus_u mstatus_r;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (mideleg.fields.SSI) begin
+        mip.fields.SSI <= irq_software;
+      end else begin
+        mip.fields.MSI <= irq_software;
+      end
+      if (mideleg.fields.STI) begin
+        mip.fields.STI <= irq_timer;
+      end else begin
+        mip.fields.MTI <= irq_timer;
+      end
+      if (mideleg.fields.SEI) begin
+        mip.fields.SEI <= irq_external;
+      end else begin
+        mip.fields.MEI <= irq_external;
+      end
+    end
+  end
+
+  mintr_u m_intr, s_intr;
+  always_comb begin
+    m_intr.value = mip.value & mie.value & (~mideleg.value);
+    s_intr.value = mip.value & mie.value & (mideleg.value);
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (mstatus.fields.MIE && m_intr.value != reg_t'(0)) begin
+        // int m-mode
+        mstatus.fields.MPP <= mode;
+        mstatus.fields.MPIE <= mstatus.fields.MIE;
+        mstatus.fields.MIE <= 1'b0;
+        mode <= M_MACHINE;
+        mepc <= pc;
+        mcause <= mintr2cause(m_intr);
+        trap_target <= mtvec;
+      end else if (mstatus.fields.SIE && s_intr.value != reg_t'(0)) begin
+        // int s-mode
+        mstatus.fields.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
+        mstatus.fields.SPIE <= mstatus.fields.SIE;
+        mstatus.fields.SIE <= 1'b0;
+        mode <= M_SUPER;
+        sepc <= pc;
+        scause <= sintr2cause(s_intr);
+        trap_target <= stvec;
+      end
+    end
+  end
+
+  function automatic mcause_e mintr2cause(mintr_u u);
+    if (u.fields.MEI) begin
+      return INTR_MACHINE_EXT;
+    end else if (u.fields.MSI) begin
+      return INTR_MACHINE_SW;
+    end else begin
+      return INTR_MACHINE_TMR;
+    end
+  endfunction
+
+  function automatic mcause_e sintr2cause(mintr_u u);
+    if (u.fields.SEI) begin
+      return INTR_SUPERVISOR_EXT;
+    end else if (u.fields.SSI) begin
+      return INTR_SUPERVISOR_SW;
+    end else begin
+      return INTR_SUPERVISOR_TMR;
+    end
+  endfunction
 
 endmodule
 
