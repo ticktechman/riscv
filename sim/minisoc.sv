@@ -193,13 +193,7 @@ module soc (
   logic [31:0] instr;
   rom #(
     .SIZE(8192),
-    // .HEX("isa/isa.hex")
-    // .HEX("isa/mul.hex")
     .HEX("isa/div.hex")
-    // .HEX("isa/csr.hex")
-    // .HEX("isa/mem.hex")
-    // .HEX("isa/ecall.hex")
-    // .HEX("isa/rv64ui-p-add.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),

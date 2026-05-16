@@ -21,7 +21,7 @@ all: $(HEXS)
 %.hex: %.S
 	@$(RISCV_PREFIX)gcc $(CFLAGS) -o $(^:.S=.elf) $^
 	@$(RISCV_PREFIX)objcopy $(COPYFLAGS) $(^:.S=.elf) $@
-	@echo "build $@"
+	@echo "> $@"
 
 clean:
 	rm -rf *.hex *.elf
