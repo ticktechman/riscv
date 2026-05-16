@@ -558,6 +558,41 @@ typedef union packed {
   logic [63:0] value;
 } mintr_u;
 
+typedef struct packed {
+  logic [63:62] MXL;
+  logic [61:26] reserved_26_61;
+  logic Z;
+  logic Y;
+  logic X;
+  logic W;
+  logic V;
+  logic U;
+  logic T;
+  logic S;
+  logic R;
+  logic Q;
+  logic P;
+  logic O;
+  logic N;
+  logic M;
+  logic L;
+  logic K;
+  logic J;
+  logic I;
+  logic H;
+  logic G;
+  logic F;
+  logic E;
+  logic D;
+  logic C;
+  logic B;
+  logic A;
+} misa_rv64_t;
+typedef struct packed {
+  misa_rv64_t  fields;
+  logic [63:0] value;
+} misa_u;
+
 //-----------------------------------
 // decoder
 //-----------------------------------
@@ -1372,8 +1407,9 @@ module csr (
   mstatus_u mstatus;
   medeleg_u medeleg;
   mintr_u mideleg, mie, mip;
+  misa_u misa;
 
-  reg_t mtvec, mtval, mepc, mcause, mhartid, misa, mscratch;
+  reg_t mtvec, mtval, mepc, mcause, mhartid, mscratch;
   reg_t stvec, stval, sepc, scause, sscratch, satp;
   reg_t cycle;
   mode_e mode;
@@ -1383,7 +1419,7 @@ module csr (
     if (state == EXEC && csr_idx > 0) begin
       unique case (csr_idx)
         MSTATUS: csr_val = mstatus.value;
-        MISA: csr_val = misa;
+        MISA: csr_val = misa.value;
         MEDELEG: csr_val = medeleg.value;
         MIDELEG: csr_val = mideleg.value;
         MIE: csr_val = mie.value;
@@ -1411,10 +1447,8 @@ module csr (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      mstatus.value <= '0;
-      mstatus.fields.UXL <= 2'b10;
-      mstatus.fields.SXL <= 2'b10;
-      misa <= '0;
+      mstatus.fields <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
+      misa.fields <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};
       medeleg.value <= '0;
       mideleg.value <= '0;
       mtvec <= '0;
@@ -1529,7 +1563,6 @@ module csr (
     end
   end
 
-  mstatus_u mstatus_r;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
