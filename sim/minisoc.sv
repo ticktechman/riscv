@@ -1250,40 +1250,42 @@ module divider (
     is_rem_d = is_rem_q;
     res_inv_d = res_inv_q;
     rem_inv_d = rem_inv_q;
-    done = 1'b0;
+    done = is_divider ? 1'b0 : 1'b1;
 
-    case (state_q)
-      IDLE: begin
-        if (state == EXEC) begin
-          is_div_zero_d = (op_b_abs == 64'b0);
-          is_rem_d      = alu_op inside {ALU_REM, ALU_REMUW, ALU_REMW, ALU_REMU};
-          res_inv_d     = is_signed && (a_sign ^ b_sign) && (op_b_abs != 64'b0);
-          rem_inv_d     = is_signed && a_sign;
-          a_d           = op_a_abs;
-          b_d           = op_b_abs << shift_amt;
-          quot_d        = 64'b0;
-          cnt_d         = shift_amt;
-          if (!is_divider || op_a_abs < op_b_abs || op_b_abs == 64'b0) state_d = FINISH;
-          else state_d = DIVIDE;
+    if (is_divider) begin
+      case (state_q)
+        IDLE: begin
+          if (state == EXEC) begin
+            is_div_zero_d = (op_b_abs == 64'b0);
+            is_rem_d      = alu_op inside {ALU_REM, ALU_REMUW, ALU_REMW, ALU_REMU};
+            res_inv_d     = is_signed && (a_sign ^ b_sign) && (op_b_abs != 64'b0);
+            rem_inv_d     = is_signed && a_sign;
+            a_d           = op_a_abs;
+            b_d           = op_b_abs << shift_amt;
+            quot_d        = 64'b0;
+            cnt_d         = shift_amt;
+            if (!is_divider || op_a_abs < op_b_abs || op_b_abs == 64'b0) state_d = FINISH;
+            else state_d = DIVIDE;
+          end
         end
-      end
-      DIVIDE: begin
-        if (!sub_res[64]) begin
-          a_d    = sub_res[63:0];
-          quot_d = {quot_q[64-2:0], 1'b1};
-        end else begin
-          quot_d = {quot_q[64-2:0], 1'b0};
+        DIVIDE: begin
+          if (!sub_res[64]) begin
+            a_d    = sub_res[63:0];
+            quot_d = {quot_q[64-2:0], 1'b1};
+          end else begin
+            quot_d = {quot_q[64-2:0], 1'b0};
+          end
+          b_d = {1'b0, b_q[63:1]};
+          if (cnt_q == 6'd0) state_d = FINISH;
+          else cnt_d = cnt_q - 6'd1;
         end
-        b_d = {1'b0, b_q[63:1]};
-        if (cnt_q == 6'd0) state_d = FINISH;
-        else cnt_d = cnt_q - 6'd1;
-      end
-      FINISH: begin
-        done = 1'b1;
-        if (state == EXEC) state_d = IDLE;
-      end
-      default: state_d = IDLE;
-    endcase
+        FINISH: begin
+          done = 1'b1;
+          if (state == EXEC) state_d = IDLE;
+        end
+        default: state_d = IDLE;
+      endcase
+    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -1385,7 +1387,9 @@ module csr (
   // handle mmu
   // handle privilege level change
 
-  `define MSTATUS_WR_MASK 64'h8000000F007FF5AA
+  `define MSTATUS_WR_MASK 64'h000006f001fe1fea
+  // `define MSTATUS_WR_MASK 64'h8000000F007FF5AA
+  `define SSTATUS_WR_MASK 64'h8000000f000de122
   typedef enum logic [1:0] {
     M_USER,
     M_SUPER,
@@ -1399,8 +1403,6 @@ module csr (
   `define MTIP 7
   `define SEIP 9
   `define MEIP 11
-  `define SSTATUS_READ_MASK 64'h8000_0000_000A_63F2
-  `define SSTATUS_WRITE_MASK 64'h0000_0000_000A_61F2
   `define SIE_MASK 64'h0222
   `define SIP_MASK 64'h0222
 
@@ -1448,7 +1450,7 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mstatus.fields <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
-      misa.fields <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};
+      misa.fields <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
       medeleg.value <= '0;
       mideleg.value <= '0;
       mtvec <= '0;
@@ -1547,7 +1549,7 @@ module csr (
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
-            SSTATUS: mstatus.value <= (mstatus.value & ~`MSTATUS_WR_MASK) | (csr_wdata & `MSTATUS_WR_MASK);
+            SSTATUS: mstatus.value <= (mstatus.value & ~`SSTATUS_WR_MASK) | (csr_wdata & `SSTATUS_WR_MASK);
             SIE: mie.value <= csr_wdata & `SIE_MASK;
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
