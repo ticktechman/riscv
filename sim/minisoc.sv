@@ -1390,9 +1390,9 @@ module csr (
   `define MSTATUS_WR_MASK 64'h000006f001fe1fea
   `define SSTATUS_WR_MASK 64'h8000000f000de122
   typedef enum logic [1:0] {
-    M_USER,
-    M_SUPER,
-    M_MACHINE
+    M_USER = 2'b00,
+    M_SUPER = 2'b01,
+    M_MACHINE = 2'b11
   } mode_e;
 
   `define USIP 0
