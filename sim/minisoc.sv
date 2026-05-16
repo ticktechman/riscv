@@ -1388,7 +1388,6 @@ module csr (
   // handle privilege level change
 
   `define MSTATUS_WR_MASK 64'h000006f001fe1fea
-  // `define MSTATUS_WR_MASK 64'h8000000F007FF5AA
   `define SSTATUS_WR_MASK 64'h8000000f000de122
   typedef enum logic [1:0] {
     M_USER,
@@ -1405,6 +1404,8 @@ module csr (
   `define MEIP 11
   `define SIE_MASK 64'h0222
   `define SIP_MASK 64'h0222
+  `define MIE_MASK 64'h0aaa
+  `define MIP_MASK 64'h0aaa
 
   mstatus_u mstatus;
   medeleg_u medeleg;
@@ -1541,22 +1542,22 @@ module csr (
             MSTATUS: mstatus.value <= (mstatus.value & ~`MSTATUS_WR_MASK) | (csr_wdata & `MSTATUS_WR_MASK);
             MEDELEG: medeleg.value <= csr_wdata;
             MIDELEG: mideleg.value <= csr_wdata;
-            MIE: mie.value <= csr_wdata;
+            MIE: mie.value <= (mie.value & ~`MIE_MASK) | (csr_wdata & `MIE_MASK);
             MTVEC: mtvec <= csr_wdata;
             MSCRATCH: mscratch <= csr_wdata;
-            MIP: mip.value <= csr_wdata;
+            MIP: mip.value <= (mip.value & ~`MIP_MASK) | (csr_wdata & `MIP_MASK);
             MEPC: mepc <= csr_wdata;
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
             SSTATUS: mstatus.value <= (mstatus.value & ~`SSTATUS_WR_MASK) | (csr_wdata & `SSTATUS_WR_MASK);
-            SIE: mie.value <= csr_wdata & `SIE_MASK;
+            SIE: mie.value <= (mie.value & ~`SIE_MASK) | (csr_wdata & `SIE_MASK);
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
             SEPC: sepc <= csr_wdata;
             SCAUSE: scause <= csr_wdata;
             STVAL: stval <= csr_wdata;
-            SIP: mip.value <= csr_wdata & `SIP_MASK;
+            SIP: mip.value <= (mip.value & ~`SIP_MASK) | (csr_wdata & `SIP_MASK);
             SATP: satp <= csr_wdata;
             default: ;
           endcase
