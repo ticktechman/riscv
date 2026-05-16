@@ -1014,31 +1014,34 @@ module exec (
           halt = 1'b1;
         end
         SYS_CSRRW: begin
-          `LOGI($sformatf("csrrw"));
+          `LOGI($sformatf("csrrw: %h %h", csr_val, rs1_val));
           // csrrw rd, csr, rs1
           // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
           wb_data   = csr_val;
           csr_wdata = rs1_val;
         end
         SYS_CSRRS: begin
-          `LOGI($sformatf("csrrs: %h", csr_val));
+          `LOGI($sformatf("csrrs: %h %h", csr_val, rs1_val));
           wb_data   = csr_val;
           csr_wdata = csr_val | rs1_val;
         end
         SYS_CSRRC: begin
-          `LOGI($sformatf("csrrc"));
+          `LOGI($sformatf("csrrc: %h %h", csr_val, rs1_val));
           wb_data   = csr_val;
           csr_wdata = csr_val & (~rs1_val);
         end
         SYS_CSRRWI: begin
+          `LOGI($sformatf("csrrwi: %h %h", csr_val, csr_imm));
           wb_data   = csr_val;
           csr_wdata = {{59{1'b0}}, csr_imm};
         end
         SYS_CSRRSI: begin
+          `LOGI($sformatf("csrrsi: %h %h", csr_val, csr_imm));
           wb_data   = csr_val;
           csr_wdata = csr_val | {{59{1'b0}}, csr_imm};
         end
         SYS_CSRRCI: begin
+          `LOGI($sformatf("csrrci: %h %h", csr_val, csr_imm));
           wb_data   = csr_val;
           csr_wdata = csr_val & (~{{59{1'b0}}, csr_imm});
         end
@@ -1356,6 +1359,7 @@ module csr (
   // handle mmu
   // handle privilege level change
 
+  `define MSTATUS_WR_MASK 64'h8000000F007FF5AA
   typedef enum logic [1:0] {
     M_USER,
     M_SUPER,
@@ -1399,7 +1403,7 @@ module csr (
         MTVAL: csr_val = mtval;
         MIP: csr_val = mip.value;
         MHARTID: csr_val = mhartid;
-        SSTATUS: csr_val = mstatus.value & `SSTATUS_READ_MASK;
+        SSTATUS: csr_val = mstatus.value;  //& `SSTATUS_READ_MASK;
         SIE: csr_val = mie.value & `SIE_MASK;
         STVEC: csr_val = stvec;
         SSCRATCH: csr_val = sscratch;
@@ -1417,6 +1421,8 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mstatus.value <= '0;
+      mstatus.fields.UXL <= 2'b10;
+      mstatus.fields.SXL <= 2'b10;
       misa <= '0;
       medeleg.value <= '0;
       mideleg.value <= '0;
@@ -1505,7 +1511,7 @@ module csr (
         end else if (sys_op >= SYS_CSRRW) begin
           `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
           unique case (csr_idx)
-            MSTATUS: mstatus.value <= csr_wdata;
+            MSTATUS: mstatus.value <= (mstatus.value & ~`MSTATUS_WR_MASK) | (csr_wdata & `MSTATUS_WR_MASK);
             MEDELEG: medeleg.value <= csr_wdata;
             MIDELEG: mideleg.value <= csr_wdata;
             MIE: mie.value <= csr_wdata;
@@ -1516,7 +1522,7 @@ module csr (
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
-            SSTATUS: mstatus.value <= csr_wdata & `SSTATUS_WRITE_MASK;
+            SSTATUS: mstatus.value <= (mstatus.value & ~`MSTATUS_WR_MASK) | (csr_wdata & `MSTATUS_WR_MASK);
             SIE: mie.value <= csr_wdata & `SIE_MASK;
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
