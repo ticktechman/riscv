@@ -173,7 +173,7 @@ module soc (
   // csr
   reg_t csr_val, csr_wdata;
   reg_t trap_target;
-  logic irqs, irqt, irqe, interrupted;
+  logic irqt, irqe, interrupted;
   csr csr1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -184,7 +184,6 @@ module soc (
     .csr_idx(csr_idx),
     .csr_val(csr_val),
     .trap_target(trap_target),
-    .irq_software(irqs),
     .irq_timer(irqt),
     .irq_external(intr),
     .interrupted(interrupted)
@@ -295,8 +294,7 @@ typedef enum {
   DECODE,
   EXEC,
   MEMACCESS,
-  WB,
-  HALT
+  WB
 } state_e;
 
 typedef enum {
@@ -1348,7 +1346,6 @@ module csr (
   output reg_t csr_val,
   output reg_t trap_target,
 
-  input  logic irq_software,
   input  logic irq_timer,
   input  logic irq_external,
   output logic interrupted
@@ -1542,11 +1539,6 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (mideleg.fields.SSI) begin
-        mip.fields.SSI <= irq_software;
-      end else begin
-        mip.fields.MSI <= irq_software;
-      end
       if (mideleg.fields.STI) begin
         mip.fields.STI <= irq_timer;
       end else begin
@@ -1570,26 +1562,33 @@ module csr (
     if (!rst_n) begin
     end else begin
       interrupted <= 1'b0;
-      if (state == WB && mstatus.fields.MIE && m_intr.value != reg_t'(0)) begin
+      // `LOGI($sformatf("int m=%h, s=%h", m_intr.value, s_intr.value));
+      if (state == WB && m_intr.value != reg_t'(0)) begin
         // int m-mode
-        mstatus.fields.MPP <= mode;
-        mstatus.fields.MPIE <= mstatus.fields.MIE;
-        mstatus.fields.MIE <= 1'b0;
-        mode <= M_MACHINE;
-        mepc <= pc;
-        mcause <= mintr2cause(m_intr);
-        trap_target <= mtvec;
         interrupted <= 1'b1;
-      end else if (state == WB && mstatus.fields.SIE && s_intr.value != reg_t'(0)) begin
+        trap_target <= '0;
+        if (mstatus.fields.MIE) begin
+          mstatus.fields.MPP <= mode;
+          mstatus.fields.MPIE <= mstatus.fields.MIE;
+          mstatus.fields.MIE <= 1'b0;
+          mode <= M_MACHINE;
+          mepc <= pc;
+          mcause <= mintr2cause(m_intr);
+          trap_target <= mtvec;
+        end
+      end else if (state == WB && s_intr.value != reg_t'(0)) begin
         // int s-mode
-        mstatus.fields.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
-        mstatus.fields.SPIE <= mstatus.fields.SIE;
-        mstatus.fields.SIE <= 1'b0;
-        mode <= M_SUPER;
-        sepc <= pc;
-        scause <= sintr2cause(s_intr);
-        trap_target <= stvec;
         interrupted <= 1'b1;
+        trap_target <= '0;
+        if (mstatus.fields.SIE) begin
+          mstatus.fields.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
+          mstatus.fields.SPIE <= mstatus.fields.SIE;
+          mstatus.fields.SIE <= 1'b0;
+          mode <= M_SUPER;
+          sepc <= pc;
+          scause <= sintr2cause(s_intr);
+          trap_target <= stvec;
+        end
       end
     end
   end
