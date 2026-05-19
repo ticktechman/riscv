@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -102,7 +102,23 @@ module soc (
 
   // members
   state_e state;
-  addr_t pc;
+  addr_t pc, pa_pc;
+  addr_t pa_data;
+  logic fetch_ready;
+  logic data_ready;
+
+  mmu mmu1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .va_pc(pc),
+    .pa_pc(pa_pc),
+    .pc_ready(fetch_ready),
+    .mem_op(mem_op),
+    .va_data(mem_addr),
+    .pa_data(pa_data),
+    .data_ready(data_ready)
+  );
 
   decoder decoder1 (
     .instr(instr),
@@ -197,7 +213,7 @@ module soc (
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
-    .pc(pc),
+    .pc(pa_pc),
     .instr(instr)
   );
 
@@ -206,7 +222,7 @@ module soc (
     .clk(clk),
     .rst_n(rst_n),
     .state(state),
-    .mem_addr(mem_addr),
+    .mem_addr(pa_data),
     .mem_op(mem_op),
     .mem_rdata(mem_rdata),
     .mem_data(mem_data)
@@ -218,7 +234,7 @@ module soc (
   ) uart1 (
     .clk(clk),
     .rst_n(rst_n),
-    .addr(mem_addr),
+    .addr(pa_data),
     .state(state),
     .mem_op(mem_op),
     .data(mem_data)
@@ -228,7 +244,7 @@ module soc (
   rvtest rvt1 (
     .clk(clk),
     .rst_n(rst_n),
-    .addr(mem_addr),
+    .addr(pa_data),
     .state(state),
     .mem_op(mem_op),
     .data(mem_data)
@@ -246,8 +262,10 @@ module soc (
       unique case (state)
         IDLE: state <= FETCH;
         FETCH: begin
-          `LOGI($sformatf("fetch pc=%h instr=%h", pc, instr));
-          state <= DECODE;
+          if (fetch_ready) begin
+            `LOGI($sformatf("fetch pc=%h instr=%h", pc, instr));
+            state <= DECODE;
+          end
         end
         DECODE: begin
           state <= EXEC;
@@ -255,15 +273,24 @@ module soc (
         EXEC: begin
           `LOGI($sformatf("exec_done: %b", exec_done));
           if (exec_done) begin
-            state <= MEMACCESS;
+            if (mem_op != MEM_NONE) begin
+              state <= MEMACCESS;
+            end else begin
+              state <= WB;
+            end
           end
         end
-        MEMACCESS: state <= WB;
+        MEMACCESS: begin
+          if (data_ready) begin
+            state <= WB;
+          end
+        end
         WB: begin
           if (!halt) begin
             state <= FETCH;
             pc <= pc_target != 0 ? pc_target : pc + 4;
           end else begin
+            // WFI wait for interrupted
             if (interrupted) begin
               `LOGI("INT");
               state <= FETCH;
@@ -278,6 +305,9 @@ module soc (
 
 endmodule
 
+//---------------------------------------------
+// data types and structures
+//---------------------------------------------
 localparam int unsigned REGMAX = 32;
 typedef logic [63:0] addr_t;
 typedef logic [63:0] reg_t;
@@ -1742,7 +1772,6 @@ module rom #(
       $readmemh(HEX, data);
       $display($sformatf("load %s", HEX));
     end
-    // `LOGI($sformatf("load %s %s", HEX, hex_file));
   end
   assign instr = data[pc[BITS+1:2]];
 
@@ -1791,7 +1820,6 @@ module rvtest (
   input reg_t data
 );
 
-  // addr_t BASE = 64'h8000_0000_0000_2000;
   addr_t BASE = 64'h8000_0000_0000_1000;
   addr_t MASK = 64'hfff;
 
@@ -1818,4 +1846,87 @@ module rvtest (
 
 endmodule
 
+module mmu (
+  input logic   clk,
+  input logic   rst_n,
+  input state_e state,
+
+  // instruction fetch
+  input  addr_t va_pc,
+  output addr_t pa_pc,
+  output logic  pc_ready,
+
+  // for data access
+  input mem_op_e mem_op,
+  input addr_t va_data,
+  output addr_t pa_data,
+  output logic data_ready
+);
+
+  typedef enum {
+    IDLE,
+    LOOKUP,
+    DONE
+  } mmu_state_e;
+
+  mmu_state_e mmu_state;
+  logic iready, dready;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mmu_state <= IDLE;
+      iready <= 1'b0;
+    end else begin
+      if (state == FETCH) begin
+        iready <= 1'b0;
+        unique case (mmu_state)
+          IDLE: begin
+            mmu_state <= LOOKUP;
+            `LOGI("IDLE");
+          end
+          LOOKUP: begin
+            `LOGI("LOOKUP");
+            pa_pc <= va_pc;
+            mmu_state <= DONE;
+            iready <= 1'b1;
+          end
+          DONE: begin
+            `LOGI("DONE");
+            mmu_state <= IDLE;
+          end
+        endcase
+      end
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      dready <= 1'b0;
+    end else begin
+      if (state == MEMACCESS) begin
+        dready <= 1'b0;
+        unique case (mmu_state)
+          IDLE: begin
+            mmu_state <= LOOKUP;
+            `LOGI("data IDLE");
+          end
+          LOOKUP: begin
+            `LOGI("data LOOKUP");
+            pa_data <= va_data;
+            mmu_state <= DONE;
+            dready <= 1'b1;
+          end
+          DONE: begin
+            `LOGI("data DONE");
+            mmu_state <= IDLE;
+          end
+        endcase
+      end
+    end
+  end
+
+  assign pc_ready   = iready;
+  assign data_ready = dready;
+
+endmodule
 /******************************************************************************/
