@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -117,7 +117,9 @@ module soc (
     .mem_op(mem_op),
     .va_data(mem_addr),
     .pa_data(pa_data),
-    .data_ready(data_ready)
+    .data_ready(data_ready),
+    .satp(satp),
+    .priv(priv)
   );
 
   decoder decoder1 (
@@ -190,6 +192,8 @@ module soc (
   reg_t csr_val, csr_wdata;
   reg_t trap_target;
   logic irqt, irqe, interrupted;
+  satp_u satp;
+  priv_lvl_e priv;
   csr csr1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -202,7 +206,9 @@ module soc (
     .trap_target(trap_target),
     .irq_timer(irqt),
     .irq_external(intr),
-    .interrupted(interrupted)
+    .interrupted(interrupted),
+    .satp_o(satp),
+    .priv_o(priv)
   );
 
   // rom
@@ -225,7 +231,8 @@ module soc (
     .mem_addr(pa_data),
     .mem_op(mem_op),
     .mem_rdata(mem_rdata),
-    .mem_data(mem_data)
+    .mem_data(mem_data),
+    .data_ready(data_ready)
   );
 
   uart #(
@@ -622,6 +629,23 @@ typedef struct packed {
   misa_rv64_t  fields;
   logic [63:0] value;
 } misa_u;
+
+typedef struct packed {
+  logic [63:60] mode;  // [63:60] Mode: Address translation mode (Sv39=8, Sv48=9, Sv57=10, Bare=0)
+  logic [59:44] asid;  // [59:44] ASID: Address Space Identifier
+  logic [43:0]  ppn;   // [43:0]  PPN: Physical Page Number of the root page table
+} satp_rv64_t;
+
+typedef union packed {
+  satp_rv64_t  fields;
+  logic [63:0] value;
+} satp_u;
+
+typedef enum logic [1:0] {
+  M_USER = 2'b00,
+  M_SUPER = 2'b01,
+  M_MACHINE = 2'b11
+} priv_lvl_e;
 
 //-----------------------------------
 // decoder
@@ -1409,7 +1433,10 @@ module csr (
 
   input  logic irq_timer,
   input  logic irq_external,
-  output logic interrupted
+  output logic interrupted,
+
+  output satp_u satp_o,
+  priv_lvl_e priv_o
 );
   // handle irq
   // handle exceptions
@@ -1419,11 +1446,6 @@ module csr (
 
   `define MSTATUS_WR_MASK 64'h000006f001fe1fea
   `define SSTATUS_WR_MASK 64'h8000000f000de122
-  typedef enum logic [1:0] {
-    M_USER = 2'b00,
-    M_SUPER = 2'b01,
-    M_MACHINE = 2'b11
-  } mode_e;
 
   `define USIP 0
   `define SSIP 1
@@ -1445,7 +1467,10 @@ module csr (
   reg_t mtvec, mtval, mepc, mcause, mhartid, mscratch;
   reg_t stvec, stval, sepc, scause, sscratch, satp;
   reg_t cycle;
-  mode_e mode;
+  priv_lvl_e mode;
+
+  assign priv_o = mode;
+  assign satp_o.value = satp;
 
   always_comb begin
     csr_val = '0;
@@ -1555,7 +1580,7 @@ module csr (
           `LOGI("MRET");
           // restore privilege
           mcause <= '0;
-          mode <= mode_e'(mstatus.fields.MPP);
+          mode <= priv_lvl_e'(mstatus.fields.MPP);
           trap_target <= mepc;
           mstatus.fields.MIE <= mstatus.fields.MPIE;
           mstatus.fields.MPIE <= 1'b0;
@@ -1691,6 +1716,7 @@ module sram #(
   input addr_t mem_addr,
   input mem_op_e mem_op,
   input reg_t mem_data,
+  input data_ready,
   output reg_t mem_rdata
 );
   localparam int unsigned BITS = $clog2(SIZE);
@@ -1719,7 +1745,7 @@ module sram #(
       end
     end
   end
-  assign enable = (mem_addr & ~MASK) == BASE;
+  assign enable = ((mem_addr & ~MASK) == BASE) && (data_ready);
   assign offset = mem_addr - BASE;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -1847,9 +1873,12 @@ module rvtest (
 endmodule
 
 module mmu (
-  input logic   clk,
-  input logic   rst_n,
+  input logic clk,
+  input logic rst_n,
+
   input state_e state,
+  input satp_u satp,
+  input priv_lvl_e priv,
 
   // instruction fetch
   input  addr_t va_pc,
@@ -1911,7 +1940,7 @@ module mmu (
             `LOGI("data IDLE");
           end
           LOOKUP: begin
-            `LOGI("data LOOKUP");
+            `LOGI($sformatf("data LOOKUP: %0d %0d op:%0d", satp.fields.mode, priv, mem_op));
             pa_data <= va_data;
             mmu_state <= DONE;
             dready <= 1'b1;

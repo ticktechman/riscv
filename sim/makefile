@@ -31,7 +31,7 @@ all: $(SIM)
 
 mini: obj_dir/Vmini
 mini.run: obj_dir/Vmini
-	@$< +verilator+quiet +hex_file=$(CURDIR)/riscv-tests/rv64si-p-csr.hex
+	@$< +verilator+quiet +hex_file=$(CURDIR)/riscv-tests/rv64ui-p-sb.hex
 mini.test: obj_dir/Vmini
 	@$(foreach one, $(HEX_FILES), \
 		$< +verilator+quiet +hex_file=$(one); \
