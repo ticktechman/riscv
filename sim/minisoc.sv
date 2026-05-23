@@ -24,6 +24,9 @@
 `define LOGE(msg)
 `endif
 
+`define EADDR 64'hffffffffffffffff
+`define LOGI_PTE(
+    x) `LOGI($sformatf("PTE(PPN%h D%b A%b U%b X%b W%b R%b V%b)", x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
 //-------------------------------------
 // Testbench
 //-------------------------------------
@@ -238,15 +241,14 @@ module soc (
   );
 
   // rom
-  logic [31:0] instr;
+  logic [31:0] instr, instr1, instr2;
   rom #(
-    .SIZE(4096),
     .HEX("isa/div.hex")
   ) rom1 (
     .clk(clk),
     .rst_n(rst_n),
     .pc(pa_pc),
-    .instr(instr)
+    .instr(instr1)
   );
 
   // sram
@@ -265,20 +267,25 @@ module soc (
     .pte_ready(pte_ready),
     .pte_wr_req(pte_wr_req),
     .pte_wr_addr(pte_wr_addr),
-    .pte_wr_data(pte_wr_data)
+    .pte_wr_data(pte_wr_data),
+    .mmu_error(mmu_error),
+    .pc(pa_pc),
+    .instr(instr2)
   );
 
-  uart #(
-    .BASE(64'h2000),
-    .MASK(64'hfff)
-  ) uart1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .addr(pa_data),
-    .state(state),
-    .mem_op(mem_op),
-    .data(mem_data)
-  );
+  assign instr = instr1 != 0 ? instr1 : instr2;
+
+  // uart #(
+  //   .BASE(64'h2000),
+  //   .MASK(64'hfff)
+  // ) uart1 (
+  //   .clk(clk),
+  //   .rst_n(rst_n),
+  //   .addr(pa_data),
+  //   .state(state),
+  //   .mem_op(mem_op),
+  //   .data(mem_data)
+  // );
 
   // for rvtest
   rvtest rvt1 (
@@ -303,7 +310,7 @@ module soc (
         IDLE: state <= FETCH;
         FETCH: begin
           if (fetch_ready) begin
-            `LOGI($sformatf("fetch pc=%h instr=%h", pc, instr));
+            `LOGI($sformatf("fetch pc=%h pa=%h instr=%h", pc, pa_pc, instr));
             state <= DECODE;
           end
         end
@@ -328,16 +335,16 @@ module soc (
         WB: begin
           if (!halt) begin
             state <= FETCH;
-            pc <= new_target != 0 ? new_target : pc + 4;
+            pc <= new_target != `EADDR ? new_target : pc + 4;
           end else begin
             // WFI wait for interrupted
             if (interrupted) begin
               `LOGI("INT");
               state <= FETCH;
-              pc <= new_target != 0 ? new_target : pc + 4;
+              pc <= new_target != `EADDR ? new_target : pc + 4;
             end
           end
-          trap_target <= 0;
+          trap_target <= '1;
         end
         default: ;
       endcase
@@ -346,12 +353,12 @@ module soc (
 
   addr_t new_target;
   always_comb begin
-    if (trap_target != 64'h0) begin
+    if (trap_target != `EADDR) begin
       new_target = trap_target;
-    end else if (pc_target != 64'h0) begin
+    end else if (pc_target != `EADDR) begin
       new_target = pc_target;
     end else begin
-      new_target = '0;
+      new_target = `EADDR;
     end
   end
 endmodule
@@ -704,6 +711,10 @@ typedef union packed {
   pte_sv39_t   fields;
   logic [63:0] value;
 } pte_u;
+
+`define PTE_A 64'h40
+`define PTE_D 64'h80
+
 
 typedef enum logic [1:0] {
   M_USER = 2'b00,
@@ -1095,7 +1106,7 @@ module exec (
       br_taken = 1'b0;
       wb_data = '0;
       mem_data = '0;
-      pc_target = '0;
+      pc_target = '1;
       op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
       op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
       halt = 1'b0;
@@ -1577,7 +1588,7 @@ module csr (
   // handle mmu trap
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      trap_target <= '0;
+      trap_target <= '1;
     end else begin
       if (mmu_exc) begin
         `LOGI($sformatf("MMU exc mode: %0d cause: %0d", mode, mmu_cause));
@@ -1714,7 +1725,7 @@ module csr (
             end
           endcase
         end else if (sys_op == SYS_MRET) begin
-          `LOGI($sformatf("MRET: %0d", mstatus.fields.MPP));
+          `LOGI($sformatf("MRET: %0d mepc:%h", mstatus.fields.MPP, mepc));
           // restore privilege
           mcause <= '0;
           mstatus.fields.MPRV <= 1'b0;
@@ -1792,7 +1803,7 @@ module csr (
       if (state == WB && m_intr.value != reg_t'(0)) begin
         // int m-mode
         interrupted <= 1'b1;
-        trap_target <= '0;
+        trap_target <= '1;
         if (mstatus.fields.MIE) begin
           mstatus.fields.MPP <= mode;
           mstatus.fields.MPIE <= mstatus.fields.MIE;
@@ -1805,7 +1816,7 @@ module csr (
       end else if (state == WB && s_intr.value != reg_t'(0)) begin
         // int s-mode
         interrupted <= 1'b1;
-        trap_target <= '0;
+        trap_target <= '1;
         if (mstatus.fields.SIE) begin
           mstatus.fields.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
           mstatus.fields.SPIE <= mstatus.fields.SIE;
@@ -1845,11 +1856,8 @@ endmodule
 // sram
 //-----------------------------------
 module sram #(
-  parameter SIZE = 4096,
-  // parameter addr_t BASE = 64'b0,
-  // parameter addr_t BASE = 64'h8000_0000_0000_3000,
-  parameter addr_t BASE = 64'h0000_0000_8000_2000,
-  parameter addr_t MASK = 64'hfff
+  parameter SIZE = 32 * 1024,
+  parameter addr_t BASE = 64'h0000_0000_8000_2000
 ) (
   input logic clk,
   input logic rst_n,
@@ -1866,9 +1874,14 @@ module sram #(
   output pte_u  pte,
   output logic  pte_ready,
 
-  input logic  pte_wr_req,
+  input logic pte_wr_req,
   input addr_t pte_wr_addr,
-  input pte_u  pte_wr_data
+  input pte_u pte_wr_data,
+  logic mmu_error,
+
+  // fetch interface
+  input addr_t pc,
+  output logic [31:0] instr
 );
   localparam int unsigned BITS = $clog2(SIZE);
   logic enable;
@@ -1882,6 +1895,7 @@ module sram #(
   `define BU2R(r, a) {{56'b0}, r[a]}
   `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
   `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
+  `define WU2I(r, a) {r[a+3], r[a+2], r[a+1], r[a]}
 
   integer fd;
   string hex_file;
@@ -1896,7 +1910,7 @@ module sram #(
       end
     end
   end
-  assign enable = ((mem_addr & ~MASK) == BASE) && (data_ready);
+  assign enable = (mem_addr >= BASE && mem_addr < BASE + SIZE) && (data_ready) && !mmu_error;
   assign offset = mem_addr - BASE;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -1905,7 +1919,7 @@ module sram #(
       end
     end else begin
       if (state == MEMACCESS && mem_op != MEM_NONE && enable) begin
-        `LOGI($sformatf("offset:%h op:%0d data: %h", offset, mem_op, mem_data));
+        `LOGI($sformatf("MEM:%h op:%0d data: %h", offset, mem_op, mem_data));
         unique case (mem_op)
           LD_LB:  mem_rdata <= `B2R(ram, offset[BITS-1:0]);
           LD_LH:  mem_rdata <= `H2R(ram, offset[BITS-1:0]);
@@ -1930,10 +1944,10 @@ module sram #(
   always_comb begin
     pte_readed.value = '0;
     pte_offset = pte_addr - BASE;
-    if (pte_req && (pte_addr & ~MASK) == BASE) begin
+    if (pte_req && (pte_addr >= BASE && pte_addr < BASE + SIZE)) begin
       pte_readed.value = `D2R(ram, pte_offset[BITS-1:0]);
     end
-    if (pte_wr_req && (pte_wr_addr & ~MASK) == BASE) begin
+    if (pte_wr_req && (pte_addr >= BASE && pte_addr < BASE + SIZE)) begin
       pte_offset = pte_addr - BASE;
     end
   end
@@ -1942,7 +1956,7 @@ module sram #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (pte_wr_req && (pte_wr_addr & ~MASK) == BASE) begin
+      if (pte_wr_req && (pte_wr_addr >= BASE && pte_wr_addr < BASE + SIZE)) begin
         `LOGI($sformatf("write pte %h: %h", pte_wr_addr, pte_wr_data.value));
         for (logic [BITS-1:0] i = 0; i < 8; i++) ram[pte_offset[BITS-1:0]+i] <= pte_wr_data.value[8*i+:8];
       end
@@ -1955,11 +1969,28 @@ module sram #(
       if (pte_req) begin
         pte_ready <= 1'b1;
         pte.value <= pte_readed.value;
-      end else begin
+      end
+      if (pte_ready) begin
         pte_ready <= 1'b0;
       end
     end
   end
+
+
+  // fetch interface
+  logic ienable;
+  addr_t ioffset;
+  always_comb begin
+    ioffset = pc - BASE;
+    ienable = (pc >= BASE && pc < BASE + SIZE);
+    if (ienable) begin
+      instr = `WU2I(ram, ioffset[BITS-1:0]);
+    end else begin
+      instr = '0;
+    end
+    ;
+  end
+
 endmodule
 
 //-----------------------------------
@@ -1968,8 +1999,8 @@ endmodule
 module rom #(
   parameter string HEX = "",
   parameter reg_t BASE = 64'h0000_0000_8000_0000,
-  parameter reg_t MASK = 64'h0000_0000_0000_1fff,
-  parameter int unsigned SIZE = 8192
+  parameter reg_t MASK = 64'h0000_0000_0000_0fff,
+  parameter int unsigned SIZE = 4096
 ) (
   input logic clk,
   input logic rst_n,
@@ -1999,7 +2030,7 @@ module rom #(
       instr = data[pc[BITS+1:2]];
     end else begin
       instr = '0;
-      `LOGE($sformatf("INVALID PC: %h", pc));
+      // `LOGE($sformatf("INVALID PC: %h", pc));
     end
   end
 
@@ -2116,18 +2147,47 @@ module mmu (
 
   typedef enum {
     IDLE,
-    LOOKUP,
+    LDPGD,
+    LDPMD,
+    LDPTE,
+    CHKPERM,
     DONE
   } mmu_state_e;
 
-  mmu_state_e mmu_state;
-  logic iready, dready;
-  logic [8:0] vpn0, vpn1, vpn2;
-  assign vpn2 = va_pc[38:30];
-  assign vpn1 = va_pc[29:21];
-  assign vpn0 = va_pc[20:12];
+  typedef enum {
+    PGD,
+    PMD,
+    PTE
+  } pagelevel_e;
 
-  addr_t pgtbase;
+  mmu_state_e mmu_state;
+  pagelevel_e pgl;
+  logic iready, dready, ialigned;
+  logic leaf, icheck, iwalking;
+  logic V, R, W, X, U, A, D;
+  logic [8:0] vpn0, vpn1, vpn2;
+
+  always_comb begin
+    V = pte.fields.V;
+    R = pte.fields.R;
+    W = pte.fields.W;
+    X = pte.fields.X;
+    U = pte.fields.U;
+    A = pte.fields.A;
+    D = pte.fields.D;
+    leaf = V & (R | W | X);
+    icheck = (priv == M_SUPER && U == 0) || (priv == M_USER && U == 1);
+    iwalking = (satp.fields.MODE == 8 && priv != M_MACHINE);
+    if (state == FETCH) begin
+      vpn2 = va_pc[38:30];
+      vpn1 = va_pc[29:21];
+      vpn0 = va_pc[20:12];
+    end else begin
+      vpn2 = va_data[38:30];
+      vpn1 = va_data[29:21];
+      vpn0 = va_data[20:12];
+    end
+  end
 
   // instruction page mapping
   always_ff @(posedge clk or negedge rst_n) begin
@@ -2135,47 +2195,90 @@ module mmu (
       mmu_state <= IDLE;
       iready <= 1'b0;
     end else begin
+      iready <= 1'b0;
       if (state == FETCH) begin
-        `LOGI($sformatf(
-              "instr(%0d) priv:%0d MPRV:%0d mode:%0d ppn:%h va:%h",
-              mmu_state,
-              priv,
-              mstatus.fields.MPRV,
-              satp.fields.MODE,
-              satp.fields.PPN,
-              va_pc
-              ));
-        iready <= 1'b0;
-        if (satp.fields.MODE == 0 || (priv == M_MACHINE)) begin
-          pa_pc  <= va_pc;
-          iready <= 1'b1;
+        if (!iwalking) begin
+          `LOGI($sformatf("NO iwalking va:%h", va_pc));
+          pa_pc   <= va_pc;
+          iready  <= 1'b1;
+          pte_req <= 1'b0;
         end else begin
+          iready <= 1'b0;
           unique case (mmu_state)
             IDLE: begin
-              mmu_state <= LOOKUP;
+              ialigned  <= 1;
+              mmu_state <= LDPGD;
               pte_req   <= 1'b1;
               pte_addr  <= {8'h00, satp.fields.PPN, 12'(vpn2 << 3)};
             end
-            LOOKUP: begin
+            LDPGD: begin
               if (pte_ready) begin
-                `LOGI($sformatf("PTE: %h", pte));
+                `LOGI($sformatf("IPGD: %h", pte.value));
                 pte_req <= 1'b0;
-                if (pte.fields.V == 0) begin
-                  error <= 1'b1;
-                  cause <= EXC_INSTR_PAGE_FAULT;
-                  causeval <= va_pc;
-                  mmu_state <= DONE;
+                if (!V || leaf) begin
+                  mmu_state <= CHKPERM;
+                  pgl <= PGD;
+                  ialigned <= (pte.fields.PPN & 44'h3ffff) == 0;
                 end else begin
-                  if (pte.fields.X == 1) begin
-                    iready <= 1'b1;
-                    pa_pc <= {8'h00, pte.fields.PPN, va_pc[11:0]};
-                    mmu_state <= DONE;
-                  end
+                  pte_req   <= 1'b1;
+                  mmu_state <= LDPMD;
+                  pte_addr  <= {8'h00, pte.fields.PPN, 12'(vpn1 << 3)};
+                end
+              end
+            end
+            LDPMD: begin
+              if (pte_ready) begin
+                `LOGI($sformatf("IPMD: %h", pte));
+                pte_req <= 1'b0;
+                if (!V || leaf) begin
+                  mmu_state <= CHKPERM;
+                  pgl <= PMD;
+                  ialigned <= (pte.fields.PPN & 44'h1ff) == 0;
+                end else begin
+                  pte_req   <= 1'b1;
+                  mmu_state <= LDPTE;
+                  pte_addr  <= {8'h00, pte.fields.PPN, 12'(vpn0 << 3)};
+                end
+              end
+            end
+            LDPTE: begin
+              if (pte_ready) begin
+                `LOGI_PTE(pte.fields);
+                pte_req <= 1'b0;
+                mmu_state <= CHKPERM;
+                pgl <= PTE;
+              end
+            end
+            CHKPERM: begin
+              mmu_state <= DONE;
+              iready <= 1'b1;
+              if (!V || !X || !icheck || !ialigned) begin
+                error <= 1'b1;
+                cause <= EXC_INSTR_PAGE_FAULT;
+                causeval <= va_pc;
+              end else begin
+                // build PA
+                unique case (pgl)
+                  PGD: pa_pc <= {8'b0, pte.fields.PPN[53:28], va_pc[29:0]};
+                  PMD: pa_pc <= {8'b0, pte.fields.PPN[53:19], va_pc[20:0]};
+                  PTE: pa_pc <= {8'b0, pte.fields.PPN[53:10], va_pc[11:0]};
+                  default: pa_pc <= '0;
+                endcase
+
+                // mark A flag
+                if (A == 0) begin
+                  pte_wr_req  <= 1'b1;
+                  pte_wr_data <= pte.value | `PTE_A;
+                  pte_wr_addr <= pte_addr;
                 end
               end
             end
             DONE: begin
+              error <= 1'b0;
+              iready <= 1'b0;
+              ialigned <= 1'b1;
               mmu_state <= IDLE;
+              pte_wr_req <= 1'b0;
             end
           endcase
         end
@@ -2184,23 +2287,23 @@ module mmu (
   end
 
   // data page mapping
-  logic isload, data_ptw, permit, priv_permit, aligned;
-  priv_lvl_e effective_lvl;
-  logic [8:0] data_vpn0, data_vpn1, data_vpn2;
-  assign data_vpn2 = va_data[38:30];
-  assign data_vpn1 = va_data[29:21];
-  assign data_vpn0 = va_data[20:12];
+  logic isload, dwalking, dcheck, lcheck, daligned;
+  priv_lvl_e lvl;
+  logic [63:0] markad;
   always_comb begin
-    effective_lvl = priv;
+    lvl = priv;
     if (priv == M_MACHINE && mstatus.fields.MPRV == 1) begin
-      effective_lvl = priv_lvl_e'(mstatus.fields.MPP);
+      lvl = priv_lvl_e'(mstatus.fields.MPP);
     end
 
-    isload = mem_op > MEM_NONE && mem_op < MEM_SEP;
-    data_ptw = (satp.fields.MODE == 8 && effective_lvl < M_MACHINE);
-    permit = (isload && pte.fields.R) || (!isload && pte.fields.W);
-    priv_permit = (effective_lvl == M_USER  && pte.fields.U) || (effective_lvl == M_SUPER && (pte.fields.U == 0 || mstatus.fields.SUM));
-    aligned = (pte.fields.PPN & (44'h3ffff)) == 44'h0;
+    isload   = mem_op > MEM_NONE && mem_op < MEM_SEP;
+    dwalking = (satp.fields.MODE == 8 && lvl < M_MACHINE);
+    dcheck   = (isload && (R || (mstatus.fields.MXR && X))) || (!isload && W);
+    lcheck   = (lvl == M_USER && U == 1) || (lvl == M_SUPER && (U == 0 || mstatus.fields.SUM));
+
+    markad   = '0;
+    if (!A) markad = markad | `PTE_A;
+    if (!isload && !D) markad = markad | `PTE_D;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -2209,56 +2312,85 @@ module mmu (
     end else begin
       dready <= 1'b0;
       if (state == MEMACCESS) begin
-        `LOGI($sformatf(
-              "data(%0d) priv:%0d MPP:%0d MPRV:%0d mode:%0d ppn:%h va:%h",
-              mmu_state,
-              priv,
-              mstatus.fields.MPP,
-              mstatus.fields.MPRV,
-              satp.fields.MODE,
-              satp.fields.PPN,
-              va_data
-              ));
-        if (!data_ptw) begin
+        if (!dwalking) begin
           pa_data <= va_data;
           dready  <= 1'b1;
+          `LOGI($sformatf("No dwalking: va:%h", va_data));
+          pte_req <= 1'b0;
         end else begin
           unique case (mmu_state)
             IDLE: begin
+              daligned <= 1'b1;
               dready <= 1'b0;
-              mmu_state <= LOOKUP;
+              mmu_state <= LDPGD;
               pte_req <= 1'b1;
               pte_wr_req <= 1'b0;
-              pte_addr <= {8'h00, satp.fields.PPN, 12'(data_vpn2 << 3)};
+              pte_addr <= {8'h00, satp.fields.PPN, 12'(vpn2 << 3)};
             end
-            LOOKUP: begin
+            LDPGD: begin
               if (pte_ready) begin
-                `LOGI($sformatf(
-                      "DPTE: %h U:%0d SUM:%0d permit: %0d, priv_permit:%0d",
-                      pte.fields.PPN,
-                      pte.fields.U,
-                      mstatus.fields.SUM,
-                      permit,
-                      priv_permit
-                      ));
                 pte_req <= 1'b0;
-                if (pte.fields.V == 0 || !aligned || (pte.fields.V == 1 && (!permit || !priv_permit))) begin
-                  error <= 1'b1;
-                  cause <= isload ? EXC_LOAD_PAGE_FAULT : EXC_STORE_PAGE_FAULT;
-                  causeval <= va_data;
-                  mmu_state <= DONE;
-                  dready <= 1'b1;
+                `LOGI($sformatf("DPGD:%h", pte.value));
+                if (!V || leaf) begin
+                  mmu_state <= CHKPERM;
+                  pgl <= PGD;
+                  daligned <= (pte.fields.PPN & 44'h3ffff) == 0;
                 end else begin
-                  if (!isload && pte.fields.D == 0) begin
-                    pte_wr_req  <= 1'b1;
-                    pte_wr_data <= pte.value | 64'h80;
-                    pte_wr_addr <= pte_addr;
-                  end
-                  dready  <= 1'b1;
-                  pa_data <= (64'(pte.fields.PPN << 12)) | 64'(va_data[29:0]);
-                  `LOGI($sformatf("PA: %h", (64'(pte.fields.PPN << 12)) | 64'(va_data[29:0])));
-                  mmu_state <= DONE;
+                  pte_req   <= 1'b1;
+                  mmu_state <= LDPMD;
+                  pte_addr  <= {8'h00, pte.fields.PPN, 12'(vpn1 << 3)};
                 end
+              end
+            end
+            LDPMD: begin
+              if (pte_ready) begin
+                pte_req <= 1'b0;
+                `LOGI($sformatf("DPMD:%h", pte.value));
+                if (!V || leaf) begin
+                  mmu_state <= CHKPERM;
+                  pgl <= PMD;
+                  daligned <= (pte.fields.PPN & 44'h1ff) == 0;
+                end else begin
+                  pte_req   <= 1'b1;
+                  mmu_state <= LDPTE;
+                  pte_addr  <= {8'h00, pte.fields.PPN, 12'(vpn0 << 3)};
+                end
+              end
+            end
+            LDPTE: begin
+              if (pte_ready) begin
+                `LOGI_PTE(pte.fields);
+                pte_req <= 1'b0;
+                mmu_state <= CHKPERM;
+                pgl <= PTE;
+              end
+            end
+            CHKPERM: begin
+              pte_req <= 1'b0;
+              `LOGI($sformatf("D CHKPERM: daligned:%b dcheck:%b lcheck:%b", daligned, dcheck, lcheck));
+              if (V == 0 || !daligned || !dcheck || !lcheck) begin
+                error <= 1'b1;
+                cause <= isload ? EXC_LOAD_PAGE_FAULT : EXC_STORE_PAGE_FAULT;
+                causeval <= va_data;
+                mmu_state <= DONE;
+                dready <= 1'b1;
+              end else begin
+                // build PA
+                unique case (pgl)
+                  PGD: pa_data <= {8'b0, pte.fields.PPN[53:28], va_data[29:0]};
+                  PMD: pa_data <= {8'b0, pte.fields.PPN[53:19], va_data[20:0]};
+                  PTE: pa_data <= {8'b0, pte.fields.PPN[53:10], va_data[11:0]};
+                  default: pa_pc <= '0;
+                endcase
+
+                if (markad != 0) begin
+                  pte_wr_req  <= 1'b1;
+                  pte_wr_data <= pte.value | markad;
+                  pte_wr_addr <= pte_addr;
+                end
+
+                dready <= 1'b1;
+                mmu_state <= DONE;
               end
             end
             DONE: begin
