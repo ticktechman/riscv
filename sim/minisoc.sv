@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -25,8 +25,8 @@
 `endif
 
 `define EADDR 64'hffffffffffffffff
-`define LOGI_PTE(
-    x) `LOGI($sformatf("PTE(PPN%h D%b A%b U%b X%b W%b R%b V%b)", x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
+`define LOGPTE(tag, x) `LOGI($sformatf("%s(PPN%h D%b A%b U%b X%b W%b R%b V%b)", \
+  tag, x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
 //-------------------------------------
 // Testbench
 //-------------------------------------
@@ -2201,7 +2201,7 @@ module mmu (
             end
             LDPGD: begin
               if (pte_ready) begin
-                `LOGI($sformatf("IPGD: %h", pte));
+                `LOGPTE("ipgd", pte);
                 pte_req <= 1'b0;
                 if (!V || leaf) begin
                   mmu_state <= CHKPERM;
@@ -2216,7 +2216,7 @@ module mmu (
             end
             LDPMD: begin
               if (pte_ready) begin
-                `LOGI($sformatf("IPMD: %h", pte));
+                `LOGPTE("ipmd", pte);
                 pte_req <= 1'b0;
                 if (!V || leaf) begin
                   mmu_state <= CHKPERM;
@@ -2231,7 +2231,7 @@ module mmu (
             end
             LDPTE: begin
               if (pte_ready) begin
-                `LOGI_PTE(pte);
+                `LOGPTE("ipte", pte);
                 pte_req <= 1'b0;
                 mmu_state <= CHKPERM;
                 pgl <= PTE;
@@ -2318,7 +2318,7 @@ module mmu (
             LDPGD: begin
               if (pte_ready) begin
                 pte_req <= 1'b0;
-                `LOGI($sformatf("DPGD:%h", pte));
+                `LOGPTE("dpgd", pte);
                 if (!V || leaf) begin
                   mmu_state <= CHKPERM;
                   pgl <= PGD;
@@ -2333,7 +2333,7 @@ module mmu (
             LDPMD: begin
               if (pte_ready) begin
                 pte_req <= 1'b0;
-                `LOGI($sformatf("DPMD:%h", pte));
+                `LOGPTE("dpmd", pte);
                 if (!V || leaf) begin
                   mmu_state <= CHKPERM;
                   pgl <= PMD;
@@ -2347,7 +2347,7 @@ module mmu (
             end
             LDPTE: begin
               if (pte_ready) begin
-                `LOGI_PTE(pte);
+                `LOGPTE("dpte", pte);
                 pte_req <= 1'b0;
                 mmu_state <= CHKPERM;
                 pgl <= PTE;
