@@ -2178,10 +2178,25 @@ module mmu (
     DONE
   } mmu_state_e;
 
+  `define set_flags(thiz) begin \
+      V = thiz.V; \
+      R = thiz.R; \
+      W = thiz.W; \
+      X = thiz.X; \
+      U = thiz.U; \
+      A = thiz.A; \
+      D = thiz.D; \
+   end
+  `define set_vpn(thiz) begin \
+      vpn2 = thiz[38:30]; \
+      vpn1 = thiz[29:21]; \
+      vpn0 = thiz[20:12]; \
+   end
+
   mmu_state_e mmu_state;
   tlb_entry_t itlb, dtlb;
   pagesize_e pgsize;
-  logic iready, dready, ialigned, ihit;
+  logic iready, dready, ialigned, ihit, dhit;
   logic leaf, icheck, iwalking;
   logic V, R, W, X, U, A, D;
   logic [8:0] vpn0, vpn1, vpn2;
@@ -2195,36 +2210,23 @@ module mmu (
       default: vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
     endcase
     ihit = itlb.V && (itlb.VPN & vpnmask) == (va_pc[38:12] & vpnmask) && (itlb.G || itlb.ASID == satp.ASID);
+    dhit = dtlb.V && (dtlb.VPN & vpnmask) == (va_data[38:12] & vpnmask) && (dtlb.G || dtlb.ASID == satp.ASID);
     if (state == FETCH && ihit) begin
-      V = itlb.V;
-      R = itlb.R;
-      W = itlb.W;
-      X = itlb.X;
-      U = itlb.U;
-      A = itlb.A;
-      D = itlb.D;
+      `set_flags(itlb)
+    end else if (state == MEMACCESS && dhit) begin
+      `set_flags(dtlb)
     end else begin
-      V = pte.V;
-      R = pte.R;
-      W = pte.W;
-      X = pte.X;
-      U = pte.U;
-      A = pte.A;
-      D = pte.D;
+      `set_flags(pte)
     end
+
     leaf = V & (R | W | X);
     icheck = (priv == M_SUPER && U == 0) || (priv == M_USER && U == 1);
     iwalking = (satp.MODE == 8 && priv != M_MACHINE);
     if (state == FETCH) begin
-      vpn2 = va_pc[38:30];
-      vpn1 = va_pc[29:21];
-      vpn0 = va_pc[20:12];
+      `set_vpn(va_pc)
     end else begin
-      vpn2 = va_data[38:30];
-      vpn1 = va_data[29:21];
-      vpn0 = va_data[20:12];
+      `set_vpn(va_data)
     end
-
   end
 
   // instruction page mapping
@@ -2383,6 +2385,9 @@ module mmu (
       dready <= 1'b0;
     end else begin
       dready <= 1'b0;
+      if (tlb_invalid) begin
+        dtlb.V <= 0;
+      end
       if (state == MEMACCESS) begin
         if (!dwalking) begin
           pa_data <= va_data;
@@ -2392,12 +2397,21 @@ module mmu (
         end else begin
           unique case (mmu_state)
             IDLE: begin
-              daligned <= 1'b1;
-              dready <= 1'b0;
-              mmu_state <= LDPGD;
-              pte_req <= 1'b1;
-              pte_wr_req <= 1'b0;
-              pte_addr <= {8'h00, satp.PPN, 12'(vpn2 << 3)};
+              if (dhit) begin
+                `LOGI("dtlb hit");
+                daligned <= 1'b1;
+                dready <= 1'b0;
+                pte_req <= 1'b0;
+                pte_wr_req <= 1'b0;
+                mmu_state <= CHKPERM;
+              end else begin
+                daligned <= 1'b1;
+                dready <= 1'b0;
+                mmu_state <= LDPGD;
+                pte_req <= 1'b1;
+                pte_wr_req <= 1'b0;
+                pte_addr <= {8'h00, satp.PPN, 12'(vpn2 << 3)};
+              end
             end
             LDPGD: begin
               if (pte_ready) begin
@@ -2447,18 +2461,38 @@ module mmu (
                 mmu_state <= DONE;
                 dready <= 1'b1;
               end else begin
-                // build PA
-                unique case (pgsize)
-                  PG_1G:   pa_data <= {8'b0, pte.PPN[53:28], va_data[29:0]};
-                  PG_2M:   pa_data <= {8'b0, pte.PPN[53:19], va_data[20:0]};
-                  PG_4K:   pa_data <= {8'b0, pte.PPN[53:10], va_data[11:0]};
-                  default: pa_pc <= '0;
-                endcase
-
+                if (dhit) begin
+                  unique case (pgsize)
+                    PG_1G:   pa_data <= {8'b0, dtlb.PPN[43:18], va_data[29:0]};
+                    PG_2M:   pa_data <= {8'b0, dtlb.PPN[43:9], va_data[20:0]};
+                    PG_4K:   pa_data <= {8'b0, dtlb.PPN[43:0], va_data[11:0]};
+                    default: pa_data <= '0;
+                  endcase
+                end else begin
+                  // build PA
+                  unique case (pgsize)
+                    PG_1G:   pa_data <= {8'b0, pte.PPN[53:28], va_data[29:0]};
+                    PG_2M:   pa_data <= {8'b0, pte.PPN[53:19], va_data[20:0]};
+                    PG_4K:   pa_data <= {8'b0, pte.PPN[53:10], va_data[11:0]};
+                    default: pa_data <= '0;
+                  endcase
+                  dtlb.PGSIZE <= pgsize;
+                  dtlb.ASID <= satp.ASID;
+                  dtlb.VPN <= va_data[38:12];
+                  dtlb.PPN <= pte.PPN;
+                  dtlb.V <= pte.V;
+                  dtlb.G <= pte.G;
+                  dtlb.U <= pte.U;
+                  dtlb.X <= pte.X;
+                  dtlb.W <= pte.W;
+                  dtlb.R <= pte.R;
+                  dtlb.A <= 1;
+                end
                 if (markad != 0) begin
-                  pte_wr_req  <= 1'b1;
+                  pte_wr_req <= 1'b1;
                   pte_wr_data <= pte | markad;
                   pte_wr_addr <= pte_addr;
+                  dtlb.D <= (markad & `PTE_D) == 0 ? 0 : 1;
                 end
 
                 dready <= 1'b1;

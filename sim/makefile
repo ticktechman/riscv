@@ -49,7 +49,7 @@ all: $(SIM)
 
 mini: obj_dir/Vmini
 mini.run: obj_dir/Vmini
-	$(call gen-args,$(CURDIR)/riscv-tests/rv64si-p-icache-alias)
+	$(call gen-args,$(CURDIR)/riscv-tests/rv64si-p-dirty)
 	$< +verilator+quiet $(SIM_ARGS)
 
 mini.test: $(HEX_FILES:.hex=.run)
