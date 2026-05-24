@@ -114,7 +114,7 @@ module soc (
   pte_t pte;
   reg_t mmu_causeval;
   mcause_e mmu_cause;
-  mstatus_u mstatus;
+  mstatus_t mstatus;
   logic pte_wr_req;
   addr_t pte_wr_addr;
   pte_t pte_wr_data;
@@ -586,12 +586,7 @@ typedef struct packed {
   logic         reserved_2;      // [2] WPRI
   logic         SIE;             // [1] Supervisor Interrupt Enable
   logic         reserved_0;      // [0] WPRI
-} mstatus_rv64_t;
-
-typedef union packed {
-  mstatus_rv64_t fields;  // Access via bit-fields
-  logic [63:0]   value;   // Access as a whole 64-bit register
-} mstatus_u;
+} mstatus_t;
 
 typedef struct packed {
   logic [63:48] custom_63_48;              // [63:48] Designated for custom use / reserved
@@ -1512,7 +1507,7 @@ module csr (
 
   output satp_t satp_o,
   output priv_lvl_e priv_o,
-  output mstatus_u mstatus_o,
+  output mstatus_t mstatus_o,
 
   input logic mmu_exc,
   input mcause_e mmu_cause,
@@ -1539,7 +1534,7 @@ module csr (
   `define MIE_MASK 64'h0aaa
   `define MIP_MASK 64'h0aaa
 
-  mstatus_u mstatus;
+  mstatus_t mstatus;
   medeleg_u medeleg;
   mintr_u mideleg, mie, mip;
   misa_u misa;
@@ -1551,13 +1546,13 @@ module csr (
 
   assign priv_o = mode;
   assign satp_o = satp;
-  assign mstatus_o.value = mstatus;
+  assign mstatus_o = mstatus;
 
   always_comb begin
     csr_val = '0;
     if (state == EXEC && csr_idx > 0) begin
       unique case (csr_idx)
-        MSTATUS: csr_val = mstatus.value;
+        MSTATUS: csr_val = mstatus;
         MISA: csr_val = misa.value;
         MEDELEG: csr_val = medeleg.value;
         MIDELEG: csr_val = mideleg.value;
@@ -1569,7 +1564,7 @@ module csr (
         MTVAL: csr_val = mtval;
         MIP: csr_val = mip.value;
         MHARTID: csr_val = mhartid;
-        SSTATUS: csr_val = mstatus.value;  //& `SSTATUS_READ_MASK;
+        SSTATUS: csr_val = mstatus;  //& `SSTATUS_READ_MASK;
         SIE: csr_val = mie.value & `SIE_MASK;
         STVEC: csr_val = stvec;
         SSCRATCH: csr_val = sscratch;
@@ -1600,18 +1595,18 @@ module csr (
               stval <= mmu_causeval;
               trap_target <= stvec;
               mode <= M_SUPER;
-              mstatus.fields.SPP <= 1'b0;
-              mstatus.fields.SPIE <= mstatus.fields.SIE;
-              mstatus.fields.SIE <= 1'b0;
+              mstatus.SPP <= 1'b0;
+              mstatus.SPIE <= mstatus.SIE;
+              mstatus.SIE <= 1'b0;
             end else begin
               mcause <= mmu_cause;
               mepc <= pc;
               trap_target <= mtvec;
               mtval <= mmu_causeval;
               mode <= M_MACHINE;
-              mstatus.fields.MPP <= mode;
-              mstatus.fields.MPIE <= mstatus.fields.MIE;
-              mstatus.fields.MIE <= 1'b0;
+              mstatus.MPP <= mode;
+              mstatus.MPIE <= mstatus.MIE;
+              mstatus.MIE <= 1'b0;
             end
           end
           M_SUPER: begin
@@ -1620,30 +1615,30 @@ module csr (
               trap_target <= stvec;
               sepc <= pc;
               stval <= mmu_causeval;
-              mstatus.fields.SPP <= 1'b1;
-              mstatus.fields.SPIE <= mstatus.fields.SIE;
-              mstatus.fields.SIE <= 1'b0;
+              mstatus.SPP <= 1'b1;
+              mstatus.SPIE <= mstatus.SIE;
+              mstatus.SIE <= 1'b0;
             end else begin
               mcause <= mmu_cause;
               trap_target <= mtvec;
               mepc <= pc;
               mtval <= mmu_causeval;
               mode <= M_MACHINE;
-              mstatus.fields.MPP <= mode;
-              mstatus.fields.MPIE <= mstatus.fields.MIE;
-              mstatus.fields.MIE <= 1'b0;
+              mstatus.MPP <= mode;
+              mstatus.MPIE <= mstatus.MIE;
+              mstatus.MIE <= 1'b0;
             end
           end
           M_MACHINE: begin
-            mstatus.fields.MPRV <= 1'b0;
+            mstatus.MPRV <= 1'b0;
             mcause <= mmu_cause;
             trap_target <= mtvec;
             mepc <= pc;
             mtval <= mmu_causeval;
             mode <= M_MACHINE;
-            mstatus.fields.MPP <= mode;
-            mstatus.fields.MPIE <= mstatus.fields.MIE;
-            mstatus.fields.MIE <= 1'b0;
+            mstatus.MPP <= mode;
+            mstatus.MPIE <= mstatus.MIE;
+            mstatus.MIE <= 1'b0;
           end
         endcase
 
@@ -1653,7 +1648,7 @@ module csr (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      mstatus.fields <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
+      mstatus <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
       misa.fields <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
       medeleg.value <= '0;
       mideleg.value <= '0;
@@ -1683,17 +1678,17 @@ module csr (
                 sepc <= pc;
                 trap_target <= stvec;
                 mode <= M_SUPER;
-                mstatus.fields.SPP <= 1'b0;
-                mstatus.fields.SPIE <= mstatus.fields.SIE;
-                mstatus.fields.SIE <= 1'b0;
+                mstatus.SPP <= 1'b0;
+                mstatus.SPIE <= mstatus.SIE;
+                mstatus.SIE <= 1'b0;
               end else begin
                 mcause <= EXC_ECALL_U_MODE;
                 mepc <= pc;
                 trap_target <= mtvec;
                 mode <= M_MACHINE;
-                mstatus.fields.MPP <= mode;
-                mstatus.fields.MPIE <= mstatus.fields.MIE;
-                mstatus.fields.MIE <= 1'b0;
+                mstatus.MPP <= mode;
+                mstatus.MPIE <= mstatus.MIE;
+                mstatus.MIE <= 1'b0;
               end
             end
             M_SUPER: begin
@@ -1701,17 +1696,17 @@ module csr (
                 scause <= EXC_ECALL_S_MODE;
                 trap_target <= stvec;
                 sepc <= pc;
-                mstatus.fields.SPP <= 1'b1;
-                mstatus.fields.SPIE <= mstatus.fields.SIE;
-                mstatus.fields.SIE <= 1'b0;
+                mstatus.SPP <= 1'b1;
+                mstatus.SPIE <= mstatus.SIE;
+                mstatus.SIE <= 1'b0;
               end else begin
                 mcause <= EXC_ECALL_S_MODE;
                 trap_target <= mtvec;
                 mepc <= pc;
                 mode <= M_MACHINE;
-                mstatus.fields.MPP <= mode;
-                mstatus.fields.MPIE <= mstatus.fields.MIE;
-                mstatus.fields.MIE <= 1'b0;
+                mstatus.MPP <= mode;
+                mstatus.MPIE <= mstatus.MIE;
+                mstatus.MIE <= 1'b0;
               end
             end
             M_MACHINE: begin
@@ -1719,33 +1714,33 @@ module csr (
               trap_target <= mtvec;
               mepc <= pc;
               mode <= M_MACHINE;
-              mstatus.fields.MPP <= mode;
-              mstatus.fields.MPIE <= mstatus.fields.MIE;
-              mstatus.fields.MIE <= 1'b0;
+              mstatus.MPP <= mode;
+              mstatus.MPIE <= mstatus.MIE;
+              mstatus.MIE <= 1'b0;
             end
           endcase
         end else if (sys_op == SYS_MRET) begin
-          `LOGI($sformatf("MRET: %0d mepc:%h", mstatus.fields.MPP, mepc));
+          `LOGI($sformatf("MRET: %0d mepc:%h", mstatus.MPP, mepc));
           // restore privilege
           mcause <= '0;
-          mstatus.fields.MPRV <= 1'b0;
-          mode <= priv_lvl_e'(mstatus.fields.MPP);
+          mstatus.MPRV <= 1'b0;
+          mode <= priv_lvl_e'(mstatus.MPP);
           trap_target <= mepc;
-          mstatus.fields.MPP <= '0;
-          mstatus.fields.MIE <= mstatus.fields.MPIE;
-          mstatus.fields.MPIE <= 1'b0;
+          mstatus.MPP <= '0;
+          mstatus.MIE <= mstatus.MPIE;
+          mstatus.MPIE <= 1'b0;
         end else if (sys_op == SYS_SRET) begin
           `LOGI("SRET");
           mcause <= '0;
-          mode <= mstatus.fields.SPP ? M_SUPER : M_USER;
+          mode <= mstatus.SPP ? M_SUPER : M_USER;
           trap_target <= sepc;
-          mstatus.fields.SPP <= '0;
-          mstatus.fields.SIE <= mstatus.fields.SPIE;
-          mstatus.fields.SPIE <= 1'b0;
+          mstatus.SPP <= '0;
+          mstatus.SIE <= mstatus.SPIE;
+          mstatus.SPIE <= 1'b0;
         end else if (sys_op >= SYS_CSRRW) begin
           `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
           unique case (csr_idx)
-            MSTATUS: mstatus.value <= (mstatus.value & ~`MSTATUS_WR_MASK) | (csr_wdata & `MSTATUS_WR_MASK);
+            MSTATUS: mstatus <= (mstatus & ~`MSTATUS_WR_MASK) | (csr_wdata & `MSTATUS_WR_MASK);
             MEDELEG: medeleg.value <= csr_wdata;
             MIDELEG: mideleg.value <= csr_wdata;
             MIE: mie.value <= (mie.value & ~`MIE_MASK) | (csr_wdata & `MIE_MASK);
@@ -1756,7 +1751,7 @@ module csr (
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
-            SSTATUS: mstatus.value <= (mstatus.value & ~`SSTATUS_WR_MASK) | (csr_wdata & `SSTATUS_WR_MASK);
+            SSTATUS: mstatus <= (mstatus & ~`SSTATUS_WR_MASK) | (csr_wdata & `SSTATUS_WR_MASK);
             SIE: mie.value <= (mie.value & ~`SIE_MASK) | (csr_wdata & `SIE_MASK);
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
@@ -1804,10 +1799,10 @@ module csr (
         // int m-mode
         interrupted <= 1'b1;
         trap_target <= '1;
-        if (mstatus.fields.MIE) begin
-          mstatus.fields.MPP <= mode;
-          mstatus.fields.MPIE <= mstatus.fields.MIE;
-          mstatus.fields.MIE <= 1'b0;
+        if (mstatus.MIE) begin
+          mstatus.MPP <= mode;
+          mstatus.MPIE <= mstatus.MIE;
+          mstatus.MIE <= 1'b0;
           mode <= M_MACHINE;
           mepc <= pc;
           mcause <= mintr2cause(m_intr);
@@ -1817,10 +1812,10 @@ module csr (
         // int s-mode
         interrupted <= 1'b1;
         trap_target <= '1;
-        if (mstatus.fields.SIE) begin
-          mstatus.fields.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
-          mstatus.fields.SPIE <= mstatus.fields.SIE;
-          mstatus.fields.SIE <= 1'b0;
+        if (mstatus.SIE) begin
+          mstatus.SPP <= (mode == M_USER ? 1'b0 : 1'b1);
+          mstatus.SPIE <= mstatus.SIE;
+          mstatus.SIE <= 1'b0;
           mode <= M_SUPER;
           sepc <= pc;
           scause <= sintr2cause(s_intr);
@@ -2131,7 +2126,7 @@ module mmu (
 
   input state_e state,
   input satp_t satp,
-  input mstatus_u mstatus,
+  input mstatus_t mstatus,
   input priv_lvl_e priv,
 
   // for instruction va translation
@@ -2309,14 +2304,14 @@ module mmu (
   logic [63:0] markad;
   always_comb begin
     lvl = priv;
-    if (priv == M_MACHINE && mstatus.fields.MPRV == 1) begin
-      lvl = priv_lvl_e'(mstatus.fields.MPP);
+    if (priv == M_MACHINE && mstatus.MPRV == 1) begin
+      lvl = priv_lvl_e'(mstatus.MPP);
     end
 
     isload   = mem_op > MEM_NONE && mem_op < MEM_SEP;
     dwalking = (satp.MODE == 8 && lvl < M_MACHINE);
-    dcheck   = (isload && (R || (mstatus.fields.MXR && X))) || (!isload && W);
-    lcheck   = (lvl == M_USER && U == 1) || (lvl == M_SUPER && (U == 0 || mstatus.fields.SUM));
+    dcheck   = (isload && (R || (mstatus.MXR && X))) || (!isload && W);
+    lcheck   = (lvl == M_USER && U == 1) || (lvl == M_SUPER && (U == 0 || mstatus.SUM));
 
     markad   = '0;
     if (!A) markad = markad | `PTE_A;
