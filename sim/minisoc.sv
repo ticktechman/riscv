@@ -613,12 +613,7 @@ typedef struct packed {
   logic         illegal_instruction;       // [2]    Illegal instruction
   logic         instruction_access_fault;  // [1] Instruction access fault
   logic         instruction_misaligned;    // [0] Instruction address misaligned
-} medeleg_rv64_t;
-
-typedef union packed {
-  medeleg_rv64_t fields;  // Access via bit-fields
-  logic [63:0]   value;   // Access as a whole 64-bit register
-} medeleg_u;
+} medeleg_t;
 
 typedef struct packed {
   logic [63:12] reserved_63_12;  // [63:12] Reserved / Designated for platform use
@@ -634,12 +629,7 @@ typedef struct packed {
   logic         reserved_2;      // [2]    Reserved
   logic         SSI;             // [1]  Supervisor software interrupt
   logic         reserved_0;      // [0]    Reserved
-} mintr_rv64_t;
-
-typedef union packed {
-  mintr_rv64_t fields;
-  logic [63:0] value;
-} mintr_u;
+} mintr_t;
 
 typedef struct packed {
   logic [63:62] MXL;
@@ -670,22 +660,13 @@ typedef struct packed {
   logic C;
   logic B;
   logic A;
-} misa_rv64_t;
-typedef struct packed {
-  misa_rv64_t  fields;
-  logic [63:0] value;
-} misa_u;
+} misa_t;
 
 typedef struct packed {
   logic [63:60] MODE;  // [63:60] Mode: Address translation mode (Sv39=8, Sv48=9, Sv57=10, Bare=0)
   logic [59:44] ASID;  // [59:44] ASID: Address Space Identifier
   logic [43:0]  PPN;   // [43:0]  PPN: Physical Page Number of the root page table
 } satp_t;
-
-// typedef union packed {
-//   satp_rv64_t  fields;
-//   logic [63:0] value;
-// } satp_u;
 
 typedef struct packed {
   logic         N;               // [63] N
@@ -702,14 +683,9 @@ typedef struct packed {
   logic         R;               // [1]    R: Read permission
   logic         V;               // [0]    V: Valid bit
 } pte_t;
-// typedef union packed {
-//   pte_sv39_t   fields;
-//   logic [63:0] value;
-// } pte_u;
 
 `define PTE_A 64'h40
 `define PTE_D 64'h80
-
 
 typedef enum logic [1:0] {
   M_USER = 2'b00,
@@ -1535,9 +1511,9 @@ module csr (
   `define MIP_MASK 64'h0aaa
 
   mstatus_t mstatus;
-  medeleg_u medeleg;
-  mintr_u mideleg, mie, mip;
-  misa_u misa;
+  medeleg_t medeleg;
+  mintr_t mideleg, mie, mip;
+  misa_t misa;
 
   reg_t mtvec, mtval, mepc, mcause, mhartid, mscratch;
   reg_t stvec, stval, sepc, scause, sscratch, satp;
@@ -1553,25 +1529,25 @@ module csr (
     if (state == EXEC && csr_idx > 0) begin
       unique case (csr_idx)
         MSTATUS: csr_val = mstatus;
-        MISA: csr_val = misa.value;
-        MEDELEG: csr_val = medeleg.value;
-        MIDELEG: csr_val = mideleg.value;
-        MIE: csr_val = mie.value;
+        MISA: csr_val = misa;
+        MEDELEG: csr_val = medeleg;
+        MIDELEG: csr_val = mideleg;
+        MIE: csr_val = mie;
         MTVEC: csr_val = mtvec;
         MSCRATCH: csr_val = mscratch;
         MEPC: csr_val = mepc;
         MCAUSE: csr_val = mcause;
         MTVAL: csr_val = mtval;
-        MIP: csr_val = mip.value;
+        MIP: csr_val = mip;
         MHARTID: csr_val = mhartid;
         SSTATUS: csr_val = mstatus;  //& `SSTATUS_READ_MASK;
-        SIE: csr_val = mie.value & `SIE_MASK;
+        SIE: csr_val = mie & `SIE_MASK;
         STVEC: csr_val = stvec;
         SSCRATCH: csr_val = sscratch;
         SEPC: csr_val = sepc;
         SCAUSE: csr_val = scause;
         STVAL: csr_val = stval;
-        SIP: csr_val = mip.value & `SIP_MASK;
+        SIP: csr_val = mip & `SIP_MASK;
         SATP: csr_val = satp;
         default: ;
       endcase
@@ -1589,7 +1565,7 @@ module csr (
         `LOGI($sformatf("MMU exc mode: %0d cause: %0d", mode, mmu_cause));
         unique case (mode)
           M_USER: begin
-            if (medeleg.fields.ecall_from_u_mode) begin
+            if (medeleg.ecall_from_u_mode) begin
               scause <= mmu_cause;
               sepc <= pc;
               stval <= mmu_causeval;
@@ -1610,7 +1586,7 @@ module csr (
             end
           end
           M_SUPER: begin
-            if (medeleg.fields.ecall_from_s_mode) begin
+            if (medeleg.ecall_from_s_mode) begin
               scause <= mmu_cause;
               trap_target <= stvec;
               sepc <= pc;
@@ -1649,16 +1625,16 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mstatus <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
-      misa.fields <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
-      medeleg.value <= '0;
-      mideleg.value <= '0;
+      misa <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
+      medeleg <= '0;
+      mideleg <= '0;
       mtvec <= '0;
       mtval <= '0;
       mscratch <= '0;
       mepc <= '0;
       mcause <= '0;
-      mie.value <= '0;
-      mip.value <= '0;
+      mie <= '0;
+      mip <= '0;
       mhartid <= '0;
       mode <= M_MACHINE;
       stvec <= '0;
@@ -1673,7 +1649,7 @@ module csr (
           `LOGI("ECALL");
           unique case (mode)
             M_USER: begin
-              if (medeleg.fields.ecall_from_u_mode) begin
+              if (medeleg.ecall_from_u_mode) begin
                 scause <= EXC_ECALL_U_MODE;
                 sepc <= pc;
                 trap_target <= stvec;
@@ -1692,7 +1668,7 @@ module csr (
               end
             end
             M_SUPER: begin
-              if (medeleg.fields.ecall_from_s_mode) begin
+              if (medeleg.ecall_from_s_mode) begin
                 scause <= EXC_ECALL_S_MODE;
                 trap_target <= stvec;
                 sepc <= pc;
@@ -1741,24 +1717,24 @@ module csr (
           `LOGI($sformatf("write CSR[%03h]=%h", csr_idx, csr_wdata));
           unique case (csr_idx)
             MSTATUS: mstatus <= (mstatus & ~`MSTATUS_WR_MASK) | (csr_wdata & `MSTATUS_WR_MASK);
-            MEDELEG: medeleg.value <= csr_wdata;
-            MIDELEG: mideleg.value <= csr_wdata;
-            MIE: mie.value <= (mie.value & ~`MIE_MASK) | (csr_wdata & `MIE_MASK);
+            MEDELEG: medeleg <= csr_wdata;
+            MIDELEG: mideleg <= csr_wdata;
+            MIE: mie <= (mie & ~`MIE_MASK) | (csr_wdata & `MIE_MASK);
             MTVEC: mtvec <= csr_wdata;
             MSCRATCH: mscratch <= csr_wdata;
-            MIP: mip.value <= (mip.value & ~`MIP_MASK) | (csr_wdata & `MIP_MASK);
+            MIP: mip <= (mip & ~`MIP_MASK) | (csr_wdata & `MIP_MASK);
             MEPC: mepc <= csr_wdata;
             MCAUSE: mcause <= csr_wdata;
             MTVAL: mtval <= csr_wdata;
 
             SSTATUS: mstatus <= (mstatus & ~`SSTATUS_WR_MASK) | (csr_wdata & `SSTATUS_WR_MASK);
-            SIE: mie.value <= (mie.value & ~`SIE_MASK) | (csr_wdata & `SIE_MASK);
+            SIE: mie <= (mie & ~`SIE_MASK) | (csr_wdata & `SIE_MASK);
             STVEC: stvec <= csr_wdata;
             SSCRATCH: sscratch <= csr_wdata;
             SEPC: sepc <= csr_wdata;
             SCAUSE: scause <= csr_wdata;
             STVAL: stval <= csr_wdata;
-            SIP: mip.value <= (mip.value & ~`SIP_MASK) | (csr_wdata & `SIP_MASK);
+            SIP: mip <= (mip & ~`SIP_MASK) | (csr_wdata & `SIP_MASK);
             SATP: satp <= csr_wdata;
             default: ;
           endcase
@@ -1771,31 +1747,31 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (mideleg.fields.STI) begin
-        mip.fields.STI <= irq_timer;
+      if (mideleg.STI) begin
+        mip.STI <= irq_timer;
       end else begin
-        mip.fields.MTI <= irq_timer;
+        mip.MTI <= irq_timer;
       end
-      if (mideleg.fields.SEI) begin
-        mip.fields.SEI <= irq_external;
+      if (mideleg.SEI) begin
+        mip.SEI <= irq_external;
       end else begin
-        mip.fields.MEI <= irq_external;
+        mip.MEI <= irq_external;
       end
     end
   end
 
-  mintr_u m_intr, s_intr;
+  mintr_t m_intr, s_intr;
   always_comb begin
-    m_intr.value = mip.value & mie.value & (~mideleg.value);
-    s_intr.value = mip.value & mie.value & (mideleg.value);
+    m_intr = mip & mie & (~mideleg);
+    s_intr = mip & mie & (mideleg);
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
       interrupted <= 1'b0;
-      // `LOGI($sformatf("int m=%h, s=%h", m_intr.value, s_intr.value));
-      if (state == WB && m_intr.value != reg_t'(0)) begin
+      // `LOGI($sformatf("int m=%h, s=%h", m_intr, s_intr));
+      if (state == WB && m_intr != reg_t'(0)) begin
         // int m-mode
         interrupted <= 1'b1;
         trap_target <= '1;
@@ -1808,7 +1784,7 @@ module csr (
           mcause <= mintr2cause(m_intr);
           trap_target <= mtvec;
         end
-      end else if (state == WB && s_intr.value != reg_t'(0)) begin
+      end else if (state == WB && s_intr != reg_t'(0)) begin
         // int s-mode
         interrupted <= 1'b1;
         trap_target <= '1;
@@ -1825,20 +1801,20 @@ module csr (
     end
   end
 
-  function automatic mcause_e mintr2cause(mintr_u u);
-    if (u.fields.MEI) begin
+  function automatic mcause_e mintr2cause(mintr_t u);
+    if (u.MEI) begin
       return INTR_MACHINE_EXT;
-    end else if (u.fields.MSI) begin
+    end else if (u.MSI) begin
       return INTR_MACHINE_SW;
     end else begin
       return INTR_MACHINE_TMR;
     end
   endfunction
 
-  function automatic mcause_e sintr2cause(mintr_u u);
-    if (u.fields.SEI) begin
+  function automatic mcause_e sintr2cause(mintr_t u);
+    if (u.SEI) begin
       return INTR_SUPERVISOR_EXT;
-    end else if (u.fields.SSI) begin
+    end else if (u.SSI) begin
       return INTR_SUPERVISOR_SW;
     end else begin
       return INTR_SUPERVISOR_TMR;
