@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -675,8 +675,8 @@ typedef struct packed {
 
 typedef struct packed {
   logic         N;               // [63] N
-  logic [62:61] PBMT;            // [62:61] PPN: Physical Page Number
-  logic [60:54] reserved_54_60;  // [60:54] PPN: Physical Page Number
+  logic [62:61] PBMT;            // [62:61] PBMT
+  logic [60:54] reserved_54_60;  // [60:54] reserved
   logic [53:10] PPN;             // [53:10] PPN: Physical Page Number
   logic [9:8]   RSW;             // [9:8]  RSW: Reserved for use by supervisor software
   logic         D;               // [7]    D: Dirty bit
@@ -2187,6 +2187,16 @@ module mmu (
       A = thiz.A; \
       D = thiz.D; \
    end
+  `define cpy_flags(thiz, that) begin \
+      thiz.V <= that.V; \
+      thiz.R <= that.R; \
+      thiz.W <= that.W; \
+      thiz.X <= that.X; \
+      thiz.U <= that.U; \
+      thiz.A <= that.A; \
+      thiz.D <= that.D; \
+   end
+
   `define set_vpn(thiz) begin \
       vpn2 = thiz[38:30]; \
       vpn1 = thiz[29:21]; \
@@ -2329,13 +2339,7 @@ module mmu (
                   itlb.ASID <= satp.ASID;
                   itlb.VPN <= va_pc[38:12];
                   itlb.PPN <= pte.PPN;
-                  itlb.V <= pte.V;
-                  itlb.G <= pte.G;
-                  itlb.U <= pte.U;
-                  itlb.X <= pte.X;
-                  itlb.W <= pte.W;
-                  itlb.R <= pte.R;
-                  itlb.D <= pte.D;
+                  `cpy_flags(itlb, pte)
                   itlb.A <= 1;
                 end
 
@@ -2480,12 +2484,7 @@ module mmu (
                   dtlb.ASID <= satp.ASID;
                   dtlb.VPN <= va_data[38:12];
                   dtlb.PPN <= pte.PPN;
-                  dtlb.V <= pte.V;
-                  dtlb.G <= pte.G;
-                  dtlb.U <= pte.U;
-                  dtlb.X <= pte.X;
-                  dtlb.W <= pte.W;
-                  dtlb.R <= pte.R;
+                  `cpy_flags(dtlb, pte)
                   dtlb.A <= 1;
                 end
                 if (markad != 0) begin
