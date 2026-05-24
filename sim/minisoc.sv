@@ -2375,7 +2375,7 @@ module mmu (
     end
 
     isload   = mem_op > MEM_NONE && mem_op < MEM_SEP;
-    dwalking = (satp.MODE == 8 && lvl < M_MACHINE);
+    dwalking = (satp.MODE == 8 && lvl < M_MACHINE && mem_op != MEM_NONE);
     dcheck   = (isload && (R || (mstatus.MXR && X))) || (!isload && W);
     lcheck   = (lvl == M_USER && U == 1) || (lvl == M_SUPER && (U == 0 || mstatus.SUM));
 
