@@ -1856,8 +1856,7 @@ endmodule
 // sram
 //-----------------------------------
 module sram #(
-  parameter SIZE = 32 * 1024,
-  parameter addr_t BASE = 64'h0000_0000_8000_2000
+  parameter reg_t SIZE = 32 * 1024
 ) (
   input logic clk,
   input logic rst_n,
@@ -1883,8 +1882,11 @@ module sram #(
   input addr_t pc,
   output logic [31:0] instr
 );
-  localparam int unsigned BITS = $clog2(SIZE);
+  localparam reg_t BITS = reg_t'($clog2(SIZE));
   logic enable;
+
+  addr_t BASE = 64'h0000_0000_8000_2000;
+  reg_t SZ = SIZE;
 
   logic [7:0] ram[SIZE];
   addr_t offset;
@@ -1906,15 +1908,18 @@ module sram #(
       if (fd != 0) begin
         $fclose(fd);
         $readmemh({hex_file, ".data"}, ram);
-        $display("ram load %s bits:%0d", {hex_file, ".data"}, BITS);
+        $display("ram load %s ", {hex_file, ".data"});
       end
     end
+    $value$plusargs("data.base=%h", BASE);
+    $value$plusargs("data.size=%h", SZ);
+    `LOGI($sformatf("base:%h size:%h", BASE, SZ));
   end
-  assign enable = (mem_addr >= BASE && mem_addr < BASE + SIZE) && (data_ready) && !mmu_error;
+  assign enable = (mem_addr >= BASE && mem_addr < BASE + SZ) && (data_ready) && !mmu_error;
   assign offset = mem_addr - BASE;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      for (int i = 0; i < SIZE; i++) begin
+      for (reg_t i = 0; i < SIZE; i++) begin
         // ram[i] <= '0;
       end
     end else begin
@@ -1944,10 +1949,10 @@ module sram #(
   always_comb begin
     pte_readed.value = '0;
     pte_offset = pte_addr - BASE;
-    if (pte_req && (pte_addr >= BASE && pte_addr < BASE + SIZE)) begin
+    if (pte_req && (pte_addr >= BASE && pte_addr < BASE + SZ)) begin
       pte_readed.value = `D2R(ram, pte_offset[BITS-1:0]);
     end
-    if (pte_wr_req && (pte_addr >= BASE && pte_addr < BASE + SIZE)) begin
+    if (pte_wr_req && (pte_addr >= BASE && pte_addr < BASE + SZ)) begin
       pte_offset = pte_addr - BASE;
     end
   end
@@ -1956,7 +1961,7 @@ module sram #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (pte_wr_req && (pte_wr_addr >= BASE && pte_wr_addr < BASE + SIZE)) begin
+      if (pte_wr_req && (pte_wr_addr >= BASE && pte_wr_addr < BASE + SZ)) begin
         `LOGI($sformatf("write pte %h: %h", pte_wr_addr, pte_wr_data.value));
         for (logic [BITS-1:0] i = 0; i < 8; i++) ram[pte_offset[BITS-1:0]+i] <= pte_wr_data.value[8*i+:8];
       end
@@ -1982,7 +1987,7 @@ module sram #(
   addr_t ioffset;
   always_comb begin
     ioffset = pc - BASE;
-    ienable = (pc >= BASE && pc < BASE + SIZE);
+    ienable = (pc >= BASE && pc < BASE + SZ);
     if (ienable) begin
       instr = `WU2I(ram, ioffset[BITS-1:0]);
     end else begin
@@ -1998,19 +2003,22 @@ endmodule
 //-----------------------------------
 module rom #(
   parameter string HEX = "",
-  parameter reg_t BASE = 64'h0000_0000_8000_0000,
-  parameter reg_t MASK = 64'h0000_0000_0000_0fff,
-  parameter int unsigned SIZE = 4096
+  parameter reg_t SIZE = 32 * 1024
 ) (
   input logic clk,
   input logic rst_n,
   input addr_t pc,
   output logic [31:0] instr
 );
-  localparam int unsigned ROMSIZE = SIZE / 4;
-  localparam int unsigned BITS = $clog2(ROMSIZE);
+
+  addr_t BASE = 64'h0000_0000_8000_0000;
+  reg_t SZ = SIZE;
+
+  localparam reg_t ROMSIZE = SIZE / 4;
+  localparam reg_t BITS = reg_t'($clog2(ROMSIZE));
   logic [31:0] data[ROMSIZE];
-  initial begin
+
+  initial begin : init
     string hex_file;
     $value$plusargs("hex_file=%s", hex_file);
     if (hex_file != "") begin
@@ -2020,17 +2028,20 @@ module rom #(
       $readmemh(HEX, data);
       $display($sformatf("load %s", HEX));
     end
+
+    $value$plusargs("text_init.base=%h", BASE);
+    $value$plusargs("text_init.size=%h", SZ);
+    `LOGI($sformatf("base:%h size:%h", BASE, SZ));
   end
 
   logic valid;
 
   always_comb begin
-    valid = (pc & ~MASK) == BASE;
+    valid = (pc >= BASE && pc < BASE + SZ);
     if (valid) begin
       instr = data[pc[BITS+1:2]];
     end else begin
       instr = '0;
-      // `LOGE($sformatf("INVALID PC: %h", pc));
     end
   end
 
@@ -2080,11 +2091,17 @@ module rvtest (
 );
 
   addr_t BASE = 64'h0000_0000_8000_1000;
-  addr_t MASK = 64'hfff;
+  addr_t SIZE = 64'h1000;
+
+  initial begin
+    $value$plusargs("tohost.base=%h", BASE);
+    $value$plusargs("tohost.size=%h", SIZE);
+    `LOGI($sformatf("base:%h size:%h", BASE, SIZE));
+  end
 
   logic enable;
   addr_t offset;
-  assign enable = ((addr & ~MASK) == BASE && state == MEMACCESS);
+  assign enable = ((addr >= BASE && addr < BASE + SIZE) && state == MEMACCESS);
   assign offset = addr - BASE;
 
   always_ff @(posedge clk or negedge rst_n) begin

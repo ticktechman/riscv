@@ -10,6 +10,24 @@
 
 HEX_FILES := $(wildcard $(CURDIR)/riscv-tests/*.hex)
 
+define gen-args
+$(eval SIM_ARGS := )
+
+$(eval _DATA_SIZE := $(shell riscv-none-elf-objdump -h $(1) | grep '\.data' | awk '{print $$3}'))
+$(eval _DATA_BASE := $(shell riscv-none-elf-objdump -h $(1) | grep '\.data' | awk '{print $$4}'))
+$(eval SIM_ARGS += $(if $(strip $(_DATA_SIZE)),$(if $(strip $(_DATA_BASE)),+data.size=$(_DATA_SIZE) +data.base=$(_DATA_BASE))))
+
+$(eval _TEXT_INIT_SIZE := $(shell riscv-none-elf-objdump -h $(1) | grep '\.text\.init' | awk '{print $$3}'))
+$(eval _TEXT_INIT_BASE := $(shell riscv-none-elf-objdump -h $(1) | grep '\.text\.init' | awk '{print $$4}'))
+$(eval SIM_ARGS += $(if $(strip $(_TEXT_INIT_SIZE)),$(if $(strip $(_TEXT_INIT_BASE)),+text_init.size=$(_TEXT_INIT_SIZE) +text_init.base=$(_TEXT_INIT_BASE))))
+
+$(eval _TOHOST_SIZE := $(shell riscv-none-elf-objdump -h $(1) | grep '\.tohost' | awk '{print $$3}'))
+$(eval _TOHOST_BASE := $(shell riscv-none-elf-objdump -h $(1) | grep '\.tohost' | awk '{print $$4}'))
+$(eval SIM_ARGS += $(if $(strip $(_TOHOST_SIZE)),$(if $(strip $(_TOHOST_BASE)),+tohost.size=$(_TOHOST_SIZE) +tohost.base=$(_TOHOST_BASE))))
+
+$(eval SIM_ARGS += +hex_file=$(1).hex)
+endef
+
 V_FLAGS = --timing --cc --exe --trace --build -I../
 SV_SRCS = \
 		top.sv \
@@ -31,11 +49,16 @@ all: $(SIM)
 
 mini: obj_dir/Vmini
 mini.run: obj_dir/Vmini
-	@$< +verilator+quiet +hex_file=$(CURDIR)/riscv-tests/rv64si-p-dirty.hex
-mini.test: obj_dir/Vmini
-	@$(foreach one, $(HEX_FILES), \
-		$< +verilator+quiet +hex_file=$(one); \
-	)
+	$(call gen-args,$(CURDIR)/riscv-tests/rv64si-p-dirty)
+	$< +verilator+quiet $(SIM_ARGS)
+
+mini.test: $(HEX_FILES:.hex=.run)
+%.run: obj_dir/Vmini
+	$(call gen-args,$*)
+	-@obj_dir/Vmini +verilator+quiet $(SIM_ARGS)
+
+
+.PHONY: mini.test
 
 $(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
