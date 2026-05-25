@@ -2179,34 +2179,57 @@ module mmu (
   } mmu_state_e;
 
   `define set_flags(thiz) begin \
-      V = thiz.V; \
-      R = thiz.R; \
-      W = thiz.W; \
-      X = thiz.X; \
-      U = thiz.U; \
-      A = thiz.A; \
-      D = thiz.D; \
-   end
-  `define cpy_flags(thiz, that) begin \
-      thiz.V <= that.V; \
-      thiz.R <= that.R; \
-      thiz.W <= that.W; \
-      thiz.X <= that.X; \
-      thiz.U <= that.U; \
-      thiz.A <= that.A; \
-      thiz.D <= that.D; \
-   end
+    V = thiz.V; \
+    R = thiz.R; \
+    W = thiz.W; \
+    X = thiz.X; \
+    U = thiz.U; \
+    A = thiz.A; \
+    D = thiz.D; \
+  end
 
   `define set_vpn(thiz) begin \
-      vpn2 = thiz[38:30]; \
-      vpn1 = thiz[29:21]; \
-      vpn0 = thiz[20:12]; \
-   end
+    vpn2 = thiz[38:30]; \
+    vpn1 = thiz[29:21]; \
+    vpn0 = thiz[20:12]; \
+  end
+
+  `define cache_tlb(tlb, va) begin \
+    tlb.PGSIZE <= pgsize; \
+    tlb.ASID <= satp.ASID; \
+    tlb.VPN <= va[38:12]; \
+    tlb.PPN <= pte.PPN; \
+    tlb.V <= pte.V; \
+    tlb.R <= pte.R; \
+    tlb.W <= pte.W; \
+    tlb.X <= pte.X; \
+    tlb.U <= pte.U; \
+    tlb.D <= pte.D; \
+    tlb.A <= 1; \
+  end
+
+  `define build_pa_by_pte(pa, pte, va) begin \
+    unique case (pgsize) \
+      PG_1G:   pa <= {8'b0, pte.PPN[53:28], va[29:0]}; \
+      PG_2M:   pa <= {8'b0, pte.PPN[53:19], va[20:0]}; \
+      PG_4K:   pa <= {8'b0, pte.PPN[53:10], va[11:0]}; \
+      default: pa <= '0; \
+    endcase \
+  end
+
+  `define build_pa_by_tlb(pa, tlb, va) begin \
+    unique case (pgsize) \
+      PG_1G:   pa <= {8'b0, tlb.PPN[43:18], va[29:0]}; \
+      PG_2M:   pa <= {8'b0, tlb.PPN[43:9], va[20:0]};  \
+      PG_4K:   pa <= {8'b0, tlb.PPN[43:0], va[11:0]};  \
+      default: pa <= '0; \
+    endcase \
+  end
 
   mmu_state_e mmu_state;
   tlb_entry_t itlb, dtlb;
   pagesize_e pgsize;
-  logic iready, dready, ialigned, ihit, dhit;
+  logic iready, dready, aligned, ihit, dhit;
   logic leaf, icheck, iwalking;
   logic V, R, W, X, U, A, D;
   logic [8:0] vpn0, vpn1, vpn2;
@@ -2239,133 +2262,8 @@ module mmu (
     end
   end
 
-  // instruction page mapping
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      mmu_state <= IDLE;
-      iready <= 1'b0;
-      itlb <= '0;
-      dtlb <= '0;
-    end else begin
-      iready <= 1'b0;
-      if (tlb_invalid) begin
-        itlb.V <= 0;
-      end
-      if (state == FETCH) begin
-        if (!iwalking) begin
-          `LOGI($sformatf("NO iwalking va:%h", va_pc));
-          pa_pc   <= va_pc;
-          iready  <= 1'b1;
-          pte_req <= 1'b0;
-        end else begin
-          iready <= 1'b0;
-          unique case (mmu_state)
-            IDLE: begin
-              if (ihit) begin
-                `LOGI("ihit");
-                ialigned <= 1;
-                mmu_state <= CHKPERM;
-                pgsize <= itlb.PGSIZE;
-              end else begin
-                ialigned  <= 1;
-                mmu_state <= LDPGD;
-                pte_req   <= 1'b1;
-                pte_addr  <= {8'h00, satp.PPN, 12'(vpn2 << 3)};
-              end
-            end
-            LDPGD: begin
-              if (pte_ready) begin
-                `LOGPTE("ipgd", pte);
-                pte_req <= 1'b0;
-                if (!V || leaf) begin
-                  mmu_state <= CHKPERM;
-                  pgsize <= PG_1G;
-                  ialigned <= (pte.PPN & 44'h3ffff) == 0;
-                end else begin
-                  pte_req   <= 1'b1;
-                  mmu_state <= LDPMD;
-                  pte_addr  <= {8'h00, pte.PPN, 12'(vpn1 << 3)};
-                end
-              end
-            end
-            LDPMD: begin
-              if (pte_ready) begin
-                `LOGPTE("ipmd", pte);
-                pte_req <= 1'b0;
-                if (!V || leaf) begin
-                  mmu_state <= CHKPERM;
-                  pgsize <= PG_2M;
-                  ialigned <= (pte.PPN & 44'h1ff) == 0;
-                end else begin
-                  pte_req   <= 1'b1;
-                  mmu_state <= LDPTE;
-                  pte_addr  <= {8'h00, pte.PPN, 12'(vpn0 << 3)};
-                end
-              end
-            end
-            LDPTE: begin
-              if (pte_ready) begin
-                `LOGPTE("ipte", pte);
-                pte_req <= 1'b0;
-                mmu_state <= CHKPERM;
-                pgsize <= PG_4K;
-              end
-            end
-            CHKPERM: begin
-              mmu_state <= DONE;
-              iready <= 1'b1;
-              if (!V || !X || !icheck || !ialigned) begin
-                error <= 1'b1;
-                cause <= EXC_INSTR_PAGE_FAULT;
-                causeval <= va_pc;
-              end else begin
-                // build PA
-                if (ihit) begin
-                  unique case (pgsize)
-                    PG_1G:   pa_pc <= {8'b0, itlb.PPN[43:18], va_pc[29:0]};
-                    PG_2M:   pa_pc <= {8'b0, itlb.PPN[43:9], va_pc[20:0]};
-                    PG_4K:   pa_pc <= {8'b0, itlb.PPN[43:0], va_pc[11:0]};
-                    default: pa_pc <= '0;
-                  endcase
-                end else begin
-                  unique case (pgsize)
-                    PG_1G:   pa_pc <= {8'b0, pte.PPN[53:28], va_pc[29:0]};
-                    PG_2M:   pa_pc <= {8'b0, pte.PPN[53:19], va_pc[20:0]};
-                    PG_4K:   pa_pc <= {8'b0, pte.PPN[53:10], va_pc[11:0]};
-                    default: pa_pc <= '0;
-                  endcase
-                  // cache tlb
-                  itlb.PGSIZE <= pgsize;
-                  itlb.ASID <= satp.ASID;
-                  itlb.VPN <= va_pc[38:12];
-                  itlb.PPN <= pte.PPN;
-                  `cpy_flags(itlb, pte)
-                  itlb.A <= 1;
-                end
-
-                // mark A flag
-                if (A == 0) begin
-                  pte_wr_req  <= 1'b1;
-                  pte_wr_data <= pte | `PTE_A;
-                  pte_wr_addr <= pte_addr;
-                end
-              end
-            end
-            DONE: begin
-              error <= 1'b0;
-              iready <= 1'b0;
-              ialigned <= 1'b1;
-              mmu_state <= IDLE;
-              pte_wr_req <= 1'b0;
-            end
-          endcase
-        end
-      end
-    end
-  end
-
   // data page mapping
-  logic isload, dwalking, dcheck, lcheck, daligned;
+  logic isload, isstore, dwalking, dcheck, lcheck, daligned;
   priv_lvl_e lvl;
   logic [63:0] markad;
   always_comb begin
@@ -2375,117 +2273,137 @@ module mmu (
     end
 
     isload   = mem_op > MEM_NONE && mem_op < MEM_SEP;
-    dwalking = (satp.MODE == 8 && lvl < M_MACHINE && mem_op != MEM_NONE);
-    dcheck   = (isload && (R || (mstatus.MXR && X))) || (!isload && W);
+    isstore  = mem_op > MEM_SEP && mem_op <= SD_SD;
+    dwalking = (satp.MODE == 8 && lvl < M_MACHINE && mem_op != MEM_NONE && state == MEMACCESS);
+    dcheck   = (isload && (R || (mstatus.MXR && X))) || (isstore && W);
     lcheck   = (lvl == M_USER && U == 1) || (lvl == M_SUPER && (U == 0 || mstatus.SUM));
 
     markad   = '0;
     if (!A) markad = markad | `PTE_A;
-    if (!isload && !D) markad = markad | `PTE_D;
+    if (isstore && !D) markad = markad | `PTE_D;
   end
 
+  // instruction page mapping
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      mmu_state <= IDLE;
+      iready <= 1'b0;
       dready <= 1'b0;
+      itlb <= '0;
+      dtlb <= '0;
     end else begin
+      iready <= 1'b0;
       dready <= 1'b0;
       if (tlb_invalid) begin
+        itlb.V <= 0;
         dtlb.V <= 0;
       end
-      if (state == MEMACCESS) begin
-        if (!dwalking) begin
-          pa_data <= va_data;
-          dready  <= 1'b1;
-          `LOGI($sformatf("No dwalking: va:%h", va_data));
-          pte_req <= 1'b0;
-        end else begin
-          unique case (mmu_state)
-            IDLE: begin
-              if (dhit) begin
-                `LOGI("dtlb hit");
-                daligned <= 1'b1;
-                dready <= 1'b0;
-                pte_req <= 1'b0;
-                pte_wr_req <= 1'b0;
-                mmu_state <= CHKPERM;
-              end else begin
-                daligned <= 1'b1;
-                dready <= 1'b0;
-                mmu_state <= LDPGD;
-                pte_req <= 1'b1;
-                pte_wr_req <= 1'b0;
-                pte_addr <= {8'h00, satp.PPN, 12'(vpn2 << 3)};
-              end
+
+      if (state == FETCH && !iwalking) begin
+        `LOGI($sformatf("NO iwalking va:%h", va_pc));
+        pa_pc  <= va_pc;
+        iready <= 1'b1;
+      end
+      if (state == MEMACCESS && !dwalking) begin
+        pa_data <= va_data;
+        dready  <= 1'b1;
+      end
+
+      if (dwalking || iwalking) begin
+        unique case (mmu_state)
+          IDLE: begin
+            aligned <= 1;
+            if (iwalking && ihit) begin
+              `LOGI("ihit");
+              mmu_state <= CHKPERM;
+              pgsize <= itlb.PGSIZE;
+            end else if (dwalking && dhit) begin
+              `LOGI("dhit");
+              mmu_state <= CHKPERM;
+              pgsize <= dtlb.PGSIZE;
+            end else begin
+              mmu_state <= LDPGD;
+              pte_req   <= 1'b1;
+              pte_addr  <= {8'h00, satp.PPN, 12'(vpn2 << 3)};
             end
-            LDPGD: begin
-              if (pte_ready) begin
-                pte_req <= 1'b0;
-                `LOGPTE("dpgd", pte);
-                if (!V || leaf) begin
-                  mmu_state <= CHKPERM;
-                  pgsize <= PG_1G;
-                  daligned <= (pte.PPN & 44'h3ffff) == 0;
-                end else begin
-                  pte_req   <= 1'b1;
-                  mmu_state <= LDPMD;
-                  pte_addr  <= {8'h00, pte.PPN, 12'(vpn1 << 3)};
-                end
-              end
-            end
-            LDPMD: begin
-              if (pte_ready) begin
-                pte_req <= 1'b0;
-                `LOGPTE("dpmd", pte);
-                if (!V || leaf) begin
-                  mmu_state <= CHKPERM;
-                  pgsize <= PG_2M;
-                  daligned <= (pte.PPN & 44'h1ff) == 0;
-                end else begin
-                  pte_req   <= 1'b1;
-                  mmu_state <= LDPTE;
-                  pte_addr  <= {8'h00, pte.PPN, 12'(vpn0 << 3)};
-                end
-              end
-            end
-            LDPTE: begin
-              if (pte_ready) begin
-                `LOGPTE("dpte", pte);
-                pte_req <= 1'b0;
-                mmu_state <= CHKPERM;
-                pgsize <= PG_4K;
-              end
-            end
-            CHKPERM: begin
+          end
+          LDPGD: begin
+            if (pte_ready) begin
+              `LOGPTE("pgd", pte);
               pte_req <= 1'b0;
-              `LOGI($sformatf("D CHKPERM: daligned:%b dcheck:%b lcheck:%b", daligned, dcheck, lcheck));
-              if (V == 0 || !daligned || !dcheck || !lcheck) begin
-                error <= 1'b1;
-                cause <= isload ? EXC_LOAD_PAGE_FAULT : EXC_STORE_PAGE_FAULT;
-                causeval <= va_data;
-                mmu_state <= DONE;
-                dready <= 1'b1;
+              if (!V || leaf) begin
+                mmu_state <= CHKPERM;
+                pgsize <= PG_1G;
+                aligned <= (pte.PPN & 44'h3ffff) == 0;
               end else begin
+                pte_req   <= 1'b1;
+                mmu_state <= LDPMD;
+                pte_addr  <= {8'h00, pte.PPN, 12'(vpn1 << 3)};
+              end
+            end
+          end
+          LDPMD: begin
+            if (pte_ready) begin
+              `LOGPTE("pmd", pte);
+              pte_req <= 1'b0;
+              if (!V || leaf) begin
+                mmu_state <= CHKPERM;
+                pgsize <= PG_2M;
+                aligned <= (pte.PPN & 44'h1ff) == 0;
+              end else begin
+                pte_req   <= 1'b1;
+                mmu_state <= LDPTE;
+                pte_addr  <= {8'h00, pte.PPN, 12'(vpn0 << 3)};
+              end
+            end
+          end
+          LDPTE: begin
+            if (pte_ready) begin
+              `LOGPTE("pte", pte);
+              pte_req <= 1'b0;
+              mmu_state <= CHKPERM;
+              pgsize <= PG_4K;
+            end
+          end
+          CHKPERM: begin
+            mmu_state <= DONE;
+            if (iwalking && (!V || !X || !icheck || !aligned)) begin
+              error <= 1'b1;
+              cause <= EXC_INSTR_PAGE_FAULT;
+              causeval <= va_pc;
+              iready <= 1'b1;
+            end else if (dwalking && (!V || !aligned || !dcheck || !lcheck)) begin
+              error <= 1'b1;
+              cause <= isload ? EXC_LOAD_PAGE_FAULT : EXC_STORE_PAGE_FAULT;
+              causeval <= va_data;
+              dready <= 1'b1;
+            end else begin
+              // build PA
+              if (iwalking) begin
+                iready <= 1'b1;
+                if (ihit) begin
+                  `build_pa_by_tlb(pa_pc, itlb, va_pc)
+                end else begin
+                  `build_pa_by_pte(pa_pc, pte, va_pc)
+                  `cache_tlb(itlb, va_pc)
+
+                  // mark A flag
+                  if (A == 0) begin
+                    pte_wr_req  <= 1'b1;
+                    pte_wr_data <= pte | `PTE_A;
+                    pte_wr_addr <= pte_addr;
+                  end
+                end
+              end
+
+              if (dwalking) begin
+                dready <= 1'b1;
                 if (dhit) begin
-                  unique case (pgsize)
-                    PG_1G:   pa_data <= {8'b0, dtlb.PPN[43:18], va_data[29:0]};
-                    PG_2M:   pa_data <= {8'b0, dtlb.PPN[43:9], va_data[20:0]};
-                    PG_4K:   pa_data <= {8'b0, dtlb.PPN[43:0], va_data[11:0]};
-                    default: pa_data <= '0;
-                  endcase
+                  `build_pa_by_tlb(pa_data, dtlb, va_data)
                 end else begin
                   // build PA
-                  unique case (pgsize)
-                    PG_1G:   pa_data <= {8'b0, pte.PPN[53:28], va_data[29:0]};
-                    PG_2M:   pa_data <= {8'b0, pte.PPN[53:19], va_data[20:0]};
-                    PG_4K:   pa_data <= {8'b0, pte.PPN[53:10], va_data[11:0]};
-                    default: pa_data <= '0;
-                  endcase
-                  dtlb.PGSIZE <= pgsize;
-                  dtlb.ASID <= satp.ASID;
-                  dtlb.VPN <= va_data[38:12];
-                  dtlb.PPN <= pte.PPN;
-                  `cpy_flags(dtlb, pte)
-                  dtlb.A <= 1;
+                  `build_pa_by_pte(pa_data, pte, va_data)
+                  `cache_tlb(dtlb, va_data)
                 end
                 if (markad != 0) begin
                   pte_wr_req <= 1'b1;
@@ -2493,19 +2411,18 @@ module mmu (
                   pte_wr_addr <= pte_addr;
                   dtlb.D <= (markad & `PTE_D) == 0 ? 0 : 1;
                 end
-
-                dready <= 1'b1;
-                mmu_state <= DONE;
               end
             end
-            DONE: begin
-              pte_wr_req <= 1'b0;
-              error <= 1'b0;
-              mmu_state <= IDLE;
-              dready <= 1'b0;
-            end
-          endcase
-        end
+          end
+          DONE: begin
+            error <= 1'b0;
+            iready <= 1'b0;
+            dready <= 1'b0;
+            aligned <= 1'b1;
+            mmu_state <= IDLE;
+            pte_wr_req <= 1'b0;
+          end
+        endcase
       end
     end
   end
