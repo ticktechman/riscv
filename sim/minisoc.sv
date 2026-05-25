@@ -97,6 +97,7 @@ module soc (
   alu_op_e alu_op;
   mem_op_e mem_op;
   sys_op_e sys_op;
+  amo_op_e amo_op;
   reg_t imm;
 
   // exec data
@@ -159,6 +160,7 @@ module soc (
     .alu_op(alu_op),
     .sys_op(sys_op),
     .mem_op(mem_op),
+    .amo_op(amo_op),
     .op_s1(op_s1),
     .op_s2(op_s2),
     .imm(imm),
@@ -256,6 +258,7 @@ module soc (
   );
 
   // sram
+  logic amo_ready;
   sram sram1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -319,7 +322,14 @@ module soc (
           end
         end
         DECODE: begin
-          state <= EXEC;
+          if (amo_op != AMO_NONE) begin
+            state <= AMOMEM;
+          end else begin
+            state <= EXEC;
+          end
+        end
+        AMOMEM: begin
+          if (amo_ready) state <= EXEC;
         end
         EXEC: begin
           `LOGI($sformatf("exec_done: %b", exec_done));
@@ -378,6 +388,7 @@ typedef enum {
   IDLE,
   FETCH,
   DECODE,
+  AMOMEM,
   EXEC,
   MEMACCESS,
   WB
@@ -399,6 +410,7 @@ typedef enum logic [6:0] {
   OPCODE_AUIPC     = 7'b0010111,  // AUIPC
   OPCODE_OP_IMM_32 = 7'b0011011,  // RV64 reg-imm word ops (addiw, slliw...)
   OPCODE_STORE     = 7'b0100011,  // Store (sb, sw, sd...)
+  OPCODE_AMO       = 7'b0101111,  // AMO(lr, sc, amoswap, amomax ...)
   OPCODE_OP        = 7'b0110011,  // ALU reg-reg (add, sub, mul, div...)
   OPCODE_LUI       = 7'b0110111,  // LUI
   OPCODE_OP_32     = 7'b0111011,  // RV64 reg-reg word ops (addw, mulw...)
@@ -470,6 +482,32 @@ typedef enum {
   SYS_CSRRCI
 } sys_op_e;
 
+typedef enum {
+  AMO_NONE,
+  AMO_LR,
+  AMO_SC,
+  AMO_SWAP,
+  AMO_ADD,
+  AMO_XOR,
+  AMO_OR,
+  AMO_AND,
+  AMO_MIN,
+  AMO_MAX,
+  AMO_MINU,
+  AMO_MAXU,
+  AMO_LRW,
+  AMO_SCW,
+  AMO_SWAPW,
+  AMO_ADDW,
+  AMO_XORW,
+  AMO_ORW,
+  AMO_ANDW,
+  AMO_MINW,
+  AMO_MAXW,
+  AMO_MINUW,
+  AMO_MAXUW
+} amo_op_e;
+
 // reg_t mstatus, mtvec, mtval, mepc, mcause, mie, mip, mhartid, medeleg, mideleg, misa, mscratch;
 // reg_t stvec, stval, sepc, scause, sscratch, satp;
 typedef enum logic [11:0] {
@@ -530,6 +568,7 @@ typedef enum {
   OP_SRC_NONE,
   OP_SRC_REG,
   OP_SRC_IMM,
+  OP_SRC_AMO,
   OP_SRC_PC
 } op_src_e;
 
@@ -731,6 +770,7 @@ module decoder (
   output alu_op_e alu_op,
   output sys_op_e sys_op,
   output mem_op_e mem_op,
+  output amo_op_e amo_op,
   output op_src_e op_s1,
   output op_src_e op_s2,
   output reg_t imm,
@@ -751,6 +791,7 @@ module decoder (
       alu_op = ALU_NONE;
       sys_op = SYS_NONE;
       mem_op = MEM_NONE;
+      amo_op = AMO_NONE;
       imm_type = IMM_NONE;
       op_s1 = OP_SRC_NONE;
       op_s2 = OP_SRC_NONE;
@@ -829,14 +870,14 @@ module decoder (
           op_s2 = OP_SRC_IMM;
           imm_type = IMM_I;
           unique case (f3)
-            3'b000:  alu_op = ALU_ADD;
-            3'b001:  alu_op = ALU_SLL;
-            3'b010:  alu_op = ALU_SLT;
-            3'b011:  alu_op = ALU_SLTU;
-            3'b100:  alu_op = ALU_XOR;
-            3'b110:  alu_op = ALU_OR;
-            3'b101:  alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
-            3'b111:  alu_op = ALU_AND;
+            3'b000: alu_op = ALU_ADD;
+            3'b001: alu_op = ALU_SLL;
+            3'b010: alu_op = ALU_SLT;
+            3'b011: alu_op = ALU_SLTU;
+            3'b100: alu_op = ALU_XOR;
+            3'b110: alu_op = ALU_OR;
+            3'b101: alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
+            3'b111: alu_op = ALU_AND;
             default: ;
           endcase
           `LOGI($sformatf("aluop:%0d", alu_op));
@@ -851,7 +892,7 @@ module decoder (
           op_s2 = OP_SRC_IMM;
           imm_type = IMM_I;
           unique case (f3)
-            3'b000:  alu_op = ALU_ADDW;
+            3'b000: alu_op = ALU_ADDW;
             default: ;
           endcase
           unique case (fc)
@@ -873,13 +914,13 @@ module decoder (
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_IMM;
           unique case (f3)
-            3'b000:  mem_op = LD_LB;
-            3'b001:  mem_op = LD_LH;
-            3'b010:  mem_op = LD_LW;
-            3'b011:  mem_op = LD_LD;
-            3'b100:  mem_op = LD_LBU;
-            3'b101:  mem_op = LD_LHU;
-            3'b110:  mem_op = LD_LWU;
+            3'b000: mem_op = LD_LB;
+            3'b001: mem_op = LD_LH;
+            3'b010: mem_op = LD_LW;
+            3'b011: mem_op = LD_LD;
+            3'b100: mem_op = LD_LBU;
+            3'b101: mem_op = LD_LHU;
+            3'b110: mem_op = LD_LWU;
             default: ;
           endcase
         end
@@ -894,10 +935,10 @@ module decoder (
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_IMM;
           unique case (f3)
-            3'b000:  mem_op = SD_SB;
-            3'b001:  mem_op = SD_SH;
-            3'b010:  mem_op = SD_SW;
-            3'b011:  mem_op = SD_SD;
+            3'b000: mem_op = SD_SB;
+            3'b001: mem_op = SD_SH;
+            3'b010: mem_op = SD_SW;
+            3'b011: mem_op = SD_SD;
             default: ;
           endcase
         end
@@ -911,12 +952,12 @@ module decoder (
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_REG;
           unique case (f3)
-            3'b000:  alu_op = ALU_BEQ;
-            3'b001:  alu_op = ALU_BNE;
-            3'b100:  alu_op = ALU_BLT;
-            3'b101:  alu_op = ALU_BGE;
-            3'b110:  alu_op = ALU_BLTU;
-            3'b111:  alu_op = ALU_BGEU;
+            3'b000: alu_op = ALU_BEQ;
+            3'b001: alu_op = ALU_BNE;
+            3'b100: alu_op = ALU_BLT;
+            3'b101: alu_op = ALU_BGE;
+            3'b110: alu_op = ALU_BLTU;
+            3'b111: alu_op = ALU_BGEU;
             default: ;
           endcase
         end
@@ -1023,16 +1064,47 @@ module decoder (
             default: ;
           endcase
         end
-
+        OPCODE_AMO: begin
+          reg_write = 1;
+          op_s1 = OP_SRC_AMO;
+          op_s2 = OP_SRC_REG;
+          unique case (fc)
+            // verilog_format: off
+            {7'b0001000, 3'b010} : amo_op = AMO_LRW;
+            {7'b0001100, 3'b010} : begin amo_op = AMO_SCW; mem_op = SD_SW; end
+            {7'b0001000, 3'b011} : amo_op = AMO_LR;
+            {7'b0001100, 3'b011} : begin amo_op = AMO_SC; mem_op = SD_SD; end
+            {7'b0000100, 3'b010} : begin amo_op = AMO_SWAPW; mem_op = SD_SW; end
+            {7'b0000000, 3'b010} : begin amo_op = AMO_ADDW; alu_op = ALU_ADDW; mem_op = SD_SW; end
+            {7'b0010000, 3'b010} : begin amo_op = AMO_XORW; alu_op = ALU_XOR; mem_op = SD_SW; end
+            {7'b0100000, 3'b010} : begin amo_op = AMO_ORW; alu_op = ALU_OR; mem_op = SD_SW; end
+            {7'b0110000, 3'b010} : begin amo_op = AMO_ANDW; alu_op = ALU_AND; mem_op = SD_SW; end
+            {7'b1000000, 3'b010} : begin amo_op = AMO_MINW; alu_op = ALU_SLT; mem_op = SD_SW; end
+            {7'b1010000, 3'b010} : begin amo_op = AMO_MAXW; alu_op = ALU_SLT; mem_op = SD_SW; end
+            {7'b1100000, 3'b010} : begin amo_op = AMO_MINUW; alu_op = ALU_SLTU; mem_op = SD_SW; end
+            {7'b1110000, 3'b010} : begin amo_op = AMO_MAXUW; alu_op = ALU_SLTU; mem_op = SD_SW; end
+            {7'b0000100, 3'b011} : begin amo_op = AMO_SWAP; mem_op = SD_SD; end
+            {7'b0000000, 3'b011} : begin amo_op = AMO_ADD; alu_op = ALU_ADD; mem_op = SD_SD; end
+            {7'b0010000, 3'b011} : begin amo_op = AMO_XOR; alu_op = ALU_XOR; mem_op = SD_SD; end
+            {7'b0100000, 3'b011} : begin amo_op = AMO_OR; alu_op = ALU_OR; mem_op = SD_SD; end
+            {7'b0110000, 3'b011} : begin amo_op = AMO_AND; alu_op = ALU_AND; mem_op = SD_SD; end
+            {7'b1000000, 3'b011} : begin amo_op = AMO_MIN; alu_op = ALU_SLT; mem_op = SD_SD; end
+            {7'b1010000, 3'b011} : begin amo_op = AMO_MAX; alu_op = ALU_SLT; mem_op = SD_SD; end
+            {7'b1100000, 3'b011} : begin amo_op = AMO_MINU; alu_op = ALU_SLTU; mem_op = SD_SD; end
+            {7'b1110000, 3'b011} : begin amo_op = AMO_MAXU; alu_op = ALU_SLTU; mem_op = SD_SD; end
+            // verilog_format: on
+            default: amo_op = AMO_NONE;
+          endcase
+        end
         default: ;
       endcase
 
       unique case (imm_type)
-        IMM_I:   imm = {{52{instr[31]}}, instr[31:20]};
-        IMM_S:   imm = {{52{instr[31]}}, instr[31:25], instr[11:7]};
-        IMM_B:   imm = {{51{instr[31]}}, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
-        IMM_U:   imm = {{32{instr[31]}}, instr[31:12], 12'b0};
-        IMM_J:   imm = {{43{instr[31]}}, instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};
+        IMM_I: imm = {{52{instr[31]}}, instr[31:20]};
+        IMM_S: imm = {{52{instr[31]}}, instr[31:25], instr[11:7]};
+        IMM_B: imm = {{51{instr[31]}}, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
+        IMM_U: imm = {{32{instr[31]}}, instr[31:12], 12'b0};
+        IMM_J: imm = {{43{instr[31]}}, instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};
         default: imm = '0;
       endcase
     end
@@ -1113,20 +1185,20 @@ module exec (
 
       `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
       unique case (alu_op)
-        ALU_ADD:  alu_result = op1 + op2;
-        ALU_SUB:  alu_result = op1 - op2;
-        ALU_AND:  alu_result = op1 & op2;
-        ALU_OR:   alu_result = op1 | op2;
-        ALU_XOR:  alu_result = op1 ^ op2;
-        ALU_SLL:  alu_result = op1 << op2[5:0];
-        ALU_SRL:  alu_result = op1 >> op2[5:0];
-        ALU_SRA:  alu_result = $signed(op1) >>> op2[5:0];
-        ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
+        ALU_ADD: alu_result = op1 + op2;
+        ALU_SUB: alu_result = op1 - op2;
+        ALU_AND: alu_result = op1 & op2;
+        ALU_OR: alu_result = op1 | op2;
+        ALU_XOR: alu_result = op1 ^ op2;
+        ALU_SLL: alu_result = op1 << op2[5:0];
+        ALU_SRL: alu_result = op1 >> op2[5:0];
+        ALU_SRA: alu_result = $signed(op1) >>> op2[5:0];
+        ALU_SLT: alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
         ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
-        ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
-        ALU_BEQ:  alu_result = (op1 == op2) ? 1 : 0;
-        ALU_BLT:  alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
-        ALU_BGE:  alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
+        ALU_BNE: alu_result = (op1 != op2) ? 1 : 0;
+        ALU_BEQ: alu_result = (op1 == op2) ? 1 : 0;
+        ALU_BLT: alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
+        ALU_BGE: alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
         ALU_BLTU: alu_result = (op1 < op2) ? 1 : 0;
         ALU_BGEU: alu_result = (op1 >= op2) ? 1 : 0;
 
@@ -1934,17 +2006,17 @@ module sram #(
       if (state == MEMACCESS && mem_op != MEM_NONE && enable) begin
         `LOGI($sformatf("MEM:%h op:%0d data: %h", offset, mem_op, mem_data));
         unique case (mem_op)
-          LD_LB:  mem_rdata <= `B2R(ram, offset[BITS-1:0]);
-          LD_LH:  mem_rdata <= `H2R(ram, offset[BITS-1:0]);
-          LD_LW:  mem_rdata <= `W2R(ram, offset[BITS-1:0]);
-          LD_LD:  mem_rdata <= `D2R(ram, offset[BITS-1:0]);
+          LD_LB: mem_rdata <= `B2R(ram, offset[BITS-1:0]);
+          LD_LH: mem_rdata <= `H2R(ram, offset[BITS-1:0]);
+          LD_LW: mem_rdata <= `W2R(ram, offset[BITS-1:0]);
+          LD_LD: mem_rdata <= `D2R(ram, offset[BITS-1:0]);
           LD_LBU: mem_rdata <= `BU2R(ram, offset[BITS-1:0]);
           LD_LHU: mem_rdata <= `HU2R(ram, offset[BITS-1:0]);
           LD_LWU: mem_rdata <= `WU2R(ram, offset[BITS-1:0]);
-          SD_SB:  ram[offset[BITS-1:0]] <= mem_data[7:0];
-          SD_SH:  for (logic [BITS-1:0] i = 0; i < 2; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
-          SD_SW:  for (logic [BITS-1:0] i = 0; i < 4; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
-          SD_SD:  for (logic [BITS-1:0] i = 0; i < 8; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
+          SD_SB: ram[offset[BITS-1:0]] <= mem_data[7:0];
+          SD_SH: for (logic [BITS-1:0] i = 0; i < 2; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
+          SD_SW: for (logic [BITS-1:0] i = 0; i < 4; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
+          SD_SD: for (logic [BITS-1:0] i = 0; i < 8; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
         endcase
       end
     end
@@ -2237,9 +2309,9 @@ module mmu (
 
   always_comb begin
     unique case (itlb.PGSIZE)
-      PG_4K:   vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
-      PG_2M:   vpnmask = {9'h1ff, 9'h1ff, 9'h000};
-      PG_1G:   vpnmask = {9'h1ff, 9'h000, 9'h000};
+      PG_4K: vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
+      PG_2M: vpnmask = {9'h1ff, 9'h1ff, 9'h000};
+      PG_1G: vpnmask = {9'h1ff, 9'h000, 9'h000};
       default: vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
     endcase
     ihit = itlb.V && (itlb.VPN & vpnmask) == (va_pc[38:12] & vpnmask) && (itlb.G || itlb.ASID == satp.ASID);
