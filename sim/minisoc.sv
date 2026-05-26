@@ -27,6 +27,34 @@
 `define EADDR 64'hffff_ffff_ffff_ffff
 `define LOGPTE(tag, x) `LOGI($sformatf("%s(PPN-%h D%b A%b U%b X%b W%b R%b V%b)", \
   tag, x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
+
+typedef enum {
+  SZ_1B,
+  SZ_2B,
+  SZ_4B,
+  SZ_8B
+} size_e;
+
+interface mmaping;
+  logic valid, ready, error;
+  logic [1:0] rw;
+  addr_t va, pa;
+
+  modport master(input ready, error, pa, output valid, rw, va);
+  modport slave(output ready, error, pa, input valid, rw, va);
+endinterface
+
+interface mem_access;
+  logic valid, ready, error, we;
+  size_e size;
+  addr_t addr;
+  reg_t rdata, wdata;
+
+  modport master(input ready, error, rdata, output valid, we, addr, size, wdata);
+  modport slave(output ready, error, rdata, input valid, we, addr, size, wdata);
+endinterface
+
+
 //-------------------------------------
 // Testbench
 //-------------------------------------
@@ -121,6 +149,35 @@ module soc (
   pte_t pte_wr_data;
   logic tlb_invalid;
 
+  mmaping amo_map ();
+  mem_access amo_ma ();
+  // module atomic (
+  //   input logic clk,
+  //   input logic rst_n,
+  //   input state_e state,
+  //   input amo_op_e amo_op,
+  //   input reg_t rs1_val,
+  //   input logic word,
+  //   output reg_t op_amo,
+  //   output logic amo_ready,
+  //
+  //   mmaping.master mmap,
+  //   mem_access.master ma
+  // );
+
+  reg_t op_amo;
+  atomic amo1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .state(state),
+    .amo_op(amo_op),
+    .rs1_val(rs1_val),
+    .op_amo(op_amo),
+    .amo_ready(amo_ready),
+    .mmap(amo_map.master),
+    .ma(amo_ma.master)
+  );
+
   mmu mmu1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -135,6 +192,8 @@ module soc (
     .satp(satp),
     .priv(priv),
     .mstatus(mstatus),
+
+    .amo(amo_map.slave),
 
     .pte_req(pte_req),
     .pte_addr(pte_addr),
@@ -277,7 +336,8 @@ module soc (
     .pte_wr_data(pte_wr_data),
     .mmu_error(mmu_error),
     .pc(pa_pc),
-    .instr(instr2)
+    .instr(instr2),
+    .amo(amo_ma.slave)
   );
 
   assign instr = instr1 != 0 ? instr1 : instr2;
@@ -307,6 +367,7 @@ module soc (
   //---------------------------------
   // state machine
   //---------------------------------
+  logic amo_in = !(amo_op inside {AMO_NONE, AMO_LR, AMO_LRW, AMO_SC, AMO_SCW});
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       `LOGW("reset");
@@ -322,7 +383,7 @@ module soc (
           end
         end
         DECODE: begin
-          if (amo_op != AMO_NONE) begin
+          if (amo_in) begin
             state <= AMOMEM;
           end else begin
             state <= EXEC;
@@ -870,14 +931,14 @@ module decoder (
           op_s2 = OP_SRC_IMM;
           imm_type = IMM_I;
           unique case (f3)
-            3'b000: alu_op = ALU_ADD;
-            3'b001: alu_op = ALU_SLL;
-            3'b010: alu_op = ALU_SLT;
-            3'b011: alu_op = ALU_SLTU;
-            3'b100: alu_op = ALU_XOR;
-            3'b110: alu_op = ALU_OR;
-            3'b101: alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
-            3'b111: alu_op = ALU_AND;
+            3'b000:  alu_op = ALU_ADD;
+            3'b001:  alu_op = ALU_SLL;
+            3'b010:  alu_op = ALU_SLT;
+            3'b011:  alu_op = ALU_SLTU;
+            3'b100:  alu_op = ALU_XOR;
+            3'b110:  alu_op = ALU_OR;
+            3'b101:  alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
+            3'b111:  alu_op = ALU_AND;
             default: ;
           endcase
           `LOGI($sformatf("aluop:%0d", alu_op));
@@ -892,7 +953,7 @@ module decoder (
           op_s2 = OP_SRC_IMM;
           imm_type = IMM_I;
           unique case (f3)
-            3'b000: alu_op = ALU_ADDW;
+            3'b000:  alu_op = ALU_ADDW;
             default: ;
           endcase
           unique case (fc)
@@ -914,13 +975,13 @@ module decoder (
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_IMM;
           unique case (f3)
-            3'b000: mem_op = LD_LB;
-            3'b001: mem_op = LD_LH;
-            3'b010: mem_op = LD_LW;
-            3'b011: mem_op = LD_LD;
-            3'b100: mem_op = LD_LBU;
-            3'b101: mem_op = LD_LHU;
-            3'b110: mem_op = LD_LWU;
+            3'b000:  mem_op = LD_LB;
+            3'b001:  mem_op = LD_LH;
+            3'b010:  mem_op = LD_LW;
+            3'b011:  mem_op = LD_LD;
+            3'b100:  mem_op = LD_LBU;
+            3'b101:  mem_op = LD_LHU;
+            3'b110:  mem_op = LD_LWU;
             default: ;
           endcase
         end
@@ -935,10 +996,10 @@ module decoder (
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_IMM;
           unique case (f3)
-            3'b000: mem_op = SD_SB;
-            3'b001: mem_op = SD_SH;
-            3'b010: mem_op = SD_SW;
-            3'b011: mem_op = SD_SD;
+            3'b000:  mem_op = SD_SB;
+            3'b001:  mem_op = SD_SH;
+            3'b010:  mem_op = SD_SW;
+            3'b011:  mem_op = SD_SD;
             default: ;
           endcase
         end
@@ -952,12 +1013,12 @@ module decoder (
           op_s1 = OP_SRC_REG;
           op_s2 = OP_SRC_REG;
           unique case (f3)
-            3'b000: alu_op = ALU_BEQ;
-            3'b001: alu_op = ALU_BNE;
-            3'b100: alu_op = ALU_BLT;
-            3'b101: alu_op = ALU_BGE;
-            3'b110: alu_op = ALU_BLTU;
-            3'b111: alu_op = ALU_BGEU;
+            3'b000:  alu_op = ALU_BEQ;
+            3'b001:  alu_op = ALU_BNE;
+            3'b100:  alu_op = ALU_BLT;
+            3'b101:  alu_op = ALU_BGE;
+            3'b110:  alu_op = ALU_BLTU;
+            3'b111:  alu_op = ALU_BGEU;
             default: ;
           endcase
         end
@@ -1100,11 +1161,11 @@ module decoder (
       endcase
 
       unique case (imm_type)
-        IMM_I: imm = {{52{instr[31]}}, instr[31:20]};
-        IMM_S: imm = {{52{instr[31]}}, instr[31:25], instr[11:7]};
-        IMM_B: imm = {{51{instr[31]}}, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
-        IMM_U: imm = {{32{instr[31]}}, instr[31:12], 12'b0};
-        IMM_J: imm = {{43{instr[31]}}, instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};
+        IMM_I:   imm = {{52{instr[31]}}, instr[31:20]};
+        IMM_S:   imm = {{52{instr[31]}}, instr[31:25], instr[11:7]};
+        IMM_B:   imm = {{51{instr[31]}}, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
+        IMM_U:   imm = {{32{instr[31]}}, instr[31:12], 12'b0};
+        IMM_J:   imm = {{43{instr[31]}}, instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};
         default: imm = '0;
       endcase
     end
@@ -1185,20 +1246,20 @@ module exec (
 
       `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
       unique case (alu_op)
-        ALU_ADD: alu_result = op1 + op2;
-        ALU_SUB: alu_result = op1 - op2;
-        ALU_AND: alu_result = op1 & op2;
-        ALU_OR: alu_result = op1 | op2;
-        ALU_XOR: alu_result = op1 ^ op2;
-        ALU_SLL: alu_result = op1 << op2[5:0];
-        ALU_SRL: alu_result = op1 >> op2[5:0];
-        ALU_SRA: alu_result = $signed(op1) >>> op2[5:0];
-        ALU_SLT: alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
+        ALU_ADD:  alu_result = op1 + op2;
+        ALU_SUB:  alu_result = op1 - op2;
+        ALU_AND:  alu_result = op1 & op2;
+        ALU_OR:   alu_result = op1 | op2;
+        ALU_XOR:  alu_result = op1 ^ op2;
+        ALU_SLL:  alu_result = op1 << op2[5:0];
+        ALU_SRL:  alu_result = op1 >> op2[5:0];
+        ALU_SRA:  alu_result = $signed(op1) >>> op2[5:0];
+        ALU_SLT:  alu_result = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
         ALU_SLTU: alu_result = (op1 < op2) ? 64'd1 : 64'd0;
-        ALU_BNE: alu_result = (op1 != op2) ? 1 : 0;
-        ALU_BEQ: alu_result = (op1 == op2) ? 1 : 0;
-        ALU_BLT: alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
-        ALU_BGE: alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
+        ALU_BNE:  alu_result = (op1 != op2) ? 1 : 0;
+        ALU_BEQ:  alu_result = (op1 == op2) ? 1 : 0;
+        ALU_BLT:  alu_result = ($signed(op1) < $signed(op2)) ? 1 : 0;
+        ALU_BGE:  alu_result = ($signed(op1) >= $signed(op2)) ? 1 : 0;
         ALU_BLTU: alu_result = (op1 < op2) ? 1 : 0;
         ALU_BGEU: alu_result = (op1 >= op2) ? 1 : 0;
 
@@ -1953,14 +2014,17 @@ module sram #(
   output pte_t  pte,
   output logic  pte_ready,
 
-  input logic pte_wr_req,
+  input logic  pte_wr_req,
   input addr_t pte_wr_addr,
-  input pte_t pte_wr_data,
-  logic mmu_error,
+  input pte_t  pte_wr_data,
+  input logic  mmu_error,
 
   // fetch interface
   input addr_t pc,
-  output logic [31:0] instr
+  output logic [31:0] instr,
+
+  // amo interface
+  mem_access.slave amo
 );
   localparam reg_t BITS = reg_t'($clog2(SIZE));
   logic enable;
@@ -1978,6 +2042,7 @@ module sram #(
   `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
   `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
   `define WU2I(r, a) {r[a+3], r[a+2], r[a+1], r[a]}
+  `define write_data(off, data, sz) for (logic [BITS-1:0] i = 0; i < sz; i++) ram[off[BITS-1:0]+i] <= data[8*i+:8]
 
   integer fd;
   string hex_file;
@@ -2006,17 +2071,17 @@ module sram #(
       if (state == MEMACCESS && mem_op != MEM_NONE && enable) begin
         `LOGI($sformatf("MEM:%h op:%0d data: %h", offset, mem_op, mem_data));
         unique case (mem_op)
-          LD_LB: mem_rdata <= `B2R(ram, offset[BITS-1:0]);
-          LD_LH: mem_rdata <= `H2R(ram, offset[BITS-1:0]);
-          LD_LW: mem_rdata <= `W2R(ram, offset[BITS-1:0]);
-          LD_LD: mem_rdata <= `D2R(ram, offset[BITS-1:0]);
+          LD_LB:  mem_rdata <= `B2R(ram, offset[BITS-1:0]);
+          LD_LH:  mem_rdata <= `H2R(ram, offset[BITS-1:0]);
+          LD_LW:  mem_rdata <= `W2R(ram, offset[BITS-1:0]);
+          LD_LD:  mem_rdata <= `D2R(ram, offset[BITS-1:0]);
           LD_LBU: mem_rdata <= `BU2R(ram, offset[BITS-1:0]);
           LD_LHU: mem_rdata <= `HU2R(ram, offset[BITS-1:0]);
           LD_LWU: mem_rdata <= `WU2R(ram, offset[BITS-1:0]);
-          SD_SB: ram[offset[BITS-1:0]] <= mem_data[7:0];
-          SD_SH: for (logic [BITS-1:0] i = 0; i < 2; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
-          SD_SW: for (logic [BITS-1:0] i = 0; i < 4; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
-          SD_SD: for (logic [BITS-1:0] i = 0; i < 8; i++) ram[offset[BITS-1:0]+i] <= mem_data[8*i+:8];
+          SD_SB:  `write_data(offset, mem_data, 1);
+          SD_SH:  `write_data(offset, mem_data, 2);
+          SD_SW:  `write_data(offset, mem_data, 4);
+          SD_SD:  `write_data(offset, mem_data, 8);
         endcase
       end
     end
@@ -2070,7 +2135,41 @@ module sram #(
     end else begin
       instr = '0;
     end
-    ;
+  end
+
+
+  // amo access
+  logic amo_en;
+  addr_t amo_offset;
+  always_comb begin
+    amo_en = state == AMOMEM && amo.addr >= BASE && amo.addr < BASE + SZ && amo.valid;
+    amo_offset = amo.addr - BASE;
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (amo.ready) begin
+        amo.ready <= 1'b0;
+      end
+      if (amo_en) begin
+        if (amo.we) begin
+          // write
+          unique case (amo.size)
+            SZ_4B:   amo.rdata <= `W2R(ram, amo_offset[BITS-1:0]);
+            SZ_8B:   amo.rdata <= `D2R(ram, amo_offset[BITS-1:0]);
+            default: ;
+          endcase
+        end else begin
+          // read
+          unique case (amo.size)
+            SZ_4B:   `write_data(amo_offset, amo.wdata, 4);
+            SZ_8B:   `write_data(amo_offset, amo.wdata, 8);
+            default: ;
+          endcase
+        end
+      end
+    end
   end
 
 endmodule
@@ -2221,6 +2320,9 @@ module mmu (
   output addr_t pa_data,
   output logic data_ready,
 
+  // for amo va mapping
+  mmaping.slave amo,
+
   // pte write interface
   output logic  pte_wr_req,
   output addr_t pte_wr_addr,
@@ -2309,9 +2411,9 @@ module mmu (
 
   always_comb begin
     unique case (itlb.PGSIZE)
-      PG_4K: vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
-      PG_2M: vpnmask = {9'h1ff, 9'h1ff, 9'h000};
-      PG_1G: vpnmask = {9'h1ff, 9'h000, 9'h000};
+      PG_4K:   vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
+      PG_2M:   vpnmask = {9'h1ff, 9'h1ff, 9'h000};
+      PG_1G:   vpnmask = {9'h1ff, 9'h000, 9'h000};
       default: vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
     endcase
     ihit = itlb.V && (itlb.VPN & vpnmask) == (va_pc[38:12] & vpnmask) && (itlb.G || itlb.ASID == satp.ASID);
@@ -2355,7 +2457,7 @@ module mmu (
     if (isstore && !D) markad = markad | `PTE_D;
   end
 
-  // instruction page mapping
+  // instruction and data page mapping
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mmu_state <= IDLE;
@@ -2501,6 +2603,85 @@ module mmu (
 
   assign pc_ready   = iready;
   assign data_ready = dready;
+
+endmodule
+
+//-----------------------------------------
+// amo
+//-----------------------------------------
+
+module atomic (
+  input logic clk,
+  input logic rst_n,
+  input state_e state,
+  input amo_op_e amo_op,
+  input reg_t rs1_val,
+  output reg_t op_amo,
+  output logic amo_ready,
+
+  mmaping.master mmap,
+  mem_access.master ma
+);
+
+  typedef enum {
+    AMO_IDLE,
+    AMO_VA2PA,
+    AMO_READ
+  } amostate_e;
+
+  logic word = amo_op >= AMO_SWAPW && amo_op <= AMO_MAXUW;
+  amostate_e astate;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      astate <= AMO_IDLE;
+      mmap.valid <= 1'b0;
+      ma.valid <= 1'b0;
+    end else begin
+      if (amo_ready) begin
+        amo_ready <= 1'b0;
+      end
+      if (mmap.ready) begin
+        mmap.valid <= 1'b0;
+      end
+      if (ma.ready) begin
+        ma.valid <= 1'b0;
+      end
+
+      // request sram to load data
+      if (state == AMOMEM) begin
+        unique case (astate)
+          AMO_IDLE: begin
+            `LOGI("amo request mmu");
+            mmap.rw <= 2'b11;
+            mmap.va <= rs1_val;
+            mmap.valid <= 1'b1;
+            astate <= AMO_VA2PA;
+          end
+          AMO_VA2PA: begin
+            if (mmap.ready) begin
+              `LOGI("amo mmu ready");
+              // TODO: handle error
+              mmap.valid <= 1'b0;
+              ma.we <= 1'b0;
+              ma.addr <= mmap.pa;
+              ma.size <= word ? SZ_4B : SZ_8B;
+              astate <= AMO_READ;
+            end
+          end
+          AMO_READ: begin
+            if (ma.ready) begin
+              `LOGI("amo data ready");
+              ma.valid <= 1'b0;
+              op_amo <= ma.rdata;
+              amo_ready <= 1'b1;
+              astate <= AMO_IDLE;
+            end
+          end
+          default: ;
+        endcase
+      end
+    end
+  end
 
 endmodule
 
