@@ -27,6 +27,10 @@
 `define EADDR 64'hffff_ffff_ffff_ffff
 `define LOGPTE(tag, x) `LOGI($sformatf("%s(PPN-%h D%b A%b U%b X%b W%b R%b V%b)", \
   tag, x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
+`define COLOR_NONE "\033[0m"
+`define RED "\033[31m"
+`define GREEN "\033[32m"
+`define YELLOW "\033[33m"
 
 typedef enum {
   SZ_1B,
@@ -99,6 +103,7 @@ module clkgen #(
     #2 rst_n = 1;
     repeat (COUNTER) @(negedge clk);
     #0.5 rst_n = 0;
+    $display($sformatf("%sTIMEOUT%s", `YELLOW, `COLOR_NONE));
     #0.1 $finish;
   end
 
@@ -243,6 +248,7 @@ module soc (
     .alu_op(alu_op),
     .sys_op(sys_op),
     .mem_op(mem_op),
+    .amo_op(amo_op),
     .op_s1(op_s1),
     .op_s2(op_s2),
     .rs1_val(rs1_val),
@@ -250,6 +256,7 @@ module soc (
     .csr_val(csr_val),
     .trap_target(trap_target),
     .imm(imm),
+    .op_amo(op_amo),
     .csr_imm(csr_imm),
     .pc(pc),
     .br_taken(br_taken),
@@ -1185,6 +1192,7 @@ module exec (
   input alu_op_e alu_op,
   input sys_op_e sys_op,
   input mem_op_e mem_op,
+  input amo_op_e amo_op,
   input op_src_e op_s1,
   input op_src_e op_s2,
   input reg_t rs1_val,
@@ -1192,6 +1200,7 @@ module exec (
   input reg_t csr_val,
   input reg_t trap_target,
   input reg_t imm,
+  input reg_t op_amo,
   input [4:0] csr_imm,
   input addr_t pc,
 
@@ -1236,12 +1245,18 @@ module exec (
 
   always_comb begin : exec
     if (state == EXEC) begin
-      br_taken = 1'b0;
-      wb_data = '0;
-      mem_data = '0;
+      br_taken  = 1'b0;
+      wb_data   = '0;
+      mem_data  = '0;
       pc_target = '1;
-      op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
-      op2 = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
+      // op1 = (op_s1 == OP_SRC_REG) ? rs1_val : pc;
+      unique case (op_s1)
+        OP_SRC_REG: op1 = rs1_val;
+        OP_SRC_PC: op1 = pc;
+        OP_SRC_AMO: op1 = op_amo;
+        default: ;
+      endcase
+      op2  = (op_s2 == OP_SRC_REG) ? rs2_val : imm;
       halt = 1'b0;
 
       `LOGI($sformatf("alu_op:%0d op1:%h op2:%h", alu_op, op1, op2));
@@ -1339,12 +1354,16 @@ module exec (
 
       if (reg_write) begin
         if (alu_op != ALU_NONE) begin
-          if (alu_op inside {ALU_MUL, ALU_MULH, ALU_MULHU, ALU_MULHSU, ALU_MULW}) begin
-            wb_data = mult_result;
-          end else if (alu_op inside {ALU_DIV, ALU_DIVU, ALU_DIVW, ALU_DIVUW, ALU_REM, ALU_REMW, ALU_REMU, ALU_REMUW}) begin
-            wb_data = div_result;
+          if (amo_op == AMO_NONE) begin
+            if (alu_op inside {ALU_MUL, ALU_MULH, ALU_MULHU, ALU_MULHSU, ALU_MULW}) begin
+              wb_data = mult_result;
+            end else if (alu_op inside {ALU_DIV, ALU_DIVU, ALU_DIVW, ALU_DIVUW, ALU_REM, ALU_REMW, ALU_REMU, ALU_REMUW}) begin
+              wb_data = div_result;
+            end else begin
+              wb_data = alu_result;
+            end
           end else begin
-            wb_data = alu_result;
+            wb_data = op_amo;
           end
         end
       end
@@ -1365,8 +1384,13 @@ module exec (
       end
 
       if (mem_op != MEM_NONE) begin
-        mem_addr = alu_result;
-        if (mem_op > MEM_SEP) mem_data = rs2_val;
+        if (amo_op == AMO_NONE) begin
+          mem_addr = alu_result;
+          if (mem_op > MEM_SEP) mem_data = rs2_val;
+        end else begin
+          mem_addr = rs1_val;
+          mem_data = alu_result;
+        end
       end
     end
   end
@@ -2095,6 +2119,7 @@ module sram #(
     pte_offset = pte_addr - BASE;
     if (pte_req && (pte_addr >= BASE && pte_addr < BASE + SZ)) begin
       pte_readed = `D2R(ram, pte_offset[BITS-1:0]);
+      `LOGI($sformatf("pte_readed: addr:%h %h", pte_addr, pte_readed));
     end
     if (pte_wr_req && (pte_addr >= BASE && pte_addr < BASE + SZ)) begin
       pte_offset = pte_addr - BASE;
@@ -2149,25 +2174,24 @@ module sram #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (amo.ready) begin
-        amo.ready <= 1'b0;
-      end
+      amo.ready <= 1'b0;
       if (amo_en) begin
         if (amo.we) begin
           // write
-          unique case (amo.size)
-            SZ_4B:   amo.rdata <= `W2R(ram, amo_offset[BITS-1:0]);
-            SZ_8B:   amo.rdata <= `D2R(ram, amo_offset[BITS-1:0]);
-            default: ;
-          endcase
-        end else begin
-          // read
           unique case (amo.size)
             SZ_4B:   `write_data(amo_offset, amo.wdata, 4);
             SZ_8B:   `write_data(amo_offset, amo.wdata, 8);
             default: ;
           endcase
+        end else begin
+          // read
+          unique case (amo.size)
+            SZ_4B:   amo.rdata <= `W2R(ram, amo_offset[BITS-1:0]);
+            SZ_8B:   amo.rdata <= `D2R(ram, amo_offset[BITS-1:0]);
+            default: `LOGI("AMO READ ERROR");
+          endcase
         end
+        amo.ready <= 1'b1;
       end
     end
   end
@@ -2253,9 +2277,6 @@ endmodule
 //-----------------------------------
 // rvtest
 //-----------------------------------
-`define COLOR_NONE "\033[0m"
-`define RED "\033[31m"
-`define GREEN "\033[32m"
 module rvtest (
   input logic clk,
   input logic rst_n,
@@ -2428,16 +2449,18 @@ module mmu (
 
     leaf = V & (R | W | X);
     icheck = (priv == M_SUPER && U == 0) || (priv == M_USER && U == 1);
-    iwalking = (satp.MODE == 8 && priv != M_MACHINE);
+    iwalking = (satp.MODE == 8 && priv != M_MACHINE && state == FETCH);
     if (state == FETCH) begin
       `set_vpn(va_pc)
+      `LOGI($sformatf("i vpn2:%h", vpn2));
     end else begin
       `set_vpn(va_data)
+      `LOGI($sformatf("d vpn2:%h", vpn2));
     end
   end
 
   // data page mapping
-  logic isload, isstore, dwalking, dcheck, lcheck, daligned;
+  logic isload, isstore, dwalking, dcheck, lcheck;
   priv_lvl_e lvl;
   logic [63:0] markad;
   always_comb begin
@@ -2472,6 +2495,7 @@ module mmu (
         itlb.V <= 0;
         dtlb.V <= 0;
       end
+      amo.ready <= 1'b0;
 
       if (state == FETCH && !iwalking) begin
         `LOGI($sformatf("NO iwalking va:%h", va_pc));
@@ -2481,6 +2505,10 @@ module mmu (
       if (state == MEMACCESS && !dwalking) begin
         pa_data <= va_data;
         dready  <= 1'b1;
+      end
+      if (state == AMOMEM && amo.valid) begin
+        amo.pa <= va_data;
+        amo.ready <= 1'b1;
       end
 
       if (dwalking || iwalking) begin
@@ -2609,7 +2637,6 @@ endmodule
 //-----------------------------------------
 // amo
 //-----------------------------------------
-
 module atomic (
   input logic clk,
   input logic rst_n,
@@ -2626,7 +2653,8 @@ module atomic (
   typedef enum {
     AMO_IDLE,
     AMO_VA2PA,
-    AMO_READ
+    AMO_READ,
+    AMO_DONE
   } amostate_e;
 
   logic word = amo_op >= AMO_SWAPW && amo_op <= AMO_MAXUW;
@@ -2637,15 +2665,9 @@ module atomic (
       mmap.valid <= 1'b0;
       ma.valid <= 1'b0;
     end else begin
-      if (amo_ready) begin
-        amo_ready <= 1'b0;
-      end
-      if (mmap.ready) begin
-        mmap.valid <= 1'b0;
-      end
-      if (ma.ready) begin
-        ma.valid <= 1'b0;
-      end
+      amo_ready  <= 1'b0;
+      mmap.valid <= 1'b0;
+      ma.valid   <= 1'b0;
 
       // request sram to load data
       if (state == AMOMEM) begin
@@ -2659,23 +2681,27 @@ module atomic (
           end
           AMO_VA2PA: begin
             if (mmap.ready) begin
-              `LOGI("amo mmu ready");
+              `LOGI($sformatf("amo mmu ready: %h", mmap.pa));
               // TODO: handle error
               mmap.valid <= 1'b0;
               ma.we <= 1'b0;
               ma.addr <= mmap.pa;
               ma.size <= word ? SZ_4B : SZ_8B;
+              ma.valid <= 1'b1;
               astate <= AMO_READ;
             end
           end
           AMO_READ: begin
             if (ma.ready) begin
-              `LOGI("amo data ready");
+              `LOGI($sformatf("amo data ready: %h", ma.rdata));
               ma.valid <= 1'b0;
               op_amo <= ma.rdata;
               amo_ready <= 1'b1;
-              astate <= AMO_IDLE;
+              astate <= AMO_DONE;
             end
+          end
+          AMO_DONE: begin
+            astate <= AMO_IDLE;
           end
           default: ;
         endcase
