@@ -48,8 +48,10 @@ SIM = obj_dir/Vtop
 all: $(SIM)
 
 mini: obj_dir/Vmini
+mini.me: obj_dir/Vmini
+	$< +verilator+quiet +hex_file=./isa/lrsc.hex
 mini.run: obj_dir/Vmini
-	$(call gen-args,$(CURDIR)/riscv-tests/rv64ua-p-amoswap_d)
+	$(call gen-args,$(CURDIR)/riscv-tests/rv64ua-p-lrsc)
 	$< +verilator+quiet $(SIM_ARGS)
 
 mini.test: $(HEX_FILES:.hex=.run)

@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -38,6 +38,11 @@ typedef enum {
   SZ_4B,
   SZ_8B
 } size_e;
+typedef enum {
+  SC_NONE,
+  SC_SUCC,
+  SC_FAIL
+} sc_e;
 
 interface mmaping;
   logic valid, ready, error;
@@ -74,7 +79,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(10000)
+    .COUNTER(50000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -269,7 +274,8 @@ module soc (
     .rs1(rs1),
     .rs2(rs2),
     .rs1_val(rs1_val),
-    .rs2_val(rs2_val)
+    .rs2_val(rs2_val),
+    .sc(sc)
   );
 
   // csr
@@ -313,12 +319,14 @@ module soc (
 
   // sram
   logic amo_ready;
+  sc_e sc;
   sram sram1 (
     .clk(clk),
     .rst_n(rst_n),
     .state(state),
     .mem_addr(pa_data),
     .mem_op(mem_op),
+    .amo_op(amo_op),
     .mem_rdata(mem_rdata),
     .mem_data(mem_data),
     .data_ready(data_ready),
@@ -332,22 +340,20 @@ module soc (
     .mmu_error(mmu_error),
     .pc(pa_pc),
     .instr(instr2),
-    .amo(amo_ma.slave)
+    .amo(amo_ma.slave),
+    .sc(sc)
   );
 
   assign instr = instr1 != 0 ? instr1 : instr2;
 
-  // uart #(
-  //   .BASE(64'h2000),
-  //   .MASK(64'hfff)
-  // ) uart1 (
-  //   .clk(clk),
-  //   .rst_n(rst_n),
-  //   .addr(pa_data),
-  //   .state(state),
-  //   .mem_op(mem_op),
-  //   .data(mem_data)
-  // );
+  uart uart1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .addr(pa_data),
+    .state(state),
+    .mem_op(mem_op),
+    .data(mem_data)
+  );
 
   // for rvtest
   rvtest rvt1 (
@@ -363,6 +369,7 @@ module soc (
   // state machine
   //---------------------------------
   logic amo_in = !(amo_op inside {AMO_NONE, AMO_LR, AMO_LRW, AMO_SC, AMO_SCW});
+  // logic amo_in = (amo_op != AMO_NONE);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       `LOGW("reset");
@@ -1121,14 +1128,15 @@ module decoder (
           endcase
         end
         OPCODE_AMO: begin
+          `LOGI("AMO");
           reg_write = 1;
           op_s1 = OP_SRC_AMO;
           op_s2 = OP_SRC_REG;
           unique case (fc)
             // verilog_format: off
-            {7'b0001000, 3'b010} : amo_op = AMO_LRW;
+            {7'b0001000, 3'b010} : begin amo_op = AMO_LRW; mem_op = LD_LW; end
             {7'b0001100, 3'b010} : begin amo_op = AMO_SCW; mem_op = SD_SW; end
-            {7'b0001000, 3'b011} : amo_op = AMO_LR;
+            {7'b0001000, 3'b011} : begin amo_op = AMO_LR; mem_op = LD_LD; end
             {7'b0001100, 3'b011} : begin amo_op = AMO_SC; mem_op = SD_SD; end
             {7'b0000100, 3'b010} : begin amo_op = AMO_SWAPW; mem_op = SD_SW; end
             {7'b0000000, 3'b010} : begin amo_op = AMO_ADDW; alu_op = ALU_ADDW; mem_op = SD_SW; end
@@ -1353,6 +1361,9 @@ module exec (
         end
         AMO_SWAPW: begin
           alu_result = {32'(rs2_val[31]), rs2_val[31:0]};
+        end
+        AMO_SCW, AMO_SC: begin
+          alu_result = rs2_val;
         end
         default: ;
       endcase
@@ -1636,7 +1647,10 @@ module registerfile (
   input logic [4:0] rs1,
   input logic [4:0] rs2,
   output reg_t rs1_val,
-  output reg_t rs2_val
+  output reg_t rs2_val,
+
+  // for lr/sc instr
+  input sc_e sc
 );
   reg_t x[REGMAX];
 
@@ -1645,8 +1659,13 @@ module registerfile (
     end else begin : writeback
       if (state == WB && we == 1) begin
         if (rd > 0) begin
-          x[rd] <= wdata;
-          `LOGI($sformatf("WB: x[%02d]=%h", rd, wdata));
+          if (sc == SC_NONE) begin
+            x[rd] <= wdata;
+            `LOGI($sformatf("WB: x[%02d]=%h", rd, wdata));
+          end else begin
+            x[rd] <= (sc == SC_SUCC ? 0 : 64'd1);
+            `LOGI($sformatf("WB SC: x[%02d]=%h", rd, (sc == SC_SUCC ? 0 : 64'd1)));
+          end
         end
       end
     end
@@ -2037,6 +2056,7 @@ module sram #(
   input state_e state,
   input addr_t mem_addr,
   input mem_op_e mem_op,
+  input amo_op_e amo_op,
   input reg_t mem_data,
   input data_ready,
   output reg_t mem_rdata,
@@ -2057,10 +2077,24 @@ module sram #(
   output logic [31:0] instr,
 
   // amo interface
-  mem_access.slave amo
+  mem_access.slave amo,
+  output sc_e sc
 );
+
+  typedef struct packed {
+    reg_t  hartid;
+    logic  valid;
+    addr_t addr;
+    size_e sz;
+  } lr_t;
+
+  lr_t lr;
+  size_e lrsz, scsz;
+
   localparam reg_t BITS = reg_t'($clog2(SIZE));
   logic enable;
+
+  logic lrenable, scenable;
 
   addr_t BASE = 64'h0000_0000_8000_2000;
   reg_t SZ = SIZE;
@@ -2093,14 +2127,23 @@ module sram #(
       end
     end
   end
-  assign enable = (mem_addr >= BASE && mem_addr < BASE + SZ) && (data_ready) && !mmu_error;
-  assign offset = mem_addr - BASE;
+  assign enable   = (mem_addr >= BASE && mem_addr < BASE + SZ) && (data_ready) && !mmu_error;
+  assign offset   = mem_addr - BASE;
+  assign lrenable = amo_op inside {AMO_LR, AMO_LRW};
+  assign scenable = amo_op inside {AMO_SC, AMO_SCW};
+  always_comb begin
+    lrsz = (amo_op == AMO_LR ? SZ_8B : SZ_4B);
+    scsz = (amo_op == AMO_SC ? SZ_8B : SZ_4B);
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (reg_t i = 0; i < SIZE; i++) begin
         // ram[i] <= '0;
       end
+      lr <= '0;
     end else begin
+      sc <= SC_NONE;
       if (state == MEMACCESS && mem_op != MEM_NONE && enable) begin
         `LOGI($sformatf("MEM:%h op:%0d data: %h", offset, mem_op, mem_data));
         unique case (mem_op)
@@ -2113,9 +2156,49 @@ module sram #(
           LD_LWU: mem_rdata <= `WU2R(ram, offset[BITS-1:0]);
           SD_SB:  `write_data(offset, mem_data, 1);
           SD_SH:  `write_data(offset, mem_data, 2);
-          SD_SW:  `write_data(offset, mem_data, 4);
-          SD_SD:  `write_data(offset, mem_data, 8);
+          SD_SW: begin
+            if (scenable) begin
+              if (lr.valid && offset == lr.addr && lr.sz == SZ_4B) begin
+                `write_data(offset, mem_data, 4);
+                sc <= SC_SUCC;
+                lr.valid <= 0;
+                `LOGW("sc succ");
+              end else begin
+                sc <= SC_FAIL;
+                `LOGW("sc fail");
+              end
+            end else begin
+              `write_data(offset, mem_data, 4);
+              if (lr.valid && offset == lr.addr && lr.sz == SZ_4B) begin
+                lr.valid <= 0;
+              end
+            end
+          end
+          SD_SD: begin
+            if (scenable) begin
+              if (lr.valid && offset == lr.addr && lr.sz == SZ_8B) begin
+                `write_data(offset, mem_data, 8);
+                sc <= SC_SUCC;
+                `LOGW("sc succ");
+              end else begin
+                sc <= SC_FAIL;
+                `LOGW("sc fail");
+              end
+            end else begin
+              `write_data(offset, mem_data, 8);
+              if (lr.valid && offset == lr.addr && lr.sz == SZ_8B) begin
+                lr.valid <= 0;
+              end
+            end
+          end
         endcase
+
+        if (lrenable) begin
+          `LOGI($sformatf("LR mark: %h", offset));
+          lr.valid <= 1'b1;
+          lr.addr <= offset;
+          lr.sz <= lrsz;
+        end
       end
     end
   end
@@ -2259,8 +2342,8 @@ endmodule
 // uart
 //-----------------------------------
 module uart #(
-  parameter addr_t BASE = 64'h20000,
-  parameter addr_t MASK = 64'hfff
+  parameter addr_t BASE = 64'h0000_0000_9000_0000,
+  parameter addr_t SIZE = 64'h1000
 ) (
   input logic clk,
   input logic rst_n,
@@ -2271,7 +2354,7 @@ module uart #(
 );
 
   logic enable;
-  assign enable = ((addr & ~MASK) == BASE && state == MEMACCESS);
+  assign enable = (addr >= BASE && addr < BASE + SIZE && state == MEMACCESS);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
@@ -2514,7 +2597,7 @@ module mmu (
         dready  <= 1'b1;
       end
       if (state == AMOMEM && amo.valid) begin
-        amo.pa <= va_data;
+        amo.pa <= amo.va;
         amo.ready <= 1'b1;
       end
 
