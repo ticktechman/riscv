@@ -156,19 +156,6 @@ module soc (
 
   mmaping amo_map ();
   mem_access amo_ma ();
-  // module atomic (
-  //   input logic clk,
-  //   input logic rst_n,
-  //   input state_e state,
-  //   input amo_op_e amo_op,
-  //   input reg_t rs1_val,
-  //   input logic word,
-  //   output reg_t op_amo,
-  //   output logic amo_ready,
-  //
-  //   mmaping.master mmap,
-  //   mem_access.master ma
-  // );
 
   reg_t op_amo;
   atomic amo1 (
@@ -264,6 +251,7 @@ module soc (
     .mem_addr(mem_addr),
     .mem_data(mem_data),
     .wb_data(wb_data),
+    .rs2(rs2),
     .csr_wdata(csr_wdata),
     .done(exec_done),
     .halt(halt)
@@ -1202,6 +1190,7 @@ module exec (
   input reg_t imm,
   input reg_t op_amo,
   input [4:0] csr_imm,
+  input [4:0] rs2,
   input addr_t pc,
 
 
@@ -1352,6 +1341,22 @@ module exec (
         default: ;
       endcase
 
+      unique case (amo_op)
+        AMO_MAX, AMO_MAXU: alu_result = alu_result == 0 ? op_amo : rs2_val;
+        AMO_MIN, AMO_MINU: alu_result = alu_result == 0 ? rs2_val : op_amo;
+        AMO_MAXW: alu_result = ($signed(op_amo[31:0]) > $signed(rs2_val[31:0])) ? op_amo : rs2_val;
+        AMO_MAXUW: alu_result = (op_amo[31:0] > rs2_val[31:0]) ? op_amo : rs2_val;
+        AMO_MINW: alu_result = ($signed(op_amo[31:0]) < $signed(rs2_val[31:0])) ? op_amo : rs2_val;
+        AMO_MINUW: alu_result = (op_amo[31:0] < rs2_val[31:0]) ? op_amo : rs2_val;
+        AMO_SWAP: begin
+          alu_result = rs2_val;
+        end
+        AMO_SWAPW: begin
+          alu_result = {32'(rs2_val[31]), rs2_val[31:0]};
+        end
+        default: ;
+      endcase
+
       if (reg_write) begin
         if (alu_op != ALU_NONE) begin
           if (amo_op == AMO_NONE) begin
@@ -1363,6 +1368,10 @@ module exec (
               wb_data = alu_result;
             end
           end else begin
+            wb_data = op_amo;
+          end
+        end else begin
+          if (amo_op != AMO_NONE) begin
             wb_data = op_amo;
           end
         end
@@ -2452,10 +2461,8 @@ module mmu (
     iwalking = (satp.MODE == 8 && priv != M_MACHINE && state == FETCH);
     if (state == FETCH) begin
       `set_vpn(va_pc)
-      `LOGI($sformatf("i vpn2:%h", vpn2));
     end else begin
       `set_vpn(va_data)
-      `LOGI($sformatf("d vpn2:%h", vpn2));
     end
   end
 
