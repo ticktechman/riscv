@@ -13,7 +13,7 @@
 
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 `ifdef DEBUG_LOG
 `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
 `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
@@ -2123,7 +2123,7 @@ module sram #(
       if (fd != 0) begin
         $fclose(fd);
         $readmemh({hex_file, ".data"}, ram);
-        $display("ram load %s ", {hex_file, ".data"});
+        `LOGI($sformatf("ram load %s", {hex_file, ".data"}));
       end
     end
   end
@@ -2318,10 +2318,10 @@ module rom #(
     $value$plusargs("hex_file=%s", hex_file);
     if (hex_file != "") begin
       $readmemh(hex_file, data);
-      $display($sformatf("load %s", hex_file));
+      `LOGI($sformatf("load %s", hex_file));
     end else begin
       $readmemh(HEX, data);
-      $display($sformatf("load %s", HEX));
+      `LOGI($sformatf("load %s", HEX));
     end
   end
 
@@ -2398,11 +2398,11 @@ module rvtest (
       if (enable && mem_op == SD_SW) begin
         if (offset == 0) begin
           if (data[31:0] == 32'd1) begin
-            $display("%sPASS%s", `GREEN, `COLOR_NONE);
+            $write("%sPASS%s", `GREEN, `COLOR_NONE);
           end else begin
-            $display($sformatf("%sFAIL%s: %0d", `RED, `COLOR_NONE, data[31:0]));
+            $write($sformatf("%sFAIL%s: %0d", `RED, `COLOR_NONE, data[31:0]));
           end
-          $finish;
+          $finish(0);
         end
       end
     end

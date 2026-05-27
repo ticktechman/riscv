@@ -52,11 +52,13 @@ mini.me: obj_dir/Vmini
 	$< +verilator+quiet +hex_file=./isa/lrsc.hex
 mini.run: obj_dir/Vmini
 	$(call gen-args,$(CURDIR)/riscv-tests/rv64ua-p-lrsc)
-	$< +verilator+quiet $(SIM_ARGS)
+	@$< +verilator+quiet $(SIM_ARGS)
+	@echo ""
 
 mini.test: $(HEX_FILES:.hex=.run)
 %.run: obj_dir/Vmini
 	$(call gen-args,$*)
+	@printf "%30s" "$(shell basename $*): "
 	-@obj_dir/Vmini +verilator+quiet $(SIM_ARGS)
 
 
