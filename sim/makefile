@@ -47,9 +47,15 @@ SIM = obj_dir/Vtop
 
 all: $(SIM)
 
+
 mini: obj_dir/Vmini
+
+
+ME := "isa/lrsc.hex"
 mini.me: obj_dir/Vmini
-	$< +verilator+quiet +hex_file=./isa/lrsc.hex
+	@printf "%20s" "$(ME): "
+	@$< +verilator+quiet +hex_file=$(ME)
+
 mini.run: obj_dir/Vmini
 	$(call gen-args,$(CURDIR)/riscv-tests/rv64ua-p-lrsc)
 	@$< +verilator+quiet $(SIM_ARGS)
