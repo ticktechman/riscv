@@ -56,7 +56,7 @@ mini.me: obj_dir/Vmini
 	@printf "%20s" "$(ME): "
 	@$< +verilator+quiet +hex_file=$(ME)
 
-ONE := $(CURDIR)/riscv-tests/rv64ua-p-lrsc
+ONE := $(CURDIR)/riscv-tests/rv64si-p-icache-alias
 mini.run: obj_dir/Vmini
 	$(call gen-args,$(ONE))
 	@echo ""

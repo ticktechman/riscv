@@ -80,7 +80,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(50000)
+    .COUNTER(70000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -109,7 +109,7 @@ module clkgen #(
     #2 rst_n = 1;
     repeat (COUNTER) @(negedge clk);
     #0.5 rst_n = 0;
-    $display($sformatf("%sTIMEOUT%s", `YELLOW, `COLOR_NONE));
+    $write($sformatf("%sTIMEOUT%s", `YELLOW, `COLOR_NONE));
     #0.1 $finish;
   end
 
@@ -149,19 +149,14 @@ module soc (
   addr_t pa_data;
   logic fetch_ready;
   logic data_ready;
-  logic pte_req, pte_ready, mmu_error;
-  addr_t pte_addr;
-  pte_t pte;
+  logic mmu_error;
   reg_t mmu_causeval;
   mcause_e mmu_cause;
   mstatus_t mstatus;
-  logic pte_wr_req;
-  addr_t pte_wr_addr;
-  pte_t pte_wr_data;
   logic tlb_invalid;
 
   mmaping amo_map ();
-  mem_access amo_ma ();
+  mem_access amo_ma (), pgt ();
 
   reg_t op_amo;
   atomic amo1 (
@@ -193,17 +188,11 @@ module soc (
 
     .amo(amo_map.slave),
 
-    .pte_req(pte_req),
-    .pte_addr(pte_addr),
-    .pte(pte),
-    .pte_ready(pte_ready),
+    .pgt(pgt.master),
 
     .error(mmu_error),
     .cause(mmu_cause),
     .causeval(mmu_causeval),
-    .pte_wr_req(pte_wr_req),
-    .pte_wr_addr(pte_wr_addr),
-    .pte_wr_data(pte_wr_data),
 
     .tlb_invalid(tlb_invalid)
   );
@@ -331,13 +320,7 @@ module soc (
     .mem_rdata(mem_rdata),
     .mem_data(mem_data),
     .data_ready(data_ready),
-    .pte_req(pte_req),
-    .pte_addr(pte_addr),
-    .pte(pte),
-    .pte_ready(pte_ready),
-    .pte_wr_req(pte_wr_req),
-    .pte_wr_addr(pte_wr_addr),
-    .pte_wr_data(pte_wr_data),
+    .pgt(pgt.slave),
     .mmu_error(mmu_error),
     .pc(pa_pc),
     .instr(instr2),
@@ -2062,16 +2045,9 @@ module sram #(
   input data_ready,
   output reg_t mem_rdata,
 
-  // page table interface
-  input  logic  pte_req,
-  input  addr_t pte_addr,
-  output pte_t  pte,
-  output logic  pte_ready,
+  mem_access.slave pgt,
 
-  input logic  pte_wr_req,
-  input addr_t pte_wr_addr,
-  input pte_t  pte_wr_data,
-  input logic  mmu_error,
+  input logic mmu_error,
 
   // fetch interface
   input addr_t pc,
@@ -2205,39 +2181,25 @@ module sram #(
   end
 
   // for pte request
-  addr_t pte_offset;
-  pte_t pte_readed;
+  logic pgt_en;
+  addr_t pteoffset;
   always_comb begin
-    pte_readed = '0;
-    pte_offset = pte_addr - BASE;
-    if (pte_req && (pte_addr >= BASE && pte_addr < BASE + SZ)) begin
-      pte_readed = `D2R(ram, pte_offset[BITS-1:0]);
-      `LOGI($sformatf("pte_readed: addr:%h %h", pte_addr, pte_readed));
-    end
-    if (pte_wr_req && (pte_addr >= BASE && pte_addr < BASE + SZ)) begin
-      pte_offset = pte_addr - BASE;
-    end
+    pgt_en = (pgt.valid && (pgt.addr >= BASE && pgt.addr < BASE + SZ));
+    pteoffset = pgt.addr - BASE;
   end
-
-
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (pte_wr_req && (pte_wr_addr >= BASE && pte_wr_addr < BASE + SZ)) begin
-        `LOGI($sformatf("write pte %h: %h", pte_wr_addr, pte_wr_data));
-        for (logic [BITS-1:0] i = 0; i < 8; i++) ram[pte_offset[BITS-1:0]+i] <= pte_wr_data[8*i+:8];
+      pgt.ready <= 1'b0;
+      if (pgt.valid && pgt_en && !pgt.ready) begin
+        `LOGI($sformatf("pgt req: %h", pgt.addr));
+        if (pgt.we) begin
+          `write_data(pteoffset, pgt.wdata, 8);
+        end else begin
+          pgt.rdata <= `D2R(ram, pteoffset[BITS-1:0]);
+        end
+        pgt.ready <= 1'b1;
       end
-    end
-  end
-
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      if (pte_req) begin
-        pte_ready <= 1'b1;
-        pte <= pte_readed;
-      end
-      if (pte_ready) pte_ready <= 1'b0;
     end
   end
 
@@ -2268,7 +2230,7 @@ module sram #(
     if (!rst_n) begin
     end else begin
       amo.ready <= 1'b0;
-      if (amo_en) begin
+      if (amo_en && !amo.ready) begin
         if (amo.we) begin
           // write
           unique case (amo.size)
@@ -2437,16 +2399,7 @@ module mmu (
   // for amo va mapping
   mmaping.slave amo,
 
-  // pte write interface
-  output logic  pte_wr_req,
-  output addr_t pte_wr_addr,
-  output pte_t  pte_wr_data,
-
-  // read pte interface
-  output logic  pte_req,
-  output addr_t pte_addr,
-  input  pte_t  pte,
-  input  logic  pte_ready,
+  mem_access.master pgt,
 
   // csr interface
   output logic error,
@@ -2517,6 +2470,7 @@ module mmu (
   mmu_state_e mmu_state;
   tlb_entry_t itlb, dtlb;
   pagesize_e pgsize;
+  pte_t pte;
   logic iready, dready, aligned, ihit, dhit;
   logic leaf, icheck, iwalking;
   logic V, R, W, X, U, A, D;
@@ -2524,6 +2478,7 @@ module mmu (
   logic [26:0] vpnmask;
 
   always_comb begin
+    pte = pgt.rdata;
     unique case (itlb.PGSIZE)
       PG_4K:   vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
       PG_2M:   vpnmask = {9'h1ff, 9'h1ff, 9'h000};
@@ -2615,45 +2570,49 @@ module mmu (
               mmu_state <= CHKPERM;
               pgsize <= dtlb.PGSIZE;
             end else begin
+              `LOGI($sformatf("ptw: %h va: %h", {8'h00, satp.PPN, 12'(vpn2 << 3)}, dwalking ? va_data : va_pc));
               mmu_state <= LDPGD;
-              pte_req   <= 1'b1;
-              pte_addr  <= {8'h00, satp.PPN, 12'(vpn2 << 3)};
+              pgt.valid <= 1'b1;
+              pgt.we <= 1'b0;
+              pgt.addr <= {8'h00, satp.PPN, 12'(vpn2 << 3)};
             end
           end
           LDPGD: begin
-            if (pte_ready) begin
+            if (pgt.ready) begin
               `LOGPTE("pgd", pte);
-              pte_req <= 1'b0;
+              pgt.valid <= 1'b0;
               if (!V || leaf) begin
                 mmu_state <= CHKPERM;
                 pgsize <= PG_1G;
                 aligned <= (pte.PPN & 44'h3ffff) == 0;
               end else begin
-                pte_req   <= 1'b1;
+                pgt.valid <= 1'b1;
+                pgt.we <= 1'b0;
                 mmu_state <= LDPMD;
-                pte_addr  <= {8'h00, pte.PPN, 12'(vpn1 << 3)};
+                pgt.addr <= {8'h00, pte.PPN, 12'(vpn1 << 3)};
               end
             end
           end
           LDPMD: begin
-            if (pte_ready) begin
+            if (pgt.ready) begin
               `LOGPTE("pmd", pte);
-              pte_req <= 1'b0;
+              pgt.valid <= 1'b0;
               if (!V || leaf) begin
                 mmu_state <= CHKPERM;
                 pgsize <= PG_2M;
                 aligned <= (pte.PPN & 44'h1ff) == 0;
               end else begin
-                pte_req   <= 1'b1;
+                pgt.valid <= 1'b1;
+                pgt.we <= 1'b0;
                 mmu_state <= LDPTE;
-                pte_addr  <= {8'h00, pte.PPN, 12'(vpn0 << 3)};
+                pgt.addr <= {8'h00, pte.PPN, 12'(vpn0 << 3)};
               end
             end
           end
           LDPTE: begin
-            if (pte_ready) begin
+            if (pgt.ready) begin
               `LOGPTE("pte", pte);
-              pte_req <= 1'b0;
+              pgt.valid <= 1'b0;
               mmu_state <= CHKPERM;
               pgsize <= PG_4K;
             end
@@ -2682,9 +2641,9 @@ module mmu (
 
                   // mark A flag
                   if (A == 0) begin
-                    pte_wr_req  <= 1'b1;
-                    pte_wr_data <= pte | `PTE_A;
-                    pte_wr_addr <= pte_addr;
+                    pgt.we <= 1'b1;
+                    pgt.valid <= 1'b1;
+                    pgt.wdata <= pte | `PTE_A;
                   end
                 end
               end
@@ -2699,9 +2658,9 @@ module mmu (
                   `cache_tlb(dtlb, va_data)
                 end
                 if (markad != 0) begin
-                  pte_wr_req <= 1'b1;
-                  pte_wr_data <= pte | markad;
-                  pte_wr_addr <= pte_addr;
+                  pgt.we <= 1'b1;
+                  pgt.valid <= 1'b1;
+                  pgt.wdata <= pte | markad;
                   dtlb.D <= (markad & `PTE_D) == 0 ? 0 : 1;
                 end
               end
@@ -2713,7 +2672,7 @@ module mmu (
             dready <= 1'b0;
             aligned <= 1'b1;
             mmu_state <= IDLE;
-            pte_wr_req <= 1'b0;
+            pgt.valid <= 1'b0;
           end
         endcase
       end
