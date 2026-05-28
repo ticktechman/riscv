@@ -27,6 +27,7 @@
 `define EADDR 64'hffff_ffff_ffff_ffff
 `define LOGPTE(tag, x) `LOGI($sformatf("%s(PPN-%h D%b A%b U%b X%b W%b R%b V%b)", \
   tag, x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
+
 `define COLOR_NONE "\033[0m"
 `define RED "\033[31m"
 `define GREEN "\033[32m"

@@ -56,15 +56,18 @@ mini.me: obj_dir/Vmini
 	@printf "%20s" "$(ME): "
 	@$< +verilator+quiet +hex_file=$(ME)
 
+ONE := $(CURDIR)/riscv-tests/rv64ua-p-lrsc
 mini.run: obj_dir/Vmini
-	$(call gen-args,$(CURDIR)/riscv-tests/rv64ua-p-lrsc)
+	$(call gen-args,$(ONE))
+	@echo ""
+	@printf "> %s" "$(shell basename $(ONE)): "
 	@$< +verilator+quiet $(SIM_ARGS)
 	@echo ""
 
 mini.test: $(HEX_FILES:.hex=.run)
 %.run: obj_dir/Vmini
 	$(call gen-args,$*)
-	@printf "%30s" "$(shell basename $*): "
+	@printf "%25s" "$(shell basename $*): "
 	-@obj_dir/Vmini +verilator+quiet $(SIM_ARGS)
 
 
