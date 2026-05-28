@@ -51,7 +51,7 @@ all: $(SIM)
 mini: obj_dir/Vmini
 
 
-ME := "isa/lrsc.hex"
+ME := "isa/mem.hex"
 mini.me: obj_dir/Vmini
 	@printf "%20s" "$(ME): "
 	@$< +verilator+quiet +hex_file=$(ME)
