@@ -76,7 +76,7 @@ module top ();
     $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
     intr = 1'b0;
-    #1000 intr = 1'b1;
+    // #1000 intr = 1'b1;
   end
 
   clkgen #(
@@ -309,6 +309,8 @@ module soc (
 
   // sram
   logic amo_ready;
+  logic traped;
+  assign traped = interrupted || trap_target != `EADDR;
   sc_e sc;
   sram sram1 (
     .clk(clk),
@@ -325,7 +327,8 @@ module soc (
     .pc(pa_pc),
     .instr(instr2),
     .amo(amo_ma.slave),
-    .sc(sc)
+    .sc(sc),
+    .traped(traped)
   );
 
   assign instr = instr1 != 0 ? instr1 : instr2;
@@ -2055,7 +2058,9 @@ module sram #(
 
   // amo interface
   mem_access.slave amo,
-  output sc_e sc
+  output sc_e sc,
+
+  input logic traped
 );
 
   typedef struct packed {
@@ -2120,6 +2125,10 @@ module sram #(
       end
       lr <= '0;
     end else begin
+      if (traped) begin
+        lr <= '0;
+      end
+
       sc <= SC_NONE;
       if (state == MEMACCESS && mem_op != MEM_NONE && enable) begin
         `LOGI($sformatf("MEM:%h op:%0d data: %h", offset, mem_op, mem_data));
