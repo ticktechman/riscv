@@ -45,6 +45,12 @@ typedef enum {
   SC_FAIL
 } sc_e;
 
+typedef struct packed {
+  logic    valid;
+  mcause_e cause;
+  reg_t    tval;
+} exception_t;
+
 interface mmaping;
   logic valid, ready, error;
   logic [1:0] rw;
@@ -157,6 +163,9 @@ module soc (
 
   mmaping amo_map ();
   mem_access amo_ma (), pgt ();
+
+  // exception on-site record
+  exception_t exc;
 
   reg_t op_amo;
   atomic amo1 (
@@ -558,33 +567,43 @@ typedef enum {
   AMO_MAXUW
 } amo_op_e;
 
-// reg_t mstatus, mtvec, mtval, mepc, mcause, mie, mip, mhartid, medeleg, mideleg, misa, mscratch;
-// reg_t stvec, stval, sepc, scause, sscratch, satp;
 typedef enum logic [11:0] {
-  // csr register in M mode
-  MSTATUS  = 12'h300,
-  MISA     = 12'h301,
-  MEDELEG  = 12'h302,
-  MIDELEG  = 12'h303,
-  MIE      = 12'h304,
-  MTVEC    = 12'h305,
-  MSCRATCH = 12'h340,
-  MEPC     = 12'h341,
-  MCAUSE   = 12'h342,
-  MTVAL    = 12'h343,
-  MIP      = 12'h344,
-  MHARTID  = 12'hf14,
+  // csr register in unprivilege mode
+  CYCLE   = 12'hC00,
+  TIME    = 12'hC01,
+  INSTRET = 12'hC02,
 
-  // csr register in s mode
-  SSTATUS  = 12'h100,
-  SIE      = 12'h104,
-  STVEC    = 12'h105,
-  SSCRATCH = 12'h140,
-  SEPC     = 12'h141,
-  SCAUSE   = 12'h142,
-  STVAL    = 12'h143,
-  SIP      = 12'h144,
-  SATP     = 12'h180
+  // csr register in M mode
+  MSTATUS    = 12'h300,
+  MISA       = 12'h301,
+  MEDELEG    = 12'h302,
+  MIDELEG    = 12'h303,
+  MIE        = 12'h304,
+  MTVEC      = 12'h305,
+  MCOUNTEREN = 12'h306,
+  MSCRATCH   = 12'h340,
+  MEPC       = 12'h341,
+  MCAUSE     = 12'h342,
+  MTVAL      = 12'h343,
+  MIP        = 12'h344,
+  PMPCFG0    = 12'h3A0,
+  PMPADDR0   = 12'h3B0,
+  MHARTID    = 12'hF14,
+  MENVCFG    = 12'h30A,
+
+  // csr register in S mode
+  SSTATUS    = 12'h100,
+  SEDELEG    = 12'h102,
+  SIDELEG    = 12'h103,
+  SIE        = 12'h104,
+  STVEC      = 12'h105,
+  SCOUNTEREN = 12'h106,
+  SSCRATCH   = 12'h140,
+  SEPC       = 12'h141,
+  SCAUSE     = 12'h142,
+  STVAL      = 12'h143,
+  SIP        = 12'h144,
+  SATP       = 12'h180
 } csr_e;
 
 typedef enum {
@@ -761,6 +780,13 @@ typedef struct packed {
   logic [59:44] ASID;  // [59:44] ASID: Address Space Identifier
   logic [43:0]  PPN;   // [43:0]  PPN: Physical Page Number of the root page table
 } satp_t;
+
+typedef struct packed {
+  logic [28:0] HPM;  // Bits [31:3]: 硬件性能监视器计数器使能位 (hpmcounter3~31)
+  logic        IR;   // Bit 2: 指令执行计数器使能位 (instret)
+  logic        TM;   // Bit 1: 时间计数器使能位 (time)
+  logic        CY;   // Bit 0: 周期计数器使能位 (cycle)
+} mcounteren_t;
 
 typedef struct packed {
   logic         N;               // [63] N
@@ -1100,17 +1126,17 @@ module decoder (
             end
 
             3'b110: begin  // CSRRSI
-              csr_idx = instr[31:20];
+              csr_idx   = instr[31:20];
               sys_op    = SYS_CSRRSI;
               reg_write = 1;
-              csr_imm = rs1;
+              csr_imm   = rs1;
             end
 
             3'b111: begin  // CSRRCI
-              csr_idx = instr[31:20];
+              csr_idx   = instr[31:20];
               sys_op    = SYS_CSRRCI;
               reg_write = 1;
-              csr_imm = rs1;
+              csr_imm   = rs1;
             end
             default: ;
           endcase
@@ -1118,8 +1144,8 @@ module decoder (
         OPCODE_AMO: begin
           `LOGI("AMO");
           reg_write = 1;
-          op_s1 = OP_SRC_AMO;
-          op_s2 = OP_SRC_REG;
+          op_s1     = OP_SRC_AMO;
+          op_s2     = OP_SRC_REG;
           unique case (fc)
             // verilog_format: off
             {7'b0001000, 3'b010} : begin amo_op = AMO_LRW; mem_op = LD_LW; end
@@ -1722,12 +1748,14 @@ module csr (
   reg_t mtvec, mtval, mepc, mcause, mhartid, mscratch;
   reg_t stvec, stval, sepc, scause, sscratch, satp;
   reg_t cycle;
+  mcounteren_t mcounteren, scounteren;
   priv_lvl_e mode;
 
   assign priv_o = mode;
   assign satp_o = satp;
   assign mstatus_o = mstatus;
 
+  // read CSR value
   always_comb begin
     csr_val = '0;
     if (state == EXEC && csr_idx > 0) begin
@@ -1753,6 +1781,9 @@ module csr (
         STVAL: csr_val = stval;
         SIP: csr_val = mip & `SIP_MASK;
         SATP: csr_val = satp;
+        MCOUNTEREN: csr_val = {32'b0, mcounteren};
+        SCOUNTEREN: csr_val = {32'b0, scounteren};
+        CYCLE: csr_val = cycle;
         default: ;
       endcase
       `LOGI($sformatf("read CSR[%03h]=%h", csr_idx, csr_val));
@@ -1846,7 +1877,9 @@ module csr (
       stval <= '0;
       scause <= '0;
       satp <= '0;
+      cycle <= '0;
     end else begin
+      cycle <= cycle + 1;
       if (state == EXEC) begin
         // record mcause=11; mepc = pc + 4; mpie=mstatus; mie = 0; pc=mtvec;
         if (tlb_invalid == 1) begin
@@ -1948,6 +1981,27 @@ module csr (
             STVAL: stval <= csr_wdata;
             SIP: mip <= (mip & ~`SIP_MASK) | (csr_wdata & `SIP_MASK);
             SATP: satp <= csr_wdata;
+            MCOUNTEREN: mcounteren <= csr_wdata[31:0];
+            SCOUNTEREN: mcounteren <= csr_wdata[31:0];
+            default: ;
+          endcase
+          unique case (csr_idx)
+            CYCLE: begin
+              if (cycle != csr_wdata) begin
+                // TODO; trap for readonly
+              end else begin
+                // check priv
+                if (mode == M_SUPER) begin
+                  if (!mcounteren.CY) begin
+                    // trap for priv
+                  end
+                end else if (mode == M_USER) begin
+                  if (!mcounteren.CY || !scounteren.CY) begin
+                    // trap for priv
+                  end
+                end
+              end
+            end
             default: ;
           endcase
         end

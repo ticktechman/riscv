@@ -49,6 +49,11 @@ all: $(SIM)
 
 
 mini: obj_dir/Vmini
+hawks: obj_dir/hawks
+
+obj_dir/hawks: hawks.sv
+	@verilator -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
+	@./$@
 
 
 ME := "isa/mem.hex"
@@ -56,7 +61,7 @@ mini.me: obj_dir/Vmini
 	@printf "%20s" "$(ME): "
 	@$< +verilator+quiet +hex_file=$(ME)
 
-ONE := $(CURDIR)/riscv-tests/rv64si-p-dirty
+ONE := $(CURDIR)/riscv-tests/rv64mi-p-csr
 mini.run: obj_dir/Vmini
 	$(call gen-args,$(ONE))
 	@echo ""
