@@ -8,27 +8,6 @@
  *
  *******************************************************************************
  */
-/*
-- top
-    - clkgen
-    - soc
-        - ifu
-        - idu
-        - exu
-            - alu
-            - mul
-            - div
-        - lsu
-            - sram
-            - rom
-            - scoreboard(tohost)
-        - rfu
-        - bus
-        - mmu
-        - csr
-        - raptor
-*/
-
 `timescale 1ns / 100ps
 
 `define DEBUG_LOG
@@ -136,7 +115,6 @@ module top ();
     .intr_i(intr)
   );
 
-
 endmodule
 
 //-------------------------------------
@@ -239,7 +217,6 @@ module bus #(
   request_t sreq[MAXSLV];
   response_t srsp[MAXSLV];
 
-
   generate
     for (genvar m = 0; m < MAXMASTER; m++) begin : master_flatten
       assign mreq[m].valid = masters[m].valid;
@@ -320,50 +297,59 @@ module ifu (
   input logic rst_n,
   memif.master mif
 );
-  typedef enum {
-    IDLE,
-    FETCH
-  } state_e;
 
-  state_e state;
-  logic fetch;
+endmodule
 
-  addr_t addr = addr_t'('h8000_0000);
-  addr_t next;
 
-  always_comb begin
-    next = addr + 1;
-  end
+//------------------------------------
+// idu
+//------------------------------------
+module idu (
+  input logic clk,
+  input logic rst_n
+);
 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      state <= IDLE;
-      fetch <= 1;
-    end else begin
-      if (fetch) begin
-        `LOGI($sformatf("state:%0d addr=%h", state, addr));
-        unique case (state)
-          IDLE: begin
-            mif.valid <= 1;
-            mif.addr  <= addr;
-            mif.we    <= 0;
-            mif.mtype <= US64;
-            addr <= next;
-            state <= FETCH;
-          end
-          FETCH: begin
-            if (mif.ready) begin
-              mif.valid <= 0;
-              `LOGI($sformatf("data readed: %0d", mif.rd));
-              state <= IDLE;
-              fetch <= 0;
-            end
-          end
-          default: ;
-        endcase
-      end
-    end
-  end
+endmodule
+
+//------------------------------------
+// exec
+//------------------------------------
+module exu (
+  input logic clk,
+  input logic rst_n
+);
+
+endmodule
+
+
+//------------------------------------
+// alu
+//------------------------------------
+module alu (
+  input logic clk,
+  input logic rst_n
+);
+
+endmodule
+
+
+//------------------------------------
+// multiply
+//------------------------------------
+module mul (
+  input logic clk,
+  input logic rst_n
+);
+
+endmodule
+
+//------------------------------------
+// divider
+//------------------------------------
+module div (
+  input logic clk,
+  input logic rst_n
+);
 
 endmodule
 
@@ -501,7 +487,47 @@ module rom (
 endmodule
 
 //------------------------------------
-// scoreboard
+// mmu
+//------------------------------------
+module mmu (
+  input logic clk,
+  input logic rst_n
+);
+
+endmodule
+
+//------------------------------------
+// csr
+//------------------------------------
+module csr (
+  input logic clk,
+  input logic rst_n
+);
+
+endmodule
+
+//------------------------------------
+// register file
+//------------------------------------
+module rfu (
+  input logic clk,
+  input logic rst_n
+);
+
+endmodule
+
+//------------------------------------
+// raptor for exception, irq
+//------------------------------------
+module raptor (
+  input logic clk,
+  input logic rst_n
+);
+
+endmodule
+
+//------------------------------------
+// scoreboard (riscv-tests tohost to receive result)
 //------------------------------------
 module scoreboard (
   input logic clk,
