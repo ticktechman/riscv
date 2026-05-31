@@ -61,7 +61,7 @@ package hawks;
     addr_t END;
   } mmap_t;
 
-  localparam mmap_t maping[MAXSLV] = '{
+  parameter mmap_t maping[MAXSLV] = '{
       '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_1fff)},
       '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_2fff)},
       '{BASE: addr_t'('h8000_3000), END: addr_t'('h8000_3fff)}
@@ -287,6 +287,7 @@ module bus #(
       foreach (mmaping[i]) begin
         if (addr >= mmaping[i].BASE && addr <= mmaping[i].END) begin
           slave_selected = i;
+          addr = addr - mmaping[i].BASE;
           break;
         end
       end
@@ -303,7 +304,8 @@ module bus #(
     end
 
     if (master_selected != -1 && slave_selected != -1) begin
-      sreq[slave_selected]  = mreq[master_selected];
+      sreq[slave_selected] = mreq[master_selected];
+      sreq[slave_selected].addr = addr;
       mrsp[master_selected] = srsp[slave_selected];
     end
   end
@@ -506,6 +508,7 @@ module scoreboard (
   input logic rst_n,
   memif.slave mif
 );
+  assign mif.ready = 1;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
