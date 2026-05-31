@@ -381,7 +381,7 @@ module lsu (
   state_e state;
   logic fetch;
 
-  addr_t addr = addr_t'('h8000_2005);
+  addr_t addr = addr_t'('h8000_3000);
   addr_t next;
 
   always_comb begin
@@ -399,7 +399,8 @@ module lsu (
           IDLE: begin
             mif.valid <= 1;
             mif.addr  <= addr;
-            mif.we    <= 0;
+            mif.we    <= 1;
+            mif.wd    <= 0;
             mif.mtype <= US64;
             addr <= next;
             state <= FETCH;
@@ -505,6 +506,20 @@ module scoreboard (
   input logic rst_n,
   memif.slave mif
 );
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (mif.valid && mif.we) begin
+        if (mif.wd == 0) begin
+          $write("%sPASS%s", `GREEN, `COLOR_NONE);
+        end else begin
+          $write("%sFAIL:%0d%s", `RED, mif.wd, `COLOR_NONE);
+        end
+        $finish(0);
+      end
+    end
+  end
 
 endmodule
 
