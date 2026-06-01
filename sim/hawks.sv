@@ -84,20 +84,21 @@ package hawks;
   } response_t;
 
   typedef enum logic [63:0] {
-    EXC_INSTR_ADDR_MISALIGNED = 64'h0,  // 指令地址未对齐
-    EXC_INSTR_ACCESS_FAULT    = 64'h1,  // 取指访问故障
-    EXC_ILLEGAL_INSTRUCTION   = 64'h2,  // 非法指令
-    EXC_BREAKPOINT            = 64'h3,  // 断点
-    EXC_LOAD_ADDR_MISALIGNED  = 64'h4,  // 加载地址未对齐
-    EXC_LOAD_ACCESS_FAULT     = 64'h5,  // 加载访问故障
-    EXC_STORE_ADDR_MISALIGNED = 64'h6,  // 存储/AMO地址未对齐
-    EXC_STORE_ACCESS_FAULT    = 64'h7,  // 存储/AMO访问故障
-    EXC_ECALL_U_MODE          = 64'h8,  // U模式环境调用
-    EXC_ECALL_S_MODE          = 64'h9,  // S模式环境调用
-    EXC_ECALL_M_MODE          = 64'hb,  // M模式环境调用
-    EXC_INSTR_PAGE_FAULT      = 64'hc,  // 指令页面错误
-    EXC_LOAD_PAGE_FAULT       = 64'hd,  // 加载页面错误
-    EXC_STORE_PAGE_FAULT      = 64'hf,  // 存储/AMO页面错误
+    EXC_INSTR_ADDR_MISALIGNED = 64'h0,   // 指令地址未对齐
+    EXC_INSTR_ACCESS_FAULT    = 64'h1,   // 取指访问故障
+    EXC_ILLEGAL_INSTRUCTION   = 64'h2,   // 非法指令
+    EXC_BREAKPOINT            = 64'h3,   // 断点
+    EXC_LOAD_ADDR_MISALIGNED  = 64'h4,   // 加载地址未对齐
+    EXC_LOAD_ACCESS_FAULT     = 64'h5,   // 加载访问故障
+    EXC_STORE_ADDR_MISALIGNED = 64'h6,   // 存储/AMO地址未对齐
+    EXC_STORE_ACCESS_FAULT    = 64'h7,   // 存储/AMO访问故障
+    EXC_ECALL_U_MODE          = 64'h8,   // U模式环境调用
+    EXC_ECALL_S_MODE          = 64'h9,   // S模式环境调用
+    EXC_ECALL_M_MODE          = 64'hb,   // M模式环境调用
+    EXC_INSTR_PAGE_FAULT      = 64'hc,   // 指令页面错误
+    EXC_LOAD_PAGE_FAULT       = 64'hd,   // 加载页面错误
+    EXC_STORE_PAGE_FAULT      = 64'hf,   // 存储/AMO页面错误
+    EXC_NONE                  = 64'hfff, // just for internal usage
 
     INTR_SUPERVISOR_SW  = 64'h8000_0000_0000_0001,  // 监督级软件中断
     INTR_MACHINE_SW     = 64'h8000_0000_0000_0003,  // 机器级软件中断
@@ -242,7 +243,9 @@ module soc (
     .clk(clk),
     .rst_n(rst_n),
     .mif(master_ports[1].master),
-    .ready_o(ls_ready)
+    .valid(stage == STG_MEM),
+    .ready_o(ls_ready),
+    .exc_o(exc[4])
   );
 
   rfu rfu1 (
@@ -317,7 +320,12 @@ module soc (
         end
         STG_MEM: begin
           if (ls_ready) begin
-            stage <= STG_WB;
+            if (exc[4].fired) begin
+              stage <= STG_WB;
+              exc_stage <= stage;
+            end else begin
+              stage <= STG_WB;
+            end
           end
         end
         STG_WB: begin
@@ -455,19 +463,17 @@ module ifu (
     MAPPING,
     FETCH
   } state_e;
-
   state_e state;
 
-  logic bus_err, page_fault, misaligned;
+  mcause_e ecause;
+
   always_comb begin
-    ready_o    = 0;
-    bus_err    = 0;
-    page_fault = 0;
-    misaligned = 0;
+    ready_o = 0;
+    ecause  = EXC_NONE;
 
     if (valid && pc_i[1:0] != 0) begin
       `LOGI($sformatf("pc misaligned: %h", pc_i));
-      misaligned = 1;
+      ecause  = EXC_INSTR_ADDR_MISALIGNED;
       ready_o = 1;
     end
 
@@ -475,7 +481,7 @@ module ifu (
       ready_o = 1;
       if (mif.error) begin
         `LOGE($sformatf("load instr error: %h", pc_i));
-        bus_err = 1;
+        ecause = EXC_INSTR_ACCESS_FAULT;
       end
     end
   end
@@ -483,17 +489,9 @@ module ifu (
   // handle exception
   always_comb begin
     exc_o = '0;
-    if (bus_err) begin
+    if (ecause != EXC_NONE) begin
       exc_o.fired = 1;
-      exc_o.cause = EXC_INSTR_ACCESS_FAULT;
-      exc_o.eval  = pc_i;
-    end else if (misaligned) begin
-      exc_o.fired = 1;
-      exc_o.cause = EXC_INSTR_ADDR_MISALIGNED;
-      exc_o.eval  = pc_i;
-    end else if (page_fault) begin
-      exc_o.fired = 1;
-      exc_o.cause = EXC_INSTR_PAGE_FAULT;
+      exc_o.cause = ecause;
       exc_o.eval  = pc_i;
     end
   end
@@ -505,7 +503,7 @@ module ifu (
       if (valid) begin
         unique case (state)
           IDLE: begin
-            if (!misaligned) begin
+            if (ecause == EXC_NONE) begin
               mif.addr <= pc_i;
               mif.we <= 0;
               mif.valid <= 1;
@@ -543,55 +541,23 @@ module idu (
   // stage specific input
   input instr_t instr_i
 );
-  typedef enum {
-    EXC_NONE,
-    BAD_INSTR,
-    EBREAK,
-    ECALL_U,
-    ECALL_S,
-    ECALL_M
-  } idexc_e;
-
-  idexc_e exc;
-
+  mcause_e ecause;
   always_comb begin
     ready_o = 0;
-    exc = EXC_NONE;
+    ecause  = EXC_NONE;
     if (valid) begin
       ready_o = 1;
     end
   end
 
+  // handle exceptions
   always_comb begin
     exc_o = '0;
-    unique case (exc)
-      BAD_INSTR: begin
-        exc_o.fired = 1;
-        exc_o.cause = EXC_ILLEGAL_INSTRUCTION;
-        exc_o.eval  = {32'b0, instr_i};
-      end
-      EBREAK: begin
-        exc_o.fired = 1;
-        exc_o.cause = EXC_BREAKPOINT;
-        exc_o.eval  = '0;
-      end
-      ECALL_U: begin
-        exc_o.fired = 1;
-        exc_o.cause = EXC_ECALL_U_MODE;
-        exc_o.eval  = '0;
-      end
-      ECALL_S: begin
-        exc_o.fired = 1;
-        exc_o.cause = EXC_ECALL_S_MODE;
-        exc_o.eval  = '0;
-      end
-      ECALL_M: begin
-        exc_o.fired = 1;
-        exc_o.cause = EXC_ECALL_M_MODE;
-        exc_o.eval  = '0;
-      end
-      default: ;
-    endcase
+    if (ecause != EXC_NONE) begin
+      exc_o.fired = 1;
+      exc_o.cause = ecause;
+      exc_o.eval  = {32'b0, instr_i};
+    end
   end
 
 endmodule
@@ -658,19 +624,34 @@ module lsu (
   input logic rst_n,
   memif.master mif,
 
-  output logic ready_o
+  // common interface for each stage
+  input logic valid,
+  output logic ready_o,
+  output exception_t exc_o
 );
   typedef enum {
     IDLE,
     FETCH
   } state_e;
-
   state_e state;
+
+  // handle exceptions
+  mcause_e ecause;
+  always_comb begin
+    ecause  = EXC_NONE;
+    ready_o = 1;
+  end
+  always_comb begin
+    if (ecause != EXC_NONE) begin
+      exc_o.fired = 1;
+      exc_o.cause = ecause;
+      exc_o.eval  = 0;
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      ready_o <= 1;
     end
   end
 
