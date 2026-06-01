@@ -218,19 +218,24 @@ module soc (
     .pc_i(pc),
     .instr_o(instr),
     .ready_o(if_ready),
-    .exc_o(exc[0])
+    .exc_o(exc[1])
   );
 
   idu idu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .ready_o(id_ready)
+    .valid(stage == STG_DECODE),
+    .instr_i(instr),
+    .ready_o(id_ready),
+    .exc_o(exc[2])
   );
 
   exu exu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .ready_o(ex_ready)
+    .valid(stage == STG_EXEC),
+    .ready_o(ex_ready),
+    .exc_o(exc[3])
   );
 
   lsu lsu1 (
@@ -264,6 +269,14 @@ module soc (
     .mif(slave_ports[2].slave)
   );
 
+  int idx;
+  always_comb begin
+    exc[0] = '0;
+    idx = int'(exc_stage);
+    if (exc_stage != STG_IDLE) begin
+      exc[0] = exc[idx];
+    end
+  end
   // pipeline fsm
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -278,7 +291,7 @@ module soc (
         end
         STG_FETCH: begin
           if (if_ready) begin
-            if (exc[0].fired) begin
+            if (exc[1].fired) begin
               stage <= STG_WB;
               exc_stage <= stage;
             end else begin
@@ -289,6 +302,12 @@ module soc (
         STG_DECODE: begin
           if (id_ready) begin
             stage <= STG_EXEC;
+            if (exc[2].fired) begin
+              stage <= STG_WB;
+              exc_stage <= stage;
+            end else begin
+              stage <= STG_EXEC;
+            end
           end
         end
         STG_EXEC: begin
@@ -304,7 +323,7 @@ module soc (
         STG_WB: begin
           if (exc_stage != STG_IDLE) begin
             // TODO handle exception change pc and return to fetch stage
-            `LOGI($sformatf("exc fired at stage: %0d", exc_stage));
+            `LOGI($sformatf("exc fired at stage: %0d cause:%0d", exc_stage, exc[0].cause));
             pc <= pc + 4;
             exc_stage <= STG_IDLE;
             stage <= STG_FETCH;
@@ -516,14 +535,63 @@ module idu (
   input logic clk,
   input logic rst_n,
 
-  output logic ready_o
-);
+  // common interface for each stage
+  input logic valid,
+  output logic ready_o,
+  output exception_t exc_o,
 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      ready_o <= 1;
+  // stage specific input
+  input instr_t instr_i
+);
+  typedef enum {
+    EXC_NONE,
+    BAD_INSTR,
+    EBREAK,
+    ECALL_U,
+    ECALL_S,
+    ECALL_M
+  } idexc_e;
+
+  idexc_e exc;
+
+  always_comb begin
+    ready_o = 0;
+    exc = EXC_NONE;
+    if (valid) begin
+      ready_o = 1;
     end
+  end
+
+  always_comb begin
+    exc_o = '0;
+    unique case (exc)
+      BAD_INSTR: begin
+        exc_o.fired = 1;
+        exc_o.cause = EXC_ILLEGAL_INSTRUCTION;
+        exc_o.eval  = {32'b0, instr_i};
+      end
+      EBREAK: begin
+        exc_o.fired = 1;
+        exc_o.cause = EXC_BREAKPOINT;
+        exc_o.eval  = '0;
+      end
+      ECALL_U: begin
+        exc_o.fired = 1;
+        exc_o.cause = EXC_ECALL_U_MODE;
+        exc_o.eval  = '0;
+      end
+      ECALL_S: begin
+        exc_o.fired = 1;
+        exc_o.cause = EXC_ECALL_S_MODE;
+        exc_o.eval  = '0;
+      end
+      ECALL_M: begin
+        exc_o.fired = 1;
+        exc_o.cause = EXC_ECALL_M_MODE;
+        exc_o.eval  = '0;
+      end
+      default: ;
+    endcase
   end
 
 endmodule
@@ -532,9 +600,13 @@ endmodule
 // exec
 //------------------------------------
 module exu (
-  input  logic clk,
-  input  logic rst_n,
-  output logic ready_o
+  input logic clk,
+  input logic rst_n,
+
+  // common interface for each stage
+  input logic valid,
+  output logic ready_o,
+  output exception_t exc_o
 );
 
   always_ff @(posedge clk or negedge rst_n) begin
