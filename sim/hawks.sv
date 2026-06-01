@@ -114,7 +114,216 @@ package hawks;
     reg_t    eval;
   } exception_t;
 
+  typedef enum {
+    IMM_NONE,
+    IMM_I,
+    IMM_S,
+    IMM_U,
+    IMM_J,
+    IMM_B
+  } imm_type_e;
+
+  typedef enum logic [6:0] {
+    OPCODE_LOAD      = 7'b0000011,  // Load (lb, lw, ld, lh...)
+    OPCODE_FENCE     = 7'b0001111,  // FENCE, FENCE.I
+    OPCODE_OP_IMM    = 7'b0010011,  // ALU reg-imm (addi, xori, slli...)
+    OPCODE_AUIPC     = 7'b0010111,  // AUIPC
+    OPCODE_OP_IMM_32 = 7'b0011011,  // RV64 reg-imm word ops (addiw, slliw...)
+    OPCODE_STORE     = 7'b0100011,  // Store (sb, sw, sd...)
+    OPCODE_AMO       = 7'b0101111,  // AMO(lr, sc, amoswap, amomax ...)
+    OPCODE_OP        = 7'b0110011,  // ALU reg-reg (add, sub, mul, div...)
+    OPCODE_LUI       = 7'b0110111,  // LUI
+    OPCODE_OP_32     = 7'b0111011,  // RV64 reg-reg word ops (addw, mulw...)
+    OPCODE_BRANCH    = 7'b1100011,  // Branch (beq, bne, blt...)
+    OPCODE_JALR      = 7'b1100111,  // JALR
+    OPCODE_JAL       = 7'b1101111,  // JAL
+    OPCODE_SYSTEM    = 7'b1110011   // ECALL, EBREAK, CSRR*
+  } opcode_e;
+
+  typedef enum {
+    ALU_NONE,
+    ALU_ADD,   // 1
+    ALU_SUB,
+    ALU_AND,
+    ALU_OR,
+    ALU_XOR,   // 5
+    ALU_SLL,
+    ALU_SRL,
+    ALU_SRA,
+    ALU_SLT,
+    ALU_SLTU,  // 10
+
+    // rv64 32bit word
+    ALU_ADDW,
+    ALU_SUBW,
+    ALU_SLLW,
+    ALU_SRLW,
+    ALU_SRAW,  // 15
+
+    // branch
+    ALU_BEQ,
+    ALU_BNE,
+    ALU_BLT,
+    ALU_BGE,
+    ALU_BLTU,  // 20
+    ALU_BGEU
+  } alu_op_e;
+
+  typedef enum {
+    MULT_NONE,
+    MULT_MUL,     // rs1 * rs2
+    MULT_MULH,    // rs1 * rs2 high 64bit
+    MULT_MULHSU,  // rs1(s) * rs2(u) high 64bit
+    MULT_MULHU,   // rs1(u) * rs2(u) high 64bit
+    MULT_MULW     // 32bit rd[0:31] = rs1[31:0] * rs2[31:0]; rd[31] -> rd[63:32]
+  } mult_op_e;
+
+  typedef enum {
+    DIV_NONE,
+    DIV_DIV,   // rs1(s) / rs2(s)
+    DIV_DIVU,  // rs1(u) / rs2(u)
+    DIV_REM,   // rs1(s) % rs2(s)
+    DIV_REMU,  // rs1(u) % rs2(u)
+
+    // 32bit
+    DIV_DIVW,   // rd[0:31] = rs1[31:0](s) / rs2[31:0](s); rd[31] -> rd[63:32]
+    DIV_DIVUW,  // rd[0:31] = rs1[31:0](u) / rs2[31:0](u); rd[31] -> rd[63:32]
+    DIV_REMW,   // rd[0:31] = rs1[31:0](s) % rs2[31:0](s); rd[31] -> rd[63:32]
+    DIV_REMUW   // rd[0:31] = rs1[31:0](u) % rs2[31:0](u); rd[31] -> rd[63:32]
+  } div_op_e;
+
+  typedef enum {
+    SYS_NONE,
+    SYS_ECALL,
+    SYS_EBREAK,
+    SYS_MRET,
+    SYS_SRET,
+    SYS_WFI,
+    SYS_URET,
+    SYS_FENCE,
+    SYS_CSRRW,
+    SYS_CSRRS,
+    SYS_CSRRC,
+    SYS_CSRRWI,
+    SYS_CSRRSI,
+    SYS_CSRRCI
+  } sys_op_e;
+
+  typedef enum {
+    AMO_NONE,
+    AMO_LR,
+    AMO_SC,
+    AMO_SWAP,
+    AMO_ADD,
+    AMO_XOR,
+    AMO_OR,
+    AMO_AND,
+    AMO_MIN,
+    AMO_MAX,
+    AMO_MINU,
+    AMO_MAXU,
+    AMO_LRW,
+    AMO_SCW,
+    AMO_SWAPW,
+    AMO_ADDW,
+    AMO_XORW,
+    AMO_ORW,
+    AMO_ANDW,
+    AMO_MINW,
+    AMO_MAXW,
+    AMO_MINUW,
+    AMO_MAXUW
+  } amo_op_e;
+
+  typedef enum logic [11:0] {
+    // csr register in unprivilege mode
+    CYCLE   = 12'hC00,
+    TIME    = 12'hC01,
+    INSTRET = 12'hC02,
+
+    // csr register in M mode
+    MSTATUS    = 12'h300,
+    MISA       = 12'h301,
+    MEDELEG    = 12'h302,
+    MIDELEG    = 12'h303,
+    MIE        = 12'h304,
+    MTVEC      = 12'h305,
+    MCOUNTEREN = 12'h306,
+    MSCRATCH   = 12'h340,
+    MEPC       = 12'h341,
+    MCAUSE     = 12'h342,
+    MTVAL      = 12'h343,
+    MIP        = 12'h344,
+    PMPCFG0    = 12'h3A0,
+    PMPADDR0   = 12'h3B0,
+    MHARTID    = 12'hF14,
+    MENVCFG    = 12'h30A,
+
+    // csr register in S mode
+    SSTATUS    = 12'h100,
+    SEDELEG    = 12'h102,
+    SIDELEG    = 12'h103,
+    SIE        = 12'h104,
+    STVEC      = 12'h105,
+    SCOUNTEREN = 12'h106,
+    SSCRATCH   = 12'h140,
+    SEPC       = 12'h141,
+    SCAUSE     = 12'h142,
+    STVAL      = 12'h143,
+    SIP        = 12'h144,
+    SATP       = 12'h180
+  } csr_e;
+
+  typedef enum {
+    LD_NONE,
+    LD_LB,
+    LD_LH,
+    LD_LW,
+    LD_LD,
+    LD_LBU,   // 5
+    LD_LHU,
+    LD_LWU
+  } ld_op_e;
+
+  typedef enum {
+    SD_NONE,
+    SD_SB,
+    SD_SH,
+    SD_SW,
+    SD_SD
+  } sd_op_e;
+
+  typedef enum {
+    OP_SRC_NONE,
+    OP_SRC_REG,
+    OP_SRC_IMM,
+    OP_SRC_AMO,
+    OP_SRC_PC
+  } op_src_e;
+
+  typedef struct packed {
+    opcode_e  opcode;
+    alu_op_e  alu_op;
+    mult_op_e mult_op;
+    div_op_e  div_op;
+    sys_op_e  sys_op;
+    ld_op_e   ld_op;
+    sd_op_e   sd_op;
+    amo_op_e  amo_op;
+
+    logic [4:0]  rs1;
+    logic [4:0]  rs2;
+    logic [4:0]  rd;
+    logic [4:0]  csr_imm;
+    logic [11:0] csr;
+    logic        reg_write;
+
+    op_src_e op_s1;
+    op_src_e op_s2;
+    reg_t    imm;
+  } id_t;
 endpackage
+
 import hawks::*;
 
 //------------------------------------
@@ -197,6 +406,7 @@ module soc (
   stage_e stage, exc_stage;
   addr_t pc;
   instr_t instr;
+  id_t id_out;
   exception_t exc[5];
 
   memif master_ports[MASTER_CNT] ();
@@ -228,7 +438,8 @@ module soc (
     .valid(stage == STG_DECODE),
     .instr_i(instr),
     .ready_o(id_ready),
-    .exc_o(exc[2])
+    .exc_o(exc[2]),
+    .id_o(id_out)
   );
 
   exu exu1 (
@@ -539,7 +750,10 @@ module idu (
   output exception_t exc_o,
 
   // stage specific input
-  input instr_t instr_i
+  input instr_t instr_i,
+
+  // decode output
+  output id_t id_o
 );
   mcause_e ecause;
   always_comb begin
@@ -560,6 +774,319 @@ module idu (
     end
   end
 
+  // instr decoding
+  logic [2:0] f3;
+  logic [6:0] f7;
+  logic [9:0] fc;
+  imm_type_e imm_type;
+
+  always_comb begin : decode
+    if (valid) begin
+      id_o        = '0;
+      id_o.opcode = opcode_e'(instr_i[6:0]);
+      id_o.rs1    = instr_i[19:15];
+      id_o.rs2    = instr_i[24:20];
+      id_o.rd     = instr_i[11:7];
+      f3          = instr_i[14:12];
+      f7          = instr_i[31:25];
+      fc          = {f7, f3};
+
+      unique case (id_o.opcode)
+        OPCODE_OP: begin
+          `LOGI("OP");
+          // 002081b3: add x3, x1, x2
+          // add rd, rs1, rs2
+          // ALU: rs1 <op> rs2
+          id_o.reg_write = 1;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_REG;
+          unique case (fc)
+            {7'b0000000, 3'b000} : id_o.alu_op = ALU_ADD;
+            {7'b0100000, 3'b000} : id_o.alu_op = ALU_SUB;
+            {7'b0000000, 3'b111} : id_o.alu_op = ALU_AND;
+            {7'b0000000, 3'b110} : id_o.alu_op = ALU_OR;
+            {7'b0000000, 3'b100} : id_o.alu_op = ALU_XOR;
+            {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLL;
+            {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRL;
+            {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRA;
+            {7'b0000000, 3'b010} : id_o.alu_op = ALU_SLT;
+            {7'b0000000, 3'b011} : id_o.alu_op = ALU_SLTU;
+            {7'b0000001, 3'b000} : id_o.mult_op = MULT_MUL;
+            {7'b0000001, 3'b001} : id_o.mult_op = MULT_MULH;
+            {7'b0000001, 3'b010} : id_o.mult_op = MULT_MULHSU;
+            {7'b0000001, 3'b011} : id_o.mult_op = MULT_MULHU;
+            {7'b0000001, 3'b100} : id_o.div_op = DIV_DIV;
+            {7'b0000001, 3'b101} : id_o.div_op = DIV_DIVU;
+            {7'b0000001, 3'b110} : id_o.div_op = DIV_REM;
+            {7'b0000001, 3'b111} : id_o.div_op = DIV_REMU;
+            default: ;
+          endcase
+        end
+        OPCODE_OP_32: begin
+          // R-type: rd = rs1 op rs2 (32-bit + sign extend)
+          id_o.reg_write = 1;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_REG;
+          unique case (fc)
+            {7'b0000000, 3'b000} : id_o.alu_op = ALU_ADDW;
+            {7'b0100000, 3'b000} : id_o.alu_op = ALU_SUBW;
+            {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLLW;
+            {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRLW;
+            {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRAW;
+            {7'b0000001, 3'b000} : id_o.mult_op = MULT_MULW;
+            {7'b0000001, 3'b100} : id_o.div_op = DIV_DIVW;
+            {7'b0000001, 3'b101} : id_o.div_op = DIV_DIVUW;
+            {7'b0000001, 3'b110} : id_o.div_op = DIV_REMW;
+            {7'b0000001, 3'b111} : id_o.div_op = DIV_REMUW;
+            default: ;
+          endcase
+        end
+        OPCODE_OP_IMM: begin
+          `LOGI("OP_IMM");
+          // 00500093: addi x1, x0, 5
+          // addi rd, rs1, imm
+          // ALU: rs1 <op> imm;
+          id_o.reg_write = 1;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_IMM;
+          imm_type = IMM_I;
+          unique case (f3)
+            3'b000:  id_o.alu_op = ALU_ADD;
+            3'b001:  id_o.alu_op = ALU_SLL;
+            3'b010:  id_o.alu_op = ALU_SLT;
+            3'b011:  id_o.alu_op = ALU_SLTU;
+            3'b100:  id_o.alu_op = ALU_XOR;
+            3'b110:  id_o.alu_op = ALU_OR;
+            3'b101:  id_o.alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
+            3'b111:  id_o.alu_op = ALU_AND;
+            default: ;
+          endcase
+        end
+        OPCODE_OP_IMM_32: begin
+          `LOGI("OP_IMM32");
+          // 00500093: addiw x1, x0, 5
+          // addi rd, rs1, imm
+          // ALU: rs1 <op> imm;
+          id_o.reg_write = 1;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_IMM;
+          imm_type = IMM_I;
+          unique case (f3)
+            3'b000:  id_o.alu_op = ALU_ADDW;
+            default: ;
+          endcase
+          unique case (fc)
+            {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLLW;
+            {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRLW;
+            {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRAW;
+            default: ;
+          endcase
+        end
+        OPCODE_LOAD: begin
+          `LOGI("LOAD");
+          // 00003283: ld x5, 0(x0)
+          // ld rd, offset(rs1)
+          // ALU: addr= rs1 + offset
+          // rd = mem[addr]
+          id_o.reg_write = 1;
+          id_o.alu_op = ALU_ADD;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_IMM;
+          imm_type = IMM_I;
+          unique case (f3)
+            3'b000:  id_o.ld_op = LD_LB;
+            3'b001:  id_o.ld_op = LD_LH;
+            3'b010:  id_o.ld_op = LD_LW;
+            3'b011:  id_o.ld_op = LD_LD;
+            3'b100:  id_o.ld_op = LD_LBU;
+            3'b101:  id_o.ld_op = LD_LHU;
+            3'b110:  id_o.ld_op = LD_LWU;
+            default: ;
+          endcase
+        end
+        OPCODE_STORE: begin
+          `LOGI("STORE");
+          // 00403023: sd x4, 0(x0)
+          // ALU: addr = rs1 + imm;
+          // mem[addr] = rs2
+          id_o.reg_write = 0;
+          id_o.alu_op = ALU_ADD;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_IMM;
+          imm_type = IMM_S;
+          unique case (f3)
+            3'b000:  id_o.sd_op = SD_SB;
+            3'b001:  id_o.sd_op = SD_SH;
+            3'b010:  id_o.sd_op = SD_SW;
+            3'b011:  id_o.sd_op = SD_SD;
+            default: ;
+          endcase
+        end
+        OPCODE_BRANCH: begin
+          `LOGI("BRANCH");
+          // 00628663: beq  x5, x6, +12
+          // beq rs1, rs2, imm(label)
+          // take_branch ? PC=PC+imm : PC=PC+4;
+          imm_type   = IMM_B;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_REG;
+          unique case (f3)
+            3'b000:  id_o.alu_op = ALU_BEQ;
+            3'b001:  id_o.alu_op = ALU_BNE;
+            3'b100:  id_o.alu_op = ALU_BLT;
+            3'b101:  id_o.alu_op = ALU_BGE;
+            3'b110:  id_o.alu_op = ALU_BLTU;
+            3'b111:  id_o.alu_op = ALU_BGEU;
+            default: ;
+          endcase
+        end
+        OPCODE_JAL: begin
+          `LOGI("JAL");
+          // 008000ef: jal rd, imm
+          // rd = PC+4; PC=PC+imm;
+          imm_type = IMM_J;
+          id_o.reg_write = 1;
+          id_o.alu_op = ALU_ADD;
+          id_o.op_s1 = OP_SRC_PC;
+          id_o.op_s2 = OP_SRC_IMM;
+        end
+        OPCODE_JALR: begin
+          `LOGI("JALR");
+          // 00008067: jalr rd, imm(rs1)
+          // rd = PC+4; PC = (rs1 + imm) & ~1 ;
+          imm_type = IMM_I;
+          id_o.reg_write = 1;
+          id_o.alu_op = ALU_ADD;
+          id_o.op_s1 = OP_SRC_REG;
+          id_o.op_s2 = OP_SRC_IMM;
+        end
+        OPCODE_AUIPC: begin
+          `LOGI("AUIPC");
+          // auipc rd, imm
+          // rd = PC + (imm << 12)
+          imm_type = IMM_U;
+          id_o.reg_write = 1;
+          id_o.alu_op = ALU_ADD;
+          id_o.op_s1 = OP_SRC_PC;
+          id_o.op_s2 = OP_SRC_IMM;
+        end
+        OPCODE_LUI: begin
+          `LOGI("LUI");
+          // lui rd, imm
+          // rd = (imm << 12)
+          // ALU: x0 + (imm << 12);
+          imm_type       = IMM_U;
+          id_o.reg_write = 1;
+          id_o.alu_op    = ALU_ADD;
+          id_o.rs1       = 0;
+          id_o.op_s1     = OP_SRC_REG;
+          id_o.op_s2     = OP_SRC_IMM;
+        end
+
+        OPCODE_SYSTEM: begin
+          `LOGI("SYSTEM");
+          unique case (f3)
+            3'b000: begin
+              unique case (instr_i[31:20])
+                12'h000: id_o.sys_op = SYS_ECALL;
+                12'h001: id_o.sys_op = SYS_EBREAK;
+                12'h002: id_o.sys_op = SYS_URET;
+                12'h102: id_o.sys_op = SYS_SRET;
+                12'h105: id_o.sys_op = SYS_WFI;
+                12'h302: id_o.sys_op = SYS_MRET;
+                default: ;
+              endcase
+              if (f7 == 7'b0001001) begin
+                id_o.sys_op = SYS_FENCE;
+              end
+            end
+            3'b001: begin
+              // csrrw rd, csr, rs1
+              // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
+              id_o.reg_write = 1;
+              id_o.sys_op    = SYS_CSRRW;
+              id_o.csr       = instr_i[31:20];
+            end
+            3'b010: begin
+              id_o.reg_write = 1;
+              id_o.sys_op    = SYS_CSRRS;
+              id_o.csr       = instr_i[31:20];
+            end
+            3'b011: begin  // CSRRC
+              id_o.reg_write = 1;
+              id_o.sys_op    = SYS_CSRRC;
+              id_o.csr       = instr_i[31:20];
+            end
+
+            3'b101: begin  // CSRRWI
+              id_o.reg_write = 1;
+              id_o.sys_op    = SYS_CSRRWI;
+              id_o.csr       = instr_i[31:20];
+              id_o.csr_imm   = id_o.rs1;
+            end
+
+            3'b110: begin  // CSRRSI
+              id_o.reg_write = 1;
+              id_o.sys_op    = SYS_CSRRSI;
+              id_o.csr       = instr_i[31:20];
+              id_o.csr_imm   = id_o.rs1;
+            end
+
+            3'b111: begin  // CSRRCI
+              id_o.reg_write = 1;
+              id_o.sys_op    = SYS_CSRRCI;
+              id_o.csr       = instr_i[31:20];
+              id_o.csr_imm   = id_o.rs1;
+            end
+            default: ;
+          endcase
+        end
+        OPCODE_AMO: begin
+          `LOGI("AMO");
+          id_o.reg_write = 1;
+          id_o.op_s1     = OP_SRC_AMO;
+          id_o.op_s2     = OP_SRC_REG;
+          unique case (fc)
+            // verilog_format: off
+            {7'b0001000, 3'b010} : begin id_o.amo_op = AMO_LRW; id_o.ld_op = LD_LW; end
+            {7'b0001100, 3'b010} : begin id_o.amo_op = AMO_SCW; id_o.sd_op = SD_SW; end
+            {7'b0001000, 3'b011} : begin id_o.amo_op = AMO_LR; id_o.ld_op = LD_LD; end
+            {7'b0001100, 3'b011} : begin id_o.amo_op = AMO_SC; id_o.sd_op = SD_SD; end
+            {7'b0000100, 3'b010} : begin id_o.amo_op = AMO_SWAPW; id_o.sd_op = SD_SW; end
+            {7'b0000000, 3'b010} : begin id_o.amo_op = AMO_ADDW; id_o.alu_op = ALU_ADDW; id_o.sd_op = SD_SW; end
+            {7'b0010000, 3'b010} : begin id_o.amo_op = AMO_XORW; id_o.alu_op = ALU_XOR; id_o.sd_op = SD_SW; end
+            {7'b0100000, 3'b010} : begin id_o.amo_op = AMO_ORW; id_o.alu_op = ALU_OR; id_o.sd_op = SD_SW; end
+            {7'b0110000, 3'b010} : begin id_o.amo_op = AMO_ANDW; id_o.alu_op = ALU_AND; id_o.sd_op = SD_SW; end
+            {7'b1000000, 3'b010} : begin id_o.amo_op = AMO_MINW; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SW; end
+            {7'b1010000, 3'b010} : begin id_o.amo_op = AMO_MAXW; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SW; end
+            {7'b1100000, 3'b010} : begin id_o.amo_op = AMO_MINUW; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SW; end
+            {7'b1110000, 3'b010} : begin id_o.amo_op = AMO_MAXUW; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SW; end
+            {7'b0000100, 3'b011} : begin id_o.amo_op = AMO_SWAP; id_o.sd_op = SD_SD; end
+            {7'b0000000, 3'b011} : begin id_o.amo_op = AMO_ADD; id_o.alu_op = ALU_ADD; id_o.sd_op = SD_SD; end
+            {7'b0010000, 3'b011} : begin id_o.amo_op = AMO_XOR; id_o.alu_op = ALU_XOR; id_o.sd_op = SD_SD; end
+            {7'b0100000, 3'b011} : begin id_o.amo_op = AMO_OR; id_o.alu_op = ALU_OR; id_o.sd_op = SD_SD; end
+            {7'b0110000, 3'b011} : begin id_o.amo_op = AMO_AND; id_o.alu_op = ALU_AND; id_o.sd_op = SD_SD; end
+            {7'b1000000, 3'b011} : begin id_o.amo_op = AMO_MIN; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SD; end
+            {7'b1010000, 3'b011} : begin id_o.amo_op = AMO_MAX; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SD; end
+            {7'b1100000, 3'b011} : begin id_o.amo_op = AMO_MINU; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SD; end
+            {7'b1110000, 3'b011} : begin id_o.amo_op = AMO_MAXU; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SD; end
+            // verilog_format: on
+            default: id_o.amo_op = AMO_NONE;
+          endcase
+        end
+        default: ;
+      endcase
+
+      unique case (imm_type)
+        IMM_I:   id_o.imm = {{52{instr_i[31]}}, instr_i[31:20]};
+        IMM_S:   id_o.imm = {{52{instr_i[31]}}, instr_i[31:25], instr_i[11:7]};
+        IMM_B:   id_o.imm = {{51{instr_i[31]}}, instr_i[31], instr_i[7], instr_i[30:25], instr_i[11:8], 1'b0};
+        IMM_U:   id_o.imm = {{32{instr_i[31]}}, instr_i[31:12], 12'b0};
+        IMM_J:   id_o.imm = {{43{instr_i[31]}}, instr_i[31], instr_i[19:12], instr_i[20], instr_i[30:21], 1'b0};
+        default: id_o.imm = '0;
+      endcase
+    end
+  end
 endmodule
 
 //------------------------------------
