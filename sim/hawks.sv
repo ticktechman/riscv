@@ -94,10 +94,10 @@ package hawks;
     EXC_STORE_ACCESS_FAULT    = 64'h7,  // 存储/AMO访问故障
     EXC_ECALL_U_MODE          = 64'h8,  // U模式环境调用
     EXC_ECALL_S_MODE          = 64'h9,  // S模式环境调用
-    EXC_ECALL_M_MODE          = 64'hB,  // M模式环境调用
-    EXC_INSTR_PAGE_FAULT      = 64'hC,  // 指令页面错误
-    EXC_LOAD_PAGE_FAULT       = 64'hD,  // 加载页面错误
-    EXC_STORE_PAGE_FAULT      = 64'hF,  // 存储/AMO页面错误
+    EXC_ECALL_M_MODE          = 64'hb,  // M模式环境调用
+    EXC_INSTR_PAGE_FAULT      = 64'hc,  // 指令页面错误
+    EXC_LOAD_PAGE_FAULT       = 64'hd,  // 加载页面错误
+    EXC_STORE_PAGE_FAULT      = 64'hf,  // 存储/AMO页面错误
 
     INTR_SUPERVISOR_SW  = 64'h8000_0000_0000_0001,  // 监督级软件中断
     INTR_MACHINE_SW     = 64'h8000_0000_0000_0003,  // 机器级软件中断
@@ -193,10 +193,10 @@ module soc (
 
   logic if_ready, id_ready, ex_ready, ls_ready, rf_ready;
 
-  stage_e stage;
+  stage_e stage, exc_stage;
   addr_t pc;
   instr_t instr;
-  exception_t exc;
+  exception_t exc[5];
 
   memif master_ports[MASTER_CNT] ();
   memif slave_ports[SLAVE_CNT] ();
@@ -217,7 +217,8 @@ module soc (
     .valid(stage == STG_FETCH),
     .pc_i(pc),
     .instr_o(instr),
-    .ready_o(if_ready)
+    .ready_o(if_ready),
+    .exc_o(exc[0])
   );
 
   idu idu1 (
@@ -272,11 +273,17 @@ module soc (
       `LOGI($sformatf("stage:%0d", stage));
       unique case (stage)
         STG_IDLE: begin
+          exc_stage <= stage;
           stage <= STG_FETCH;
         end
         STG_FETCH: begin
           if (if_ready) begin
-            stage <= STG_DECODE;
+            if (exc[0].fired) begin
+              stage <= STG_WB;
+              exc_stage <= stage;
+            end else begin
+              stage <= STG_DECODE;
+            end
           end
         end
         STG_DECODE: begin
@@ -295,9 +302,17 @@ module soc (
           end
         end
         STG_WB: begin
-          if (rf_ready) begin
-            stage <= STG_FETCH;
+          if (exc_stage != STG_IDLE) begin
+            // TODO handle exception change pc and return to fetch stage
+            `LOGI($sformatf("exc fired at stage: %0d", exc_stage));
             pc <= pc + 4;
+            exc_stage <= STG_IDLE;
+            stage <= STG_FETCH;
+          end else begin
+            if (rf_ready) begin
+              stage <= STG_FETCH;
+              pc <= pc + 4;
+            end
           end
         end
         default: ;
@@ -411,7 +426,10 @@ module ifu (
   input  logic   valid,
   input  addr_t  pc_i,
   output instr_t instr_o,
-  output logic   ready_o
+  output logic   ready_o,
+
+  // exception interface
+  output exception_t exc_o
 );
   typedef enum {
     IDLE,
@@ -420,10 +438,44 @@ module ifu (
   } state_e;
 
   state_e state;
+
+  logic bus_err, page_fault, misaligned;
   always_comb begin
-    ready_o = 0;
-    if (state == FETCH && mif.ready) begin
+    ready_o    = 0;
+    bus_err    = 0;
+    page_fault = 0;
+    misaligned = 0;
+
+    if (valid && pc_i[1:0] != 0) begin
+      `LOGI($sformatf("pc misaligned: %h", pc_i));
+      misaligned = 1;
       ready_o = 1;
+    end
+
+    if (valid && state == FETCH && mif.ready) begin
+      ready_o = 1;
+      if (mif.error) begin
+        `LOGE($sformatf("load instr error: %h", pc_i));
+        bus_err = 1;
+      end
+    end
+  end
+
+  // handle exception
+  always_comb begin
+    exc_o = '0;
+    if (bus_err) begin
+      exc_o.fired = 1;
+      exc_o.cause = EXC_INSTR_ACCESS_FAULT;
+      exc_o.eval  = pc_i;
+    end else if (misaligned) begin
+      exc_o.fired = 1;
+      exc_o.cause = EXC_INSTR_ADDR_MISALIGNED;
+      exc_o.eval  = pc_i;
+    end else if (page_fault) begin
+      exc_o.fired = 1;
+      exc_o.cause = EXC_INSTR_PAGE_FAULT;
+      exc_o.eval  = pc_i;
     end
   end
 
@@ -434,10 +486,12 @@ module ifu (
       if (valid) begin
         unique case (state)
           IDLE: begin
-            mif.addr <= pc_i;
-            mif.we <= 0;
-            mif.valid <= 1;
-            state <= FETCH;
+            if (!misaligned) begin
+              mif.addr <= pc_i;
+              mif.we <= 0;
+              mif.valid <= 1;
+              state <= FETCH;
+            end
           end
           FETCH: begin
             if (mif.ready) begin
