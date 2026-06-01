@@ -11,36 +11,40 @@
 `timescale 1ns / 100ps
 
 `define DEBUG_LOG
-`ifdef DEBUG_LOG
-`define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
-`define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
-`define LOGE(msg) $display("[E|%9t|%m] %s", $realtime, msg)
-`else
-`define LOGI(msg)
-`define LOGW(msg)
-`define LOGE(msg)
-`endif
-
-`define COLOR_NONE "\033[0m"
-`define RED "\033[31m"
-`define GREEN "\033[32m"
-`define YELLOW "\033[33m"
-
 //------------------------------------
 // types and structures
 //------------------------------------
 package hawks;
-  localparam int unsigned MAXMASTER = 2;
-  localparam int unsigned MAXSLV = 3;
+  localparam int unsigned MASTER_CNT = 2;
+  localparam int unsigned SLAVE_CNT = 3;
+  localparam addr_t BOOT_ADDR = 64'h8000_0000;
+
+`ifdef DEBUG_LOG
+  `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
+  `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
+  `define LOGE(msg) $display("[E|%9t|%m] %s", $realtime, msg)
+`else
+  `define LOGI(msg)
+  `define LOGW(msg)
+  `define LOGE(msg)
+`endif
+
+
+  `define COLOR_NONE "\033[0m"
+  `define COLOR_RED "\033[31m"
+  `define COLOR_GREEN "\033[32m"
+  `define COLOR_YELLOW "\033[33m"
 
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
+  typedef logic [31:0] instr_t;
+
   typedef struct packed {
     addr_t BASE;
     addr_t END;
   } mmap_t;
 
-  parameter mmap_t maping[MAXSLV] = '{
+  parameter mmap_t maping[SLAVE_CNT] = '{
       '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_1fff)},
       '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_2fff)},
       '{BASE: addr_t'('h8000_3000), END: addr_t'('h8000_3fff)}
@@ -54,15 +58,23 @@ package hawks;
     S32,
     U32,
     US64
-  } mtype_e;
+  } datatype_e;
 
+  typedef enum {
+    STG_IDLE,
+    STG_FETCH,
+    STG_DECODE,
+    STG_EXEC,
+    STG_MEM,
+    STG_WB
+  } stage_e;
 
   typedef struct packed {
-    logic   valid;
-    logic   we;
-    addr_t  addr;
-    mtype_e mtype;
-    reg_t   wd;
+    logic valid;
+    logic we;
+    addr_t addr;
+    datatype_e dtype;
+    reg_t wd;
   } request_t;
 
   typedef struct packed {
@@ -70,6 +82,36 @@ package hawks;
     logic error;
     reg_t rd;
   } response_t;
+
+  typedef enum logic [63:0] {
+    EXC_INSTR_ADDR_MISALIGNED = 64'h0,  // 指令地址未对齐
+    EXC_INSTR_ACCESS_FAULT    = 64'h1,  // 取指访问故障
+    EXC_ILLEGAL_INSTRUCTION   = 64'h2,  // 非法指令
+    EXC_BREAKPOINT            = 64'h3,  // 断点
+    EXC_LOAD_ADDR_MISALIGNED  = 64'h4,  // 加载地址未对齐
+    EXC_LOAD_ACCESS_FAULT     = 64'h5,  // 加载访问故障
+    EXC_STORE_ADDR_MISALIGNED = 64'h6,  // 存储/AMO地址未对齐
+    EXC_STORE_ACCESS_FAULT    = 64'h7,  // 存储/AMO访问故障
+    EXC_ECALL_U_MODE          = 64'h8,  // U模式环境调用
+    EXC_ECALL_S_MODE          = 64'h9,  // S模式环境调用
+    EXC_ECALL_M_MODE          = 64'hB,  // M模式环境调用
+    EXC_INSTR_PAGE_FAULT      = 64'hC,  // 指令页面错误
+    EXC_LOAD_PAGE_FAULT       = 64'hD,  // 加载页面错误
+    EXC_STORE_PAGE_FAULT      = 64'hF,  // 存储/AMO页面错误
+
+    INTR_SUPERVISOR_SW  = 64'h8000_0000_0000_0001,  // 监督级软件中断
+    INTR_MACHINE_SW     = 64'h8000_0000_0000_0003,  // 机器级软件中断
+    INTR_SUPERVISOR_TMR = 64'h8000_0000_0000_0005,  // 监督级定时器中断
+    INTR_MACHINE_TMR    = 64'h8000_0000_0000_0007,  // 机器级定时器中断
+    INTR_SUPERVISOR_EXT = 64'h8000_0000_0000_0009,  // 监督级外部中断
+    INTR_MACHINE_EXT    = 64'h8000_0000_0000_000B   // 机器级外部中断
+  } mcause_e;
+
+  typedef struct packed {
+    logic    fired;
+    mcause_e cause;
+    reg_t    eval;
+  } exception_t;
 
 endpackage
 import hawks::*;
@@ -79,12 +121,12 @@ import hawks::*;
 //------------------------------------
 interface memif;
   logic valid, ready, error, we;
-  mtype_e mtype;
   addr_t addr;
+  datatype_e dtype;
   reg_t rd, wd;
 
-  modport master(input ready, error, rd, output valid, we, addr, mtype, wd);
-  modport slave(output ready, error, rd, input valid, we, addr, mtype, wd);
+  modport master(input ready, error, rd, output valid, we, addr, dtype, wd);
+  modport slave(output ready, error, rd, input valid, we, addr, dtype, wd);
 endinterface
 
 
@@ -95,7 +137,7 @@ module top ();
   logic clk, rst_n, intr;
 
   initial begin
-    $dumpfile("mini.vcd");
+    $dumpfile("hawks.vcd");
     $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
     intr = 1'b0;
@@ -132,7 +174,7 @@ module clkgen #(
     #2 rst_n = 1;
     repeat (COUNTER) @(negedge clk);
     #0.5 rst_n = 0;
-    $write($sformatf("%sTIMEOUT%s", `YELLOW, `COLOR_NONE));
+    $write($sformatf("%sTIMEOUT%s", `COLOR_YELLOW, `COLOR_NONE));
     #0.1 $finish;
   end
 
@@ -149,8 +191,15 @@ module soc (
   input logic intr_i
 );
 
-  memif master_ports[MAXMASTER] ();
-  memif slave_ports[MAXSLV] ();
+  logic if_ready, id_ready, ex_ready, ls_ready, rf_ready;
+
+  stage_e stage;
+  addr_t pc;
+  instr_t instr;
+  exception_t exc;
+
+  memif master_ports[MASTER_CNT] ();
+  memif slave_ports[SLAVE_CNT] ();
 
   bus #(
     .mmaping(maping)
@@ -164,22 +213,45 @@ module soc (
   ifu ifu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(master_ports[0].master)
+    .mif(master_ports[0].master),
+    .valid(stage == STG_FETCH),
+    .pc_i(pc),
+    .instr_o(instr),
+    .ready_o(if_ready)
+  );
+
+  idu idu1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .ready_o(id_ready)
+  );
+
+  exu exu1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .ready_o(ex_ready)
   );
 
   lsu lsu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(master_ports[1].master)
+    .mif(master_ports[1].master),
+    .ready_o(ls_ready)
   );
 
-  sram sram1 (
+  rfu rfu1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .ready_o(rf_ready)
+  );
+
+  rom rom1 (
     .clk(clk),
     .rst_n(rst_n),
     .mif(slave_ports[0].slave)
   );
 
-  rom rom1 (
+  sram sram1 (
     .clk(clk),
     .rst_n(rst_n),
     .mif(slave_ports[1].slave)
@@ -191,10 +263,45 @@ module soc (
     .mif(slave_ports[2].slave)
   );
 
+  // pipeline fsm
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      stage <= STG_IDLE;
+      pc    <= BOOT_ADDR;
     end else begin
-      `LOGI("tick");
+      `LOGI($sformatf("stage:%0d", stage));
+      unique case (stage)
+        STG_IDLE: begin
+          stage <= STG_FETCH;
+        end
+        STG_FETCH: begin
+          if (if_ready) begin
+            stage <= STG_DECODE;
+          end
+        end
+        STG_DECODE: begin
+          if (id_ready) begin
+            stage <= STG_EXEC;
+          end
+        end
+        STG_EXEC: begin
+          if (ex_ready) begin
+            stage <= STG_MEM;
+          end
+        end
+        STG_MEM: begin
+          if (ls_ready) begin
+            stage <= STG_WB;
+          end
+        end
+        STG_WB: begin
+          if (rf_ready) begin
+            stage <= STG_FETCH;
+            pc <= pc + 4;
+          end
+        end
+        default: ;
+      endcase
     end
   end
 
@@ -205,20 +312,20 @@ endmodule
 //------------------------------------
 // shared single channel crossbar
 module bus #(
-  parameter mmap_t mmaping[MAXSLV]
+  parameter mmap_t mmaping[SLAVE_CNT]
 ) (
   input logic clk,
   input logic rst_n,
-  memif.slave masters[MAXMASTER],
-  memif.master slaves[MAXSLV]
+  memif.slave masters[MASTER_CNT],
+  memif.master slaves[SLAVE_CNT]
 );
-  request_t mreq[MAXMASTER];
-  response_t mrsp[MAXMASTER];
-  request_t sreq[MAXSLV];
-  response_t srsp[MAXSLV];
+  request_t mreq[MASTER_CNT];
+  response_t mrsp[MASTER_CNT];
+  request_t sreq[SLAVE_CNT];
+  response_t srsp[SLAVE_CNT];
 
   generate
-    for (genvar m = 0; m < MAXMASTER; m++) begin : master_flatten
+    for (genvar m = 0; m < MASTER_CNT; m++) begin : master_flatten
       assign mreq[m].valid = masters[m].valid;
       assign mreq[m].addr = masters[m].addr;
       assign mreq[m].we = masters[m].we;
@@ -228,7 +335,7 @@ module bus #(
       assign masters[m].rd = mrsp[m].rd;
     end
 
-    for (genvar s = 0; s < MAXSLV; s++) begin : slave_flatten
+    for (genvar s = 0; s < SLAVE_CNT; s++) begin : slave_flatten
       assign slaves[s].valid = sreq[s].valid;
       assign slaves[s].addr = sreq[s].addr;
       assign slaves[s].we = sreq[s].we;
@@ -240,7 +347,7 @@ module bus #(
   endgenerate
 
   // choose one master
-  logic [MAXMASTER-1:0] reqs;
+  logic [MASTER_CNT-1:0] reqs;
   int master_selected;
   always_comb begin
     reqs = '0;
@@ -273,17 +380,20 @@ module bus #(
 
   // connect master and slave on both req and resp
   always_comb begin
-    foreach (sreq[i]) begin
-      sreq[i] = '0;
-    end
-    foreach (mrsp[i]) begin
-      mrsp[i] = '0;
-    end
+    foreach (sreq[i]) sreq[i] = '0;
+    foreach (mrsp[i]) mrsp[i] = '0;
 
     if (master_selected != -1 && slave_selected != -1) begin
       sreq[slave_selected] = mreq[master_selected];
       sreq[slave_selected].addr = addr;
       mrsp[master_selected] = srsp[slave_selected];
+    end else begin
+      // master request but no slave
+      if (master_selected != -1) begin
+        mrsp[master_selected].ready = 1;
+        mrsp[master_selected].error = 1;
+        mrsp[master_selected].rd = 0;
+      end
     end
   end
 
@@ -295,9 +405,53 @@ endmodule
 module ifu (
   input logic clk,
   input logic rst_n,
-  memif.master mif
-);
+  memif.master mif,
 
+  // instr fetch interface
+  input  logic   valid,
+  input  addr_t  pc_i,
+  output instr_t instr_o,
+  output logic   ready_o
+);
+  typedef enum {
+    IDLE,
+    MAPPING,
+    FETCH
+  } state_e;
+
+  state_e state;
+  always_comb begin
+    ready_o = 0;
+    if (state == FETCH && mif.ready) begin
+      ready_o = 1;
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state <= IDLE;
+    end else begin
+      if (valid) begin
+        unique case (state)
+          IDLE: begin
+            mif.addr <= pc_i;
+            mif.we <= 0;
+            mif.valid <= 1;
+            state <= FETCH;
+          end
+          FETCH: begin
+            if (mif.ready) begin
+              `LOGI($sformatf("pc:%h, instr=%h", pc_i, mif.rd[31:0]));
+              mif.valid <= 0;
+              instr_o <= mif.rd[31:0];
+              state <= IDLE;
+            end
+          end
+          default: ;
+        endcase
+      end
+    end
+  end
 endmodule
 
 
@@ -306,8 +460,17 @@ endmodule
 //------------------------------------
 module idu (
   input logic clk,
-  input logic rst_n
+  input logic rst_n,
+
+  output logic ready_o
 );
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      ready_o <= 1;
+    end
+  end
 
 endmodule
 
@@ -315,9 +478,17 @@ endmodule
 // exec
 //------------------------------------
 module exu (
-  input logic clk,
-  input logic rst_n
+  input  logic clk,
+  input  logic rst_n,
+  output logic ready_o
 );
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      ready_o <= 1;
+    end
+  end
 
 endmodule
 
@@ -359,7 +530,9 @@ endmodule
 module lsu (
   input logic clk,
   input logic rst_n,
-  memif.master mif
+  memif.master mif,
+
+  output logic ready_o
 );
   typedef enum {
     IDLE,
@@ -367,43 +540,11 @@ module lsu (
   } state_e;
 
   state_e state;
-  logic fetch;
-
-  addr_t addr = addr_t'('h8000_3000);
-  addr_t next;
-
-  always_comb begin
-    next = addr + 1;
-  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state <= IDLE;
-      fetch <= 1;
     end else begin
-      if (fetch) begin
-        `LOGI($sformatf("state:%0d addr=%h", state, addr));
-        unique case (state)
-          IDLE: begin
-            mif.valid <= 1;
-            mif.addr  <= addr;
-            mif.we    <= 1;
-            mif.wd    <= 0;
-            mif.mtype <= US64;
-            addr <= next;
-            state <= FETCH;
-          end
-          FETCH: begin
-            if (mif.ready) begin
-              mif.valid <= 0;
-              `LOGI($sformatf("data readed: %0d", mif.rd));
-              state <= IDLE;
-              fetch <= 0;
-            end
-          end
-          default: ;
-        endcase
-      end
+      ready_o <= 1;
     end
   end
 
@@ -423,7 +564,7 @@ module sram (
   reg_t m[MAX];
   initial begin
     foreach (m[i]) begin
-      m[i] = 64'(i + 10);
+      m[i] = '0;
     end
   end
 
@@ -456,31 +597,28 @@ module rom (
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t MAX = 128;
-  wire [$clog2(MAX)-1:0] idx = mif.addr[$clog2(MAX)-1:0];
-  reg_t m[MAX];
+  localparam addr_t SIZE = 4 * 1024;
+  localparam string HEX = "isa/isa.hex";
+  localparam BITS = $clog2(SIZE);
+  wire [BITS-1:0] idx = mif.addr[BITS+1:2];
+  logic [31:0] mem[SIZE];
+
   initial begin
-    foreach (m[i]) begin
-      m[i] = 64'(i + 190);
-    end
+    $readmemh(HEX, mem);
   end
 
   // bypass RAW
   always_comb begin
-    mif.ready = 1'b1;
-    if (mif.we && mif.valid) begin
-      mif.rd = mif.wd;
-    end else begin
-      mif.rd = m[idx];
-    end
-  end
-
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      if (mif.valid && mif.we) begin
-        m[idx] = mif.wd;
+    mif.ready = 1'b0;
+    mif.error = 0;
+    mif.rd = 0;
+    if (mif.valid) begin
+      if (mif.we) begin
+        mif.error = 1;
+      end else begin
+        mif.rd = {32'b0, mem[idx]};
       end
+      mif.ready = 1'b1;
     end
   end
 
@@ -510,10 +648,17 @@ endmodule
 // register file
 //------------------------------------
 module rfu (
-  input logic clk,
-  input logic rst_n
+  input  logic clk,
+  input  logic rst_n,
+  output logic ready_o
 );
 
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      ready_o <= 1;
+    end
+  end
 endmodule
 
 //------------------------------------
@@ -541,9 +686,9 @@ module scoreboard (
     end else begin
       if (mif.valid && mif.we) begin
         if (mif.wd == 0) begin
-          $write("%sPASS%s", `GREEN, `COLOR_NONE);
+          $write("%sPASS%s", `COLOR_GREEN, `COLOR_NONE);
         end else begin
-          $write("%sFAIL:%0d%s", `RED, mif.wd, `COLOR_NONE);
+          $write("%sFAIL:%0d%s", `COLOR_RED, mif.wd, `COLOR_NONE);
         end
         $finish(0);
       end
