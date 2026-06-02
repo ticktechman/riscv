@@ -1274,6 +1274,8 @@ module exu (
         rif.d1 = alu_result;
       end else if (id_i.mult_op != MULT_NONE) begin
         rif.d1 = mul_result;
+      end else if (id_i.div_op != DIV_NONE) begin
+        rif.d1 = div_result;
       end
       if (id_i.opcode inside {OPCODE_JAL, OPCODE_JALR}) begin
         rif.d1 = pc_i + 4;
@@ -1284,7 +1286,7 @@ module exu (
   always_comb begin
     ready_o = 0;
     if (valid) begin
-      ready_o = 1;
+      ready_o = div_done;
     end
   end
 
@@ -1317,6 +1319,20 @@ module exu (
     .op1_i(op1),
     .op2_i(op2),
     .result_o(mul_result)
+  );
+
+  // do divide
+  reg_t div_result;
+  logic div_done;
+  div div1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid),
+    .op_i(id_i.div_op),
+    .op1_i(op1),
+    .op2_i(op2),
+    .result_o(div_result),
+    .done_o(div_done)
   );
 
   // handle branch and jump
@@ -1472,9 +1488,151 @@ endmodule
 //------------------------------------
 module div (
   input logic clk,
-  input logic rst_n
+  input logic rst_n,
+  input logic valid,
+  input div_op_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  output reg_t result_o,
+  output logic done_o
 );
 
+  typedef enum logic [1:0] {
+    IDLE   = 2'b00,
+    DIVIDE = 2'b01,
+    FINISH = 2'b10
+  } state_t;
+  state_t state_q, state_d;
+
+  logic [63:0] a_q, a_d, b_q, b_d, quot_q, quot_d;
+  logic [5:0] cnt_q, cnt_d;
+  logic res_inv_q, res_inv_d, rem_inv_q, rem_inv_d;
+  logic is_rem_q, is_rem_d, is_div_zero_q, is_div_zero_d;
+
+  // preprocess
+  logic [63:0] op_a_abs, op_b_abs;
+  logic a_sign, b_sign, is_signed;
+  logic is_divider, is_rv64w;
+
+  assign is_divider = op_i != DIV_NONE;
+  assign is_rv64w = op_i inside {DIV_DIVW, DIV_REMW, DIV_REMUW, DIV_DIVUW};
+  assign is_signed = op_i inside {DIV_DIV, DIV_DIVW, DIV_REM, DIV_REMW};
+  assign a_sign    = is_rv64w ? op1_i[31] : op1_i[63];
+  assign b_sign    = is_rv64w ? op2_i[31] : op2_i[63];
+
+  always_comb begin
+    logic [63:0] v1, v2;
+    v1 = is_rv64w ? (is_signed ? {{32{op1_i[31]}}, op1_i[31:0]} : {32'b0, op1_i[31:0]}) : op1_i;
+    v2 = is_rv64w ? (is_signed ? {{32{op2_i[31]}}, op2_i[31:0]} : {32'b0, op2_i[31:0]}) : op2_i;
+    op_a_abs = (is_signed && a_sign) ? (~v1 + 64'd1) : v1;
+    op_b_abs = (is_signed && b_sign) ? (~v2 + 64'd1) : v2;
+  end
+
+  // leader zero counter to reduce loop
+  function automatic logic [5:0] count_lz(logic [63:0] val);
+    logic [5:0] count;
+    count = 6'd0;
+    for (int i = 63; i >= 0; i--) begin
+      if (val[i]) break;
+      count = count + 6'd1;
+    end
+    return count;
+  endfunction
+
+  logic [5:0] lzc_a, lzc_b, shift_amt;
+  assign lzc_a = count_lz(op_a_abs);
+  assign lzc_b = count_lz(op_b_abs);
+  assign shift_amt = (lzc_b > lzc_a) ? (lzc_b - lzc_a) : 6'd0;
+
+  // try sub
+  logic [64:0] sub_res;
+  assign sub_res = {1'b0, a_q} - {1'b0, b_q};
+
+  // fsm
+  always_comb begin
+    state_d = state_q;
+    a_d = a_q;
+    b_d = b_q;
+    quot_d = quot_q;
+    cnt_d = cnt_q;
+    is_div_zero_d = is_div_zero_q;
+    is_rem_d = is_rem_q;
+    res_inv_d = res_inv_q;
+    rem_inv_d = rem_inv_q;
+    done_o = is_divider ? 1'b0 : 1'b1;
+
+    if (is_divider) begin
+      case (state_q)
+        IDLE: begin
+          if (valid) begin
+            is_div_zero_d = (op_b_abs == 64'b0);
+            is_rem_d      = op_i inside {DIV_REM, DIV_REMUW, DIV_REMW, DIV_REMU};
+            res_inv_d     = is_signed && (a_sign ^ b_sign) && (op_b_abs != 64'b0);
+            rem_inv_d     = is_signed && a_sign;
+            a_d           = op_a_abs;
+            b_d           = op_b_abs << shift_amt;
+            quot_d        = 64'b0;
+            cnt_d         = shift_amt;
+            if (!is_divider || op_a_abs < op_b_abs || op_b_abs == 64'b0) state_d = FINISH;
+            else state_d = DIVIDE;
+          end
+        end
+        DIVIDE: begin
+          if (!sub_res[64]) begin
+            a_d    = sub_res[63:0];
+            quot_d = {quot_q[64-2:0], 1'b1};
+          end else begin
+            quot_d = {quot_q[64-2:0], 1'b0};
+          end
+          b_d = {1'b0, b_q[63:1]};
+          if (cnt_q == 6'd0) state_d = FINISH;
+          else cnt_d = cnt_q - 6'd1;
+        end
+        FINISH: begin
+          done_o = 1'b1;
+          if (valid) state_d = IDLE;
+        end
+        default: state_d = IDLE;
+      endcase
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state_q <= IDLE;
+      a_q <= 0;
+      b_q <= 0;
+      quot_q <= 0;
+      cnt_q <= 0;
+      is_div_zero_q <= 0;
+      is_rem_q <= 0;
+      res_inv_q <= 0;
+      rem_inv_q <= 0;
+    end else begin
+      state_q <= state_d;
+      a_q <= a_d;
+      b_q <= b_d;
+      quot_q <= quot_d;
+      cnt_q <= cnt_d;
+      is_div_zero_q <= is_div_zero_d;
+      is_rem_q <= is_rem_d;
+      res_inv_q <= res_inv_d;
+      rem_inv_q <= rem_inv_d;
+    end
+  end
+
+  // result and sign bit
+  always_comb begin
+    logic [63:0] q_signed, r_signed, pre_res;
+    q_signed = res_inv_q ? (~quot_q + 64'd1) : quot_q;
+    r_signed = rem_inv_q ? (~a_q + 64'd1) : a_q;
+    if (is_div_zero_q) begin
+      q_signed = 64'hFFFF_FFFF_FFFF_FFFF;
+      r_signed = is_rv64w ? {{32{op1_i[31]}}, op1_i[31:0]} : op1_i;
+    end
+    pre_res  = is_rem_q ? r_signed : q_signed;
+    result_o = is_rv64w ? {{32{pre_res[31]}}, pre_res[31:0]} : pre_res;
+  end
 endmodule
 
 //------------------------------------
@@ -1569,7 +1727,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/mul.hex";
+  localparam string HEX = "isa/div.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
