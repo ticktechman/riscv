@@ -36,6 +36,17 @@ package hawks;
   `define COLOR_GREEN "\033[32m"
   `define COLOR_YELLOW "\033[33m"
 
+  // used for sram data copy
+  `define B2R(r, a) {{56{r[a][7]}}, r[a][7:0]}
+  `define H2R(r, a) {{48{r[a+1][7]}}, r[a+1], r[a]}
+  `define W2R(r, a) {{32{r[a+3][7]}}, r[a+3], r[a+2], r[a+1], r[a]}
+  `define D2R(r, a) {r[a+7], r[a+6], r[a+5], r[a+4], r[a+3], r[a+2], r[a+1], r[a]}
+  `define BU2R(r, a) {{56'b0}, r[a]}
+  `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
+  `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
+  `define WU2I(r, a) {r[a+3], r[a+2], r[a+1], r[a]}
+  `define write_data(r, off, data, sz) for (idx_t i = 0; i < sz; i++) r[off+i] <= data[8*i+:8]
+
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
   typedef logic [31:0] instr_t;
@@ -1283,6 +1294,7 @@ module exu (
     end
   end
 
+  // handle done
   always_comb begin
     ready_o = 0;
     if (valid) begin
@@ -1290,6 +1302,7 @@ module exu (
     end
   end
 
+  // prepare op1 and op2 for alu, mul, div
   reg_t op1, op2;
   always_comb begin
     op1 = 0;
@@ -1299,6 +1312,7 @@ module exu (
       op2 = id_i.op_s2 == OP_SRC_REG ? rif.v2 : id_i.imm;
     end
   end
+
   // do math and logic calculation
   alu alu1 (
     .clk(clk),
@@ -1647,6 +1661,11 @@ module lsu (
   input logic valid,
   output logic ready_o,
   output exception_t exc_o
+
+  // input ld_op_e ld_op_i,
+  // input sd_op_e sd_op_i,
+  // input addr_t  addr_i,
+  // input reg_t   data_i
 );
   typedef enum {
     IDLE,
@@ -1687,10 +1706,10 @@ module sram (
   input logic rst_n,
   memif.slave mif
 );
-
-  localparam addr_t MAX = 128;
-  wire [$clog2(MAX)-1:0] idx = mif.addr[$clog2(MAX)-1:0];
-  reg_t m[MAX];
+  localparam addr_t MAX = 32 * 1024;
+  typedef logic [$clog2(MAX)-1:0] idx_t;
+  wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
+  logic [7:0] m[MAX];
   initial begin
     foreach (m[i]) begin
       m[i] = '0;
@@ -1703,7 +1722,16 @@ module sram (
     if (mif.we && mif.valid) begin
       mif.rd = mif.wd;
     end else begin
-      mif.rd = m[idx];
+      unique case (mif.dtype)
+        S8: mif.rd = `B2R(m, idx);
+        U8: mif.rd = `BU2R(m, idx);
+        S16: mif.rd = `H2R(m, idx);
+        U16: mif.rd = `HU2R(m, idx);
+        S32: mif.rd = `W2R(m, idx);
+        U32: mif.rd = `WU2R(m, idx);
+        US64: mif.rd = `D2R(m, idx);
+        default: ;
+      endcase
     end
   end
 
@@ -1711,7 +1739,16 @@ module sram (
     if (!rst_n) begin
     end else begin
       if (mif.valid && mif.we) begin
-        m[idx] = mif.wd;
+        unique case (mif.dtype)
+          S8: `write_data(m, idx, mif.wd, 8);
+          U8: `write_data(m, idx, mif.wd, 8);
+          S16: `write_data(m, idx, mif.wd, 16);
+          U16: `write_data(m, idx, mif.wd, 16);
+          S32: `write_data(m, idx, mif.wd, 32);
+          U32: `write_data(m, idx, mif.wd, 32);
+          US64: `write_data(m, idx, mif.wd, 64);
+          default: ;
+        endcase
       end
     end
   end
