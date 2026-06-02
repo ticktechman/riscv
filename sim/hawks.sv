@@ -334,6 +334,15 @@ package hawks;
     op_src_e op_s2;
     reg_t    imm;
   } id_t;
+
+  typedef enum {
+    WB_SRC_NONE,
+    WB_SRC_ALU,
+    WB_SRC_MEM,
+    WB_SRC_AMO,
+    WB_SRC_CSR
+  } wb_src_e;
+
 endpackage
 
 import hawks::*;
@@ -352,8 +361,9 @@ interface memif;
 endinterface
 
 interface regif;
+  wb_src_e src;
   logic [4:0] r1, r2, w1;
-  reg_t v1, v2, d1;
+  reg_t v1, v2, d1, walu, wmem, wcsr, wamo;
   modport master(output r1, r2, w1, d1, input v1, v2);
   modport slave(input r1, r2, w1, d1, output v1, v2);
 endinterface
@@ -748,6 +758,7 @@ module ifu (
           IDLE: begin
             if (ecause == EXC_NONE) begin
               mif.addr <= pc_i;
+              mif.dtype <= U32;
               mif.we <= 0;
               mif.valid <= 1;
               state <= FETCH;
@@ -1664,8 +1675,10 @@ module lsu (
 
   // input ld_op_e ld_op_i,
   // input sd_op_e sd_op_i,
+  // input amo_op_e amo_op_i,
   // input addr_t  addr_i,
-  // input reg_t   data_i
+  // input reg_t   wd_i
+  // output reg_t  rd_o
 );
   typedef enum {
     IDLE,
@@ -1737,6 +1750,9 @@ module sram (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      foreach (m[i]) begin
+        m[i] <= '0;
+      end
     end else begin
       if (mif.valid && mif.we) begin
         unique case (mif.dtype)
@@ -1792,6 +1808,11 @@ endmodule
 
 //------------------------------------
 // mmu
+// - instruction mapping
+// - data addr mapping
+// - itlb, dtlb
+// - ptw with arbitor
+// - exception to outside
 //------------------------------------
 module mmu (
   input logic clk,
@@ -1802,16 +1823,19 @@ endmodule
 
 //------------------------------------
 // csr
+// - register rw
+// - irq to trap vector
+// - priviledge management
 //------------------------------------
 module csr (
   input logic clk,
   input logic rst_n
 );
-
 endmodule
 
 //------------------------------------
 // register file
+// - 32 64bits common register rw
 //------------------------------------
 module rfu (
   input logic clk,
@@ -1824,6 +1848,9 @@ module rfu (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      foreach (x[i]) begin
+        x[i] <= '0;
+      end
     end else begin : writeback
       if (valid && rif.w1 > 0) begin
         x[rif.w1] <= rif.d1;
