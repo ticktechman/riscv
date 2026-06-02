@@ -363,7 +363,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(20)
+    .COUNTER(100)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -411,8 +411,9 @@ module soc (
 
   logic if_ready, id_ready, ex_ready, ls_ready, rf_ready;
 
+  logic btaken;
   stage_e stage, exc_stage;
-  addr_t pc;
+  addr_t pc, btarget, ttarget;
   instr_t instr;
   id_t id_out;
   exception_t exc[5];
@@ -459,6 +460,8 @@ module soc (
     .exc_o(exc[3]),
     .pc_i(pc),
     .id_i(id_out),
+    .btarget_o(btarget),
+    .btaken_o(btaken),
     .rif(rf.master)
   );
 
@@ -562,8 +565,12 @@ module soc (
             stage <= STG_FETCH;
           end else begin
             if (rf_ready) begin
+              if (btaken) begin
+                pc = btarget;
+              end else begin
+                pc <= pc + 4;
+              end
               stage <= STG_FETCH;
-              pc <= pc + 4;
             end
           end
         end
@@ -1245,10 +1252,13 @@ module exu (
   output exception_t exc_o,
   input addr_t pc_i,
   input id_t id_i,
+  output addr_t btarget_o,
+  output logic btaken_o,
   regif.master rif
 );
   reg_t alu_result;
 
+  // handle register read and writeback
   always_comb begin
     rif.r1 = 0;
     rif.r2 = 0;
@@ -1260,7 +1270,14 @@ module exu (
     end
     if (id_i.reg_write) begin
       rif.w1 = id_i.rd;
-      rif.d1 = alu_result;
+      if (id_i.alu_op != ALU_NONE) begin
+        rif.d1 = alu_result;
+      end else if (id_i.mult_op != MULT_NONE) begin
+        rif.d1 = mul_result;
+      end
+      if (id_i.opcode inside {OPCODE_JAL, OPCODE_JALR}) begin
+        rif.d1 = pc_i + 4;
+      end
     end
   end
 
@@ -1271,19 +1288,58 @@ module exu (
     end
   end
 
+  reg_t op1, op2;
+  always_comb begin
+    op1 = 0;
+    op2 = 0;
+    if (valid) begin
+      op1 = id_i.op_s1 == OP_SRC_REG ? rif.v1 : pc_i;
+      op2 = id_i.op_s2 == OP_SRC_REG ? rif.v2 : id_i.imm;
+    end
+  end
+  // do math and logic calculation
   alu alu1 (
     .clk(clk),
     .rst_n(rst_n),
     .valid(valid && id_i.alu_op != ALU_NONE),
     .op_i(id_i.alu_op),
     .pc_i(pc_i),
-    .op_s1_i(id_i.op_s1),
-    .op_s2_i(id_i.op_s2),
-    .imm_i(id_i.imm),
-    .r1_i(rif.v1),
-    .r2_i(rif.v2),
+    .op1_i(op1),
+    .op2_i(op2),
     .result_o(alu_result)
   );
+
+  // do multiply
+  reg_t mul_result;
+  mul mul1 (
+    .valid(valid),
+    .op_i(id_i.mult_op),
+    .op1_i(op1),
+    .op2_i(op2),
+    .result_o(mul_result)
+  );
+
+  // handle branch and jump
+  always_comb begin
+    btarget_o = '0;
+    btaken_o  = 0;
+    if (id_i.opcode == OPCODE_BRANCH) begin
+      // meet branch
+      if (alu_result[0]) begin
+        btarget_o = pc_i + id_i.imm;
+        btaken_o  = 1;
+      end
+    end
+    if (id_i.opcode == OPCODE_JAL) begin
+      // rd = PC+4; PC=PC+imm;
+      btarget_o = alu_result;
+      btaken_o  = 1;
+    end else if (id_i.opcode == OPCODE_JALR) begin
+      // rd = PC+4; PC = (rs1 + imm) & ~1 ;
+      btarget_o = alu_result & ~1;
+      btaken_o  = 1;
+    end
+  end
 
 endmodule
 
@@ -1297,63 +1353,55 @@ module alu (
   input logic valid,
   input alu_op_e op_i,
   input addr_t pc_i,
-  input op_src_e op_s1_i,
-  input op_src_e op_s2_i,
-  input reg_t imm_i,
-  input reg_t r1_i,
-  input reg_t r2_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
   output reg_t result_o
 );
-  reg_t op1, op2;
   logic [31:0] w_result;
 
   always_comb begin
-    op1 = '0;
-    op2 = '0;
     if (valid) begin
-      op1 = (op_s1_i == OP_SRC_REG) ? r1_i : pc_i;
-      op2 = (op_s2_i == OP_SRC_REG) ? r2_i : imm_i;
       unique case (op_i)
-        ALU_ADD:  result_o = op1 + op2;
-        ALU_SUB:  result_o = op1 - op2;
-        ALU_AND:  result_o = op1 & op2;
-        ALU_OR:   result_o = op1 | op2;
-        ALU_XOR:  result_o = op1 ^ op2;
-        ALU_SLL:  result_o = op1 << op2[5:0];
-        ALU_SRL:  result_o = op1 >> op2[5:0];
-        ALU_SRA:  result_o = $signed(op1) >>> op2[5:0];
-        ALU_SLT:  result_o = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
-        ALU_SLTU: result_o = (op1 < op2) ? 64'd1 : 64'd0;
-        ALU_BNE:  result_o = (op1 != op2) ? 1 : 0;
-        ALU_BEQ:  result_o = (op1 == op2) ? 1 : 0;
-        ALU_BLT:  result_o = ($signed(op1) < $signed(op2)) ? 1 : 0;
-        ALU_BGE:  result_o = ($signed(op1) >= $signed(op2)) ? 1 : 0;
-        ALU_BLTU: result_o = (op1 < op2) ? 1 : 0;
-        ALU_BGEU: result_o = (op1 >= op2) ? 1 : 0;
+        ALU_ADD:  result_o = op1_i + op2_i;
+        ALU_SUB:  result_o = op1_i - op2_i;
+        ALU_AND:  result_o = op1_i & op2_i;
+        ALU_OR:   result_o = op1_i | op2_i;
+        ALU_XOR:  result_o = op1_i ^ op2_i;
+        ALU_SLL:  result_o = op1_i << op2_i[5:0];
+        ALU_SRL:  result_o = op1_i >> op2_i[5:0];
+        ALU_SRA:  result_o = $signed(op1_i) >>> op2_i[5:0];
+        ALU_SLT:  result_o = ($signed(op1_i) < $signed(op2_i)) ? 64'd1 : 64'd0;
+        ALU_SLTU: result_o = (op1_i < op2_i) ? 64'd1 : 64'd0;
+        ALU_BNE:  result_o = (op1_i != op2_i) ? 1 : 0;
+        ALU_BEQ:  result_o = (op1_i == op2_i) ? 1 : 0;
+        ALU_BLT:  result_o = ($signed(op1_i) < $signed(op2_i)) ? 1 : 0;
+        ALU_BGE:  result_o = ($signed(op1_i) >= $signed(op2_i)) ? 1 : 0;
+        ALU_BLTU: result_o = (op1_i < op2_i) ? 1 : 0;
+        ALU_BGEU: result_o = (op1_i >= op2_i) ? 1 : 0;
 
         ALU_ADDW: begin
-          w_result = op1[31:0] + op2[31:0];
+          w_result = op1_i[31:0] + op2_i[31:0];
           result_o = {{32{w_result[31]}}, w_result};
         end
         ALU_SUBW: begin
-          w_result = op1[31:0] - op2[31:0];
+          w_result = op1_i[31:0] - op2_i[31:0];
           result_o = {{32{w_result[31]}}, w_result};
         end
         ALU_SLLW: begin
-          w_result = op1[31:0] << op2[4:0];
+          w_result = op1_i[31:0] << op2_i[4:0];
           result_o = {{32{w_result[31]}}, w_result};
         end
         ALU_SRLW: begin
-          w_result = op1[31:0] >> op2[4:0];
+          w_result = op1_i[31:0] >> op2_i[4:0];
           result_o = {{32{w_result[31]}}, w_result};
         end
         ALU_SRAW: begin
-          w_result = $signed(op1[31:0]) >>> op2[4:0];
+          w_result = $signed(op1_i[31:0]) >>> op2_i[4:0];
           result_o = {{32{w_result[31]}}, w_result};
         end
         default: result_o = '0;
       endcase
-      // `LOGI($sformatf("op:%0d, op1:%h op2:%h r:%h", op_i, op1, op2, result_o));
+      // `LOGI($sformatf("op:%0d, op1:%h op2_i:%h r:%h", op_i, op1, op2_i, result_o));
     end
   end
 endmodule
@@ -1363,9 +1411,59 @@ endmodule
 // multiply
 //------------------------------------
 module mul (
-  input logic clk,
-  input logic rst_n
+  input logic valid,
+  input mult_op_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  output reg_t result_o
 );
+
+  logic signed [64:0] opa, opb;
+  logic signed [129:0] full;
+  always_comb begin
+    if (valid) begin
+      opa = '0;
+      opb = '0;
+      unique case (op_i)
+        MULT_MULHU: begin
+          opa = {1'b0, op1_i};
+          opb = {1'b0, op2_i};
+        end
+        MULT_MULHSU: begin
+          opa = {op1_i[63], op1_i};
+          opb = {1'b0, op2_i};
+        end
+        MULT_MUL, MULT_MULH: begin
+          opa = {op1_i[63], op1_i};
+          opb = {op2_i[63], op2_i};
+        end
+        MULT_MULW: begin
+          opa = {{33{op1_i[31]}}, op1_i[31:0]};
+          opb = {{33{op2_i[31]}}, op2_i[31:0]};
+        end
+        default: ;
+      endcase
+    end
+  end
+  assign full = opa * opb;
+
+  always_comb begin
+    if (valid) begin
+      unique case (op_i)
+        MULT_MUL: begin
+          result_o = full[63:0];
+        end
+        MULT_MULW: begin
+          result_o = {{32{full[31]}}, full[31:0]};
+        end
+        MULT_MULH, MULT_MULHSU, MULT_MULHU: begin
+          result_o = {{32{full[31]}}, full[31:0]};
+          result_o = full[127:64];
+        end
+        default: result_o = 0;
+      endcase
+    end
+  end
 
 endmodule
 
@@ -1471,7 +1569,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/isa.hex";
+  localparam string HEX = "isa/mul.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
