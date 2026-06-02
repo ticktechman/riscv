@@ -17,6 +17,7 @@
 package hawks;
   localparam int unsigned MASTER_CNT = 2;
   localparam int unsigned SLAVE_CNT = 3;
+  localparam int unsigned REGMAX = 32;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
 `ifdef DEBUG_LOG
@@ -339,6 +340,13 @@ interface memif;
   modport slave(output ready, error, rd, input valid, we, addr, dtype, wd);
 endinterface
 
+interface regif;
+  logic [4:0] r1, r2, w1;
+  reg_t v1, v2, d1;
+  modport master(output r1, r2, w1, d1, input v1, v2);
+  modport slave(input r1, r2, w1, d1, output v1, v2);
+endinterface
+
 
 //------------------------------
 // top entry module (zero args)
@@ -411,6 +419,7 @@ module soc (
 
   memif master_ports[MASTER_CNT] ();
   memif slave_ports[SLAVE_CNT] ();
+  regif rf ();
 
   bus #(
     .mmaping(maping)
@@ -447,7 +456,10 @@ module soc (
     .rst_n(rst_n),
     .valid(stage == STG_EXEC),
     .ready_o(ex_ready),
-    .exc_o(exc[3])
+    .exc_o(exc[3]),
+    .pc_i(pc),
+    .id_i(id_out),
+    .rif(rf.master)
   );
 
   lsu lsu1 (
@@ -462,7 +474,9 @@ module soc (
   rfu rfu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .ready_o(rf_ready)
+    .valid(stage == STG_WB),
+    .ready_o(rf_ready),
+    .rif(rf.slave)
   );
 
   rom rom1 (
@@ -758,7 +772,6 @@ module idu (
   mcause_e ecause;
   always_comb begin
     ready_o = 0;
-    ecause  = EXC_NONE;
     if (valid) begin
       ready_o = 1;
     end
@@ -781,7 +794,9 @@ module idu (
   imm_type_e imm_type;
 
   always_comb begin : decode
+    ecause = EXC_NONE;
     if (valid) begin
+      `LOGI("decode");
       id_o        = '0;
       id_o.opcode = opcode_e'(instr_i[6:0]);
       id_o.rs1    = instr_i[19:15];
@@ -988,8 +1003,14 @@ module idu (
           unique case (f3)
             3'b000: begin
               unique case (instr_i[31:20])
-                12'h000: id_o.sys_op = SYS_ECALL;
-                12'h001: id_o.sys_op = SYS_EBREAK;
+                12'h000: begin
+                  id_o.sys_op = SYS_ECALL;
+                  ecause = EXC_ECALL_U_MODE;  //TODO
+                end
+                12'h001: begin
+                  id_o.sys_op = SYS_EBREAK;
+                  ecause = EXC_BREAKPOINT;
+                end
                 12'h002: id_o.sys_op = SYS_URET;
                 12'h102: id_o.sys_op = SYS_SRET;
                 12'h105: id_o.sys_op = SYS_WFI;
@@ -1047,34 +1068,158 @@ module idu (
           id_o.op_s1     = OP_SRC_AMO;
           id_o.op_s2     = OP_SRC_REG;
           unique case (fc)
-            // verilog_format: off
-            {7'b0001000, 3'b010} : begin id_o.amo_op = AMO_LRW; id_o.ld_op = LD_LW; end
-            {7'b0001100, 3'b010} : begin id_o.amo_op = AMO_SCW; id_o.sd_op = SD_SW; end
-            {7'b0001000, 3'b011} : begin id_o.amo_op = AMO_LR; id_o.ld_op = LD_LD; end
-            {7'b0001100, 3'b011} : begin id_o.amo_op = AMO_SC; id_o.sd_op = SD_SD; end
-            {7'b0000100, 3'b010} : begin id_o.amo_op = AMO_SWAPW; id_o.sd_op = SD_SW; end
-            {7'b0000000, 3'b010} : begin id_o.amo_op = AMO_ADDW; id_o.alu_op = ALU_ADDW; id_o.sd_op = SD_SW; end
-            {7'b0010000, 3'b010} : begin id_o.amo_op = AMO_XORW; id_o.alu_op = ALU_XOR; id_o.sd_op = SD_SW; end
-            {7'b0100000, 3'b010} : begin id_o.amo_op = AMO_ORW; id_o.alu_op = ALU_OR; id_o.sd_op = SD_SW; end
-            {7'b0110000, 3'b010} : begin id_o.amo_op = AMO_ANDW; id_o.alu_op = ALU_AND; id_o.sd_op = SD_SW; end
-            {7'b1000000, 3'b010} : begin id_o.amo_op = AMO_MINW; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SW; end
-            {7'b1010000, 3'b010} : begin id_o.amo_op = AMO_MAXW; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SW; end
-            {7'b1100000, 3'b010} : begin id_o.amo_op = AMO_MINUW; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SW; end
-            {7'b1110000, 3'b010} : begin id_o.amo_op = AMO_MAXUW; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SW; end
-            {7'b0000100, 3'b011} : begin id_o.amo_op = AMO_SWAP; id_o.sd_op = SD_SD; end
-            {7'b0000000, 3'b011} : begin id_o.amo_op = AMO_ADD; id_o.alu_op = ALU_ADD; id_o.sd_op = SD_SD; end
-            {7'b0010000, 3'b011} : begin id_o.amo_op = AMO_XOR; id_o.alu_op = ALU_XOR; id_o.sd_op = SD_SD; end
-            {7'b0100000, 3'b011} : begin id_o.amo_op = AMO_OR; id_o.alu_op = ALU_OR; id_o.sd_op = SD_SD; end
-            {7'b0110000, 3'b011} : begin id_o.amo_op = AMO_AND; id_o.alu_op = ALU_AND; id_o.sd_op = SD_SD; end
-            {7'b1000000, 3'b011} : begin id_o.amo_op = AMO_MIN; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SD; end
-            {7'b1010000, 3'b011} : begin id_o.amo_op = AMO_MAX; id_o.alu_op = ALU_SLT; id_o.sd_op = SD_SD; end
-            {7'b1100000, 3'b011} : begin id_o.amo_op = AMO_MINU; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SD; end
-            {7'b1110000, 3'b011} : begin id_o.amo_op = AMO_MAXU; id_o.alu_op = ALU_SLTU; id_o.sd_op = SD_SD; end
-            // verilog_format: on
+            {
+              7'b0001000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_LRW;
+              id_o.ld_op  = LD_LW;
+            end
+            {
+              7'b0001100, 3'b010
+            } : begin
+              id_o.amo_op = AMO_SCW;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b0001000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_LR;
+              id_o.ld_op  = LD_LD;
+            end
+            {
+              7'b0001100, 3'b011
+            } : begin
+              id_o.amo_op = AMO_SC;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b0000100, 3'b010
+            } : begin
+              id_o.amo_op = AMO_SWAPW;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b0000000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_ADDW;
+              id_o.alu_op = ALU_ADDW;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b0010000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_XORW;
+              id_o.alu_op = ALU_XOR;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b0100000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_ORW;
+              id_o.alu_op = ALU_OR;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b0110000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_ANDW;
+              id_o.alu_op = ALU_AND;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b1000000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_MINW;
+              id_o.alu_op = ALU_SLT;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b1010000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_MAXW;
+              id_o.alu_op = ALU_SLT;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b1100000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_MINUW;
+              id_o.alu_op = ALU_SLTU;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b1110000, 3'b010
+            } : begin
+              id_o.amo_op = AMO_MAXUW;
+              id_o.alu_op = ALU_SLTU;
+              id_o.sd_op  = SD_SW;
+            end
+            {
+              7'b0000100, 3'b011
+            } : begin
+              id_o.amo_op = AMO_SWAP;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b0000000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_ADD;
+              id_o.alu_op = ALU_ADD;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b0010000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_XOR;
+              id_o.alu_op = ALU_XOR;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b0100000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_OR;
+              id_o.alu_op = ALU_OR;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b0110000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_AND;
+              id_o.alu_op = ALU_AND;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b1000000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_MIN;
+              id_o.alu_op = ALU_SLT;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b1010000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_MAX;
+              id_o.alu_op = ALU_SLT;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b1100000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_MINU;
+              id_o.alu_op = ALU_SLTU;
+              id_o.sd_op  = SD_SD;
+            end
+            {
+              7'b1110000, 3'b011
+            } : begin
+              id_o.amo_op = AMO_MAXU;
+              id_o.alu_op = ALU_SLTU;
+              id_o.sd_op  = SD_SD;
+            end
             default: id_o.amo_op = AMO_NONE;
           endcase
         end
-        default: ;
+        default: ecause = EXC_ILLEGAL_INSTRUCTION;
       endcase
 
       unique case (imm_type)
@@ -1095,19 +1240,50 @@ endmodule
 module exu (
   input logic clk,
   input logic rst_n,
-
-  // common interface for each stage
   input logic valid,
   output logic ready_o,
-  output exception_t exc_o
+  output exception_t exc_o,
+  input addr_t pc_i,
+  input id_t id_i,
+  regif.master rif
 );
+  reg_t alu_result;
 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      ready_o <= 1;
+  always_comb begin
+    rif.r1 = 0;
+    rif.r2 = 0;
+    rif.w1 = 0;
+    rif.d1 = 0;
+    if (valid) begin
+      rif.r1 = id_i.rs1;
+      rif.r2 = id_i.rs2;
+    end
+    if (id_i.reg_write) begin
+      rif.w1 = id_i.rd;
+      rif.d1 = alu_result;
     end
   end
+
+  always_comb begin
+    ready_o = 0;
+    if (valid) begin
+      ready_o = 1;
+    end
+  end
+
+  alu alu1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid && id_i.alu_op != ALU_NONE),
+    .op_i(id_i.alu_op),
+    .pc_i(pc_i),
+    .op_s1_i(id_i.op_s1),
+    .op_s2_i(id_i.op_s2),
+    .imm_i(id_i.imm),
+    .r1_i(rif.v1),
+    .r2_i(rif.v2),
+    .result_o(alu_result)
+  );
 
 endmodule
 
@@ -1117,9 +1293,69 @@ endmodule
 //------------------------------------
 module alu (
   input logic clk,
-  input logic rst_n
+  input logic rst_n,
+  input logic valid,
+  input alu_op_e op_i,
+  input addr_t pc_i,
+  input op_src_e op_s1_i,
+  input op_src_e op_s2_i,
+  input reg_t imm_i,
+  input reg_t r1_i,
+  input reg_t r2_i,
+  output reg_t result_o
 );
+  reg_t op1, op2;
+  logic [31:0] w_result;
 
+  always_comb begin
+    op1 = '0;
+    op2 = '0;
+    if (valid) begin
+      op1 = (op_s1_i == OP_SRC_REG) ? r1_i : pc_i;
+      op2 = (op_s2_i == OP_SRC_REG) ? r2_i : imm_i;
+      unique case (op_i)
+        ALU_ADD:  result_o = op1 + op2;
+        ALU_SUB:  result_o = op1 - op2;
+        ALU_AND:  result_o = op1 & op2;
+        ALU_OR:   result_o = op1 | op2;
+        ALU_XOR:  result_o = op1 ^ op2;
+        ALU_SLL:  result_o = op1 << op2[5:0];
+        ALU_SRL:  result_o = op1 >> op2[5:0];
+        ALU_SRA:  result_o = $signed(op1) >>> op2[5:0];
+        ALU_SLT:  result_o = ($signed(op1) < $signed(op2)) ? 64'd1 : 64'd0;
+        ALU_SLTU: result_o = (op1 < op2) ? 64'd1 : 64'd0;
+        ALU_BNE:  result_o = (op1 != op2) ? 1 : 0;
+        ALU_BEQ:  result_o = (op1 == op2) ? 1 : 0;
+        ALU_BLT:  result_o = ($signed(op1) < $signed(op2)) ? 1 : 0;
+        ALU_BGE:  result_o = ($signed(op1) >= $signed(op2)) ? 1 : 0;
+        ALU_BLTU: result_o = (op1 < op2) ? 1 : 0;
+        ALU_BGEU: result_o = (op1 >= op2) ? 1 : 0;
+
+        ALU_ADDW: begin
+          w_result = op1[31:0] + op2[31:0];
+          result_o = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SUBW: begin
+          w_result = op1[31:0] - op2[31:0];
+          result_o = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SLLW: begin
+          w_result = op1[31:0] << op2[4:0];
+          result_o = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRLW: begin
+          w_result = op1[31:0] >> op2[4:0];
+          result_o = {{32{w_result[31]}}, w_result};
+        end
+        ALU_SRAW: begin
+          w_result = $signed(op1[31:0]) >>> op2[4:0];
+          result_o = {{32{w_result[31]}}, w_result};
+        end
+        default: result_o = '0;
+      endcase
+      // `LOGI($sformatf("op:%0d, op1:%h op2:%h r:%h", op_i, op1, op2, result_o));
+    end
+  end
 endmodule
 
 
@@ -1165,8 +1401,11 @@ module lsu (
   // handle exceptions
   mcause_e ecause;
   always_comb begin
+    ready_o = 0;
     ecause  = EXC_NONE;
-    ready_o = 1;
+    if (valid) begin
+      ready_o = 1;
+    end
   end
   always_comb begin
     if (ecause != EXC_NONE) begin
@@ -1282,17 +1521,33 @@ endmodule
 // register file
 //------------------------------------
 module rfu (
-  input  logic clk,
-  input  logic rst_n,
-  output logic ready_o
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  output logic ready_o,
+  regif.slave rif
 );
+  reg_t x[REGMAX];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-    end else begin
-      ready_o <= 1;
+    end else begin : writeback
+      if (valid && rif.w1 > 0) begin
+        x[rif.w1] <= rif.d1;
+        `LOGI($sformatf("WB: x[%02d]=%h", rif.w1, rif.d1));
+      end
     end
   end
+
+  always_comb begin
+    if (32'(rif.r1) < REGMAX) rif.v1 = x[rif.r1];
+    if (32'(rif.r2) < REGMAX) rif.v2 = x[rif.r2];
+  end
+
+  always_comb begin
+    ready_o = 1;
+  end
+
 endmodule
 
 //------------------------------------
