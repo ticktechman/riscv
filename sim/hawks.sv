@@ -361,16 +361,15 @@ interface memif;
 endinterface
 
 interface regif;
-  wb_src_e src;
-  logic [4:0] r1, r2, w1;
-  reg_t v1, v2, d1, walu, wmem, wcsr, wamo;
-  modport master(output r1, r2, w1, d1, input v1, v2);
-  modport slave(input r1, r2, w1, d1, output v1, v2);
+  logic [4:0] r1, r2;
+  reg_t v1, v2;
+  modport master(output r1, r2, input v1, v2);
+  modport slave(input r1, r2, output v1, v2);
 endinterface
 
 
 //------------------------------
-// top entry module (zero args)
+// top entry module (no args)
 //------------------------------
 module top ();
   logic clk, rst_n, intr;
@@ -433,6 +432,8 @@ module soc (
   logic if_ready, id_ready, ex_ready, ls_ready, rf_ready;
 
   logic btaken;
+  wb_src_e wb_src;
+  reg_t wb_alu, wb_amo, wb_csr, wb_mem;
   stage_e stage, exc_stage;
   addr_t pc, btarget, ttarget;
   instr_t instr;
@@ -470,7 +471,8 @@ module soc (
     .instr_i(instr),
     .ready_o(id_ready),
     .exc_o(exc[2]),
-    .id_o(id_out)
+    .id_o(id_out),
+    .wb_src_o(wb_src)
   );
 
   exu exu1 (
@@ -483,7 +485,8 @@ module soc (
     .id_i(id_out),
     .btarget_o(btarget),
     .btaken_o(btaken),
-    .rif(rf.master)
+    .rif(rf.master),
+    .wb_o(wb_alu)
   );
 
   lsu lsu1 (
@@ -500,7 +503,13 @@ module soc (
     .rst_n(rst_n),
     .valid(stage == STG_WB),
     .ready_o(rf_ready),
-    .rif(rf.slave)
+    .rif(rf.slave),
+    .wb_src_i(wb_src),
+    .rd_i(id_out.rd),
+    .alu_i(wb_alu),
+    .csr_i(wb_csr),
+    .amo_i(wb_amo),
+    .mem_i(wb_mem)
   );
 
   rom rom1 (
@@ -796,7 +805,8 @@ module idu (
   input instr_t instr_i,
 
   // decode output
-  output id_t id_o
+  output id_t id_o,
+  output wb_src_e wb_src_o
 );
   mcause_e ecause;
   always_comb begin
@@ -827,6 +837,7 @@ module idu (
     if (valid) begin
       `LOGI("decode");
       id_o        = '0;
+      wb_src_o    = WB_SRC_NONE;
       id_o.opcode = opcode_e'(instr_i[6:0]);
       id_o.rs1    = instr_i[19:15];
       id_o.rs2    = instr_i[24:20];
@@ -842,6 +853,7 @@ module idu (
           // add rd, rs1, rs2
           // ALU: rs1 <op> rs2
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_ALU;
           id_o.op_s1 = OP_SRC_REG;
           id_o.op_s2 = OP_SRC_REG;
           unique case (fc)
@@ -869,6 +881,7 @@ module idu (
         OPCODE_OP_32: begin
           // R-type: rd = rs1 op rs2 (32-bit + sign extend)
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_ALU;
           id_o.op_s1 = OP_SRC_REG;
           id_o.op_s2 = OP_SRC_REG;
           unique case (fc)
@@ -891,6 +904,7 @@ module idu (
           // addi rd, rs1, imm
           // ALU: rs1 <op> imm;
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_ALU;
           id_o.op_s1 = OP_SRC_REG;
           id_o.op_s2 = OP_SRC_IMM;
           imm_type = IMM_I;
@@ -912,6 +926,7 @@ module idu (
           // addi rd, rs1, imm
           // ALU: rs1 <op> imm;
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_ALU;
           id_o.op_s1 = OP_SRC_REG;
           id_o.op_s2 = OP_SRC_IMM;
           imm_type = IMM_I;
@@ -933,6 +948,7 @@ module idu (
           // ALU: addr= rs1 + offset
           // rd = mem[addr]
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_MEM;
           id_o.alu_op = ALU_ADD;
           id_o.op_s1 = OP_SRC_REG;
           id_o.op_s2 = OP_SRC_IMM;
@@ -990,6 +1006,7 @@ module idu (
           // rd = PC+4; PC=PC+imm;
           imm_type = IMM_J;
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_ALU;
           id_o.alu_op = ALU_ADD;
           id_o.op_s1 = OP_SRC_PC;
           id_o.op_s2 = OP_SRC_IMM;
@@ -1000,6 +1017,7 @@ module idu (
           // rd = PC+4; PC = (rs1 + imm) & ~1 ;
           imm_type = IMM_I;
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_ALU;
           id_o.alu_op = ALU_ADD;
           id_o.op_s1 = OP_SRC_REG;
           id_o.op_s2 = OP_SRC_IMM;
@@ -1010,6 +1028,7 @@ module idu (
           // rd = PC + (imm << 12)
           imm_type = IMM_U;
           id_o.reg_write = 1;
+          wb_src_o = WB_SRC_ALU;
           id_o.alu_op = ALU_ADD;
           id_o.op_s1 = OP_SRC_PC;
           id_o.op_s2 = OP_SRC_IMM;
@@ -1021,6 +1040,7 @@ module idu (
           // ALU: x0 + (imm << 12);
           imm_type       = IMM_U;
           id_o.reg_write = 1;
+          wb_src_o       = WB_SRC_ALU;
           id_o.alu_op    = ALU_ADD;
           id_o.rs1       = 0;
           id_o.op_s1     = OP_SRC_REG;
@@ -1054,16 +1074,19 @@ module idu (
               // csrrw rd, csr, rs1
               // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
               id_o.reg_write = 1;
+              wb_src_o       = WB_SRC_CSR;
               id_o.sys_op    = SYS_CSRRW;
               id_o.csr       = instr_i[31:20];
             end
             3'b010: begin
               id_o.reg_write = 1;
+              wb_src_o       = WB_SRC_CSR;
               id_o.sys_op    = SYS_CSRRS;
               id_o.csr       = instr_i[31:20];
             end
             3'b011: begin  // CSRRC
               id_o.reg_write = 1;
+              wb_src_o       = WB_SRC_CSR;
               id_o.sys_op    = SYS_CSRRC;
               id_o.csr       = instr_i[31:20];
             end
@@ -1071,6 +1094,7 @@ module idu (
             3'b101: begin  // CSRRWI
               id_o.reg_write = 1;
               id_o.sys_op    = SYS_CSRRWI;
+              wb_src_o       = WB_SRC_CSR;
               id_o.csr       = instr_i[31:20];
               id_o.csr_imm   = id_o.rs1;
             end
@@ -1078,6 +1102,7 @@ module idu (
             3'b110: begin  // CSRRSI
               id_o.reg_write = 1;
               id_o.sys_op    = SYS_CSRRSI;
+              wb_src_o       = WB_SRC_CSR;
               id_o.csr       = instr_i[31:20];
               id_o.csr_imm   = id_o.rs1;
             end
@@ -1085,6 +1110,7 @@ module idu (
             3'b111: begin  // CSRRCI
               id_o.reg_write = 1;
               id_o.sys_op    = SYS_CSRRCI;
+              wb_src_o       = WB_SRC_CSR;
               id_o.csr       = instr_i[31:20];
               id_o.csr_imm   = id_o.rs1;
             end
@@ -1094,6 +1120,7 @@ module idu (
         OPCODE_AMO: begin
           `LOGI("AMO");
           id_o.reg_write = 1;
+          wb_src_o       = WB_SRC_AMO;
           id_o.op_s1     = OP_SRC_AMO;
           id_o.op_s2     = OP_SRC_REG;
           unique case (fc)
@@ -1112,12 +1139,14 @@ module idu (
             {
               7'b0001000, 3'b011
             } : begin
+              wb_src_o    = WB_SRC_MEM;
               id_o.amo_op = AMO_LR;
               id_o.ld_op  = LD_LD;
             end
             {
               7'b0001100, 3'b011
             } : begin
+              wb_src_o    = WB_SRC_NONE;
               id_o.amo_op = AMO_SC;
               id_o.sd_op  = SD_SD;
             end
@@ -1281,6 +1310,7 @@ module exu (
   input id_t id_i,
   output addr_t btarget_o,
   output logic btaken_o,
+  output reg_t wb_o,
   regif.master rif
 );
   reg_t alu_result;
@@ -1289,23 +1319,21 @@ module exu (
   always_comb begin
     rif.r1 = 0;
     rif.r2 = 0;
-    rif.w1 = 0;
-    rif.d1 = 0;
+    wb_o   = 0;
     if (valid) begin
       rif.r1 = id_i.rs1;
       rif.r2 = id_i.rs2;
     end
     if (id_i.reg_write) begin
-      rif.w1 = id_i.rd;
       if (id_i.alu_op != ALU_NONE) begin
-        rif.d1 = alu_result;
+        wb_o = alu_result;
       end else if (id_i.mult_op != MULT_NONE) begin
-        rif.d1 = mul_result;
+        wb_o = mul_result;
       end else if (id_i.div_op != DIV_NONE) begin
-        rif.d1 = div_result;
+        wb_o = div_result;
       end
       if (id_i.opcode inside {OPCODE_JAL, OPCODE_JALR}) begin
-        rif.d1 = pc_i + 4;
+        wb_o = pc_i + 4;
       end
     end
   end
@@ -1852,9 +1880,26 @@ module rfu (
   input logic rst_n,
   input logic valid,
   output logic ready_o,
-  regif.slave rif
+  regif.slave rif,
+  input wb_src_e wb_src_i,
+  input logic [4:0] rd_i,
+  input reg_t alu_i,
+  input reg_t mem_i,
+  input reg_t amo_i,
+  input reg_t csr_i
 );
   reg_t x[REGMAX];
+  reg_t r;
+
+  always_comb begin
+    unique case (wb_src_i)
+      WB_SRC_ALU: r = alu_i;
+      WB_SRC_MEM: r = mem_i;
+      WB_SRC_CSR: r = csr_i;
+      WB_SRC_AMO: r = amo_i;
+      default: ;
+    endcase
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -1862,9 +1907,9 @@ module rfu (
         x[i] <= '0;
       end
     end else begin : writeback
-      if (valid && rif.w1 > 0) begin
-        x[rif.w1] <= rif.d1;
-        `LOGI($sformatf("WB: x[%02d]=%h", rif.w1, rif.d1));
+      if (valid && wb_src_i != WB_SRC_NONE && rd_i != 0) begin
+        x[rd_i] <= r;
+        `LOGI($sformatf("WB: x[%02d]=%h", rd_i, r));
       end
     end
   end
