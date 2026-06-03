@@ -1265,6 +1265,11 @@ endmodule
 
 //------------------------------------
 // exec
+// - arithmetic / logic
+// - multiply and divide
+// - amo operations
+// - csr operations
+// - addr calc: ld/sd, branch/jal(r)
 //------------------------------------
 module exu (
   input logic clk,
@@ -1662,6 +1667,11 @@ endmodule
 
 //------------------------------------
 // lsu
+// - load data / store data
+// - use mmu to map va to pa
+// - LR & SC flag record & clear
+// - addr: alu-result(ld/sd), rs1_val(amo)
+// - write data: rs2_val(sd), amo-result(amo)
 //------------------------------------
 module lsu (
   input logic clk,
