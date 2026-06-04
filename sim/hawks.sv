@@ -57,9 +57,9 @@ package hawks;
   } mmap_t;
 
   parameter mmap_t maping[SLAVE_CNT] = '{
-      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_1fff)},
-      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_2fff)},
-      '{BASE: addr_t'('h8000_3000), END: addr_t'('h8000_3fff)}
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
+      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
+      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_2fff)}
   };
 
   typedef enum {
@@ -383,7 +383,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(100)
+    .COUNTER(500)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -485,17 +485,27 @@ module soc (
     .id_i(id_out),
     .btarget_o(btarget),
     .btaken_o(btaken),
-    .rif(rf.master),
-    .wb_o(wb_alu)
+    .wb_o(wb_alu),
+    .mem_addr_o(mem_addr),
+    .mem_wd_o(mem_wd),
+    .rif(rf.master)
   );
 
+  reg_t mem_rd, mem_wd;
+  addr_t mem_addr;
   lsu lsu1 (
     .clk(clk),
     .rst_n(rst_n),
     .mif(master_ports[1].master),
     .valid(stage == STG_MEM),
     .ready_o(ls_ready),
-    .exc_o(exc[4])
+    .exc_o(exc[4]),
+    .ld_op_i(id_out.ld_op),
+    .sd_op_i(id_out.sd_op),
+    .amo_op_i(id_out.amo_op),
+    .addr_i(mem_addr),
+    .wd_i(mem_wd),
+    .rd_o(mem_rd)
   );
 
   rfu rfu1 (
@@ -518,13 +528,13 @@ module soc (
     .mif(slave_ports[0].slave)
   );
 
-  sram sram1 (
+  scoreboard SB (
     .clk(clk),
     .rst_n(rst_n),
     .mif(slave_ports[1].slave)
   );
 
-  scoreboard SB (
+  sram sram1 (
     .clk(clk),
     .rst_n(rst_n),
     .mif(slave_ports[2].slave)
@@ -1311,38 +1321,36 @@ module exu (
   output addr_t btarget_o,
   output logic btaken_o,
   output reg_t wb_o,
+  output addr_t mem_addr_o,
+  output reg_t mem_wd_o,
   regif.master rif
 );
   reg_t alu_result;
+  reg_t wb, mem_wd;
+  addr_t mem_addr, btarget;
+  logic btaken;
 
   // handle register read and writeback
   always_comb begin
     rif.r1 = 0;
     rif.r2 = 0;
-    wb_o   = 0;
+    exc_o = '0;
+    wb = 0;
     if (valid) begin
       rif.r1 = id_i.rs1;
       rif.r2 = id_i.rs2;
     end
     if (id_i.reg_write) begin
       if (id_i.alu_op != ALU_NONE) begin
-        wb_o = alu_result;
+        wb = alu_result;
       end else if (id_i.mult_op != MULT_NONE) begin
-        wb_o = mul_result;
+        wb = mul_result;
       end else if (id_i.div_op != DIV_NONE) begin
-        wb_o = div_result;
+        wb = div_result;
       end
       if (id_i.opcode inside {OPCODE_JAL, OPCODE_JALR}) begin
-        wb_o = pc_i + 4;
+        wb = pc_i + 4;
       end
-    end
-  end
-
-  // handle done
-  always_comb begin
-    ready_o = 0;
-    if (valid) begin
-      ready_o = div_done;
     end
   end
 
@@ -1395,23 +1403,49 @@ module exu (
 
   // handle branch and jump
   always_comb begin
-    btarget_o = '0;
-    btaken_o  = 0;
+    btarget = '0;
+    btaken  = 0;
     if (id_i.opcode == OPCODE_BRANCH) begin
       // meet branch
       if (alu_result[0]) begin
-        btarget_o = pc_i + id_i.imm;
-        btaken_o  = 1;
+        btarget = pc_i + id_i.imm;
+        btaken  = 1;
       end
     end
     if (id_i.opcode == OPCODE_JAL) begin
       // rd = PC+4; PC=PC+imm;
-      btarget_o = alu_result;
-      btaken_o  = 1;
+      btarget = alu_result;
+      btaken  = 1;
     end else if (id_i.opcode == OPCODE_JALR) begin
       // rd = PC+4; PC = (rs1 + imm) & ~1 ;
-      btarget_o = alu_result & ~1;
-      btaken_o  = 1;
+      btarget = alu_result & ~1;
+      btaken  = 1;
+    end
+  end
+
+  // handle load and store
+  always_comb begin
+    mem_addr = '0;
+    mem_wd   = '0;
+    if (id_i.opcode inside {OPCODE_LOAD, OPCODE_STORE}) begin
+      mem_addr = alu_result;
+      if (id_i.opcode == OPCODE_STORE) begin
+        mem_wd = rif.v2;
+      end
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (valid) begin
+        ready_o <= div_done;
+        btaken_o <= btaken;
+        btarget_o <= btarget;
+        wb_o <= wb;
+        mem_addr_o <= mem_addr;
+        mem_wd_o <= mem_wd;
+      end
     end
   end
 
@@ -1709,30 +1743,30 @@ module lsu (
   // common interface for each stage
   input logic valid,
   output logic ready_o,
-  output exception_t exc_o
+  output exception_t exc_o,
 
-  // input ld_op_e ld_op_i,
-  // input sd_op_e sd_op_i,
-  // input amo_op_e amo_op_i,
-  // input addr_t  addr_i,
-  // input reg_t   wd_i
-  // output reg_t  rd_o
+  input ld_op_e  ld_op_i,
+  input sd_op_e  sd_op_i,
+  input amo_op_e amo_op_i,
+  input addr_t   addr_i,
+  input reg_t    wd_i,
+  output reg_t   rd_o
 );
   typedef enum {
     IDLE,
-    FETCH
+    MAPPING,
+    MEM
   } state_e;
-  state_e state;
 
-  // handle exceptions
+  state_e state;
   mcause_e ecause;
+  logic load, store;
+
   always_comb begin
-    ready_o = 0;
-    ecause  = EXC_NONE;
-    if (valid) begin
-      ready_o = 1;
-    end
+    load  = ld_op_i != LD_NONE;
+    store = sd_op_i != SD_NONE;
   end
+
   always_comb begin
     if (ecause != EXC_NONE) begin
       exc_o.fired = 1;
@@ -1743,9 +1777,67 @@ module lsu (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      state <= IDLE;
     end else begin
+      ready_o <= 1;
+      if (valid && (load || store)) begin
+        `LOGI($sformatf("addr:%h wd_i:%h", addr_i, wd_i));
+        ready_o <= 0;
+        unique case (state)
+          IDLE: begin
+            mif.valid <= 1;
+            mif.we <= store;
+            mif.addr <= addr_i;
+            mif.wd <= store ? wd_i : 0;
+            state <= MEM;
+            if (load) begin
+              mif.dtype <= ldop2dtype(ld_op_i);
+            end else begin
+              mif.dtype <= sdop2dtype(sd_op_i);
+            end
+          end
+          MAPPING: begin
+          end
+          MEM: begin
+            if (mif.ready) begin
+              mif.valid <= 0;
+              if (mif.error) begin
+                ecause <= load ? EXC_LOAD_ACCESS_FAULT : EXC_STORE_ACCESS_FAULT;
+              end
+              if (load) begin
+                rd_o <= mif.rd;
+              end
+              ready_o <= 1;
+              state   <= IDLE;
+            end
+          end
+          default: ;
+        endcase
+      end
     end
   end
+
+  function automatic datatype_e sdop2dtype(sd_op_e op);
+    unique case (op)
+      SD_SB:   return U8;
+      SD_SH:   return U16;
+      SD_SW:   return U32;
+      SD_SD:   return US64;
+      default: return US64;
+    endcase
+  endfunction
+  function automatic datatype_e ldop2dtype(ld_op_e op);
+    unique case (op)
+      LD_LB:   return S8;
+      LD_LBU:  return U8;
+      LD_LH:   return S16;
+      LD_LHU:  return U16;
+      LD_LW:   return S32;
+      LD_LWU:  return U32;
+      LD_LD:   return US64;
+      default: return US64;
+    endcase
+  endfunction
 
 endmodule
 
@@ -1773,16 +1865,18 @@ module sram (
     if (mif.we && mif.valid) begin
       mif.rd = mif.wd;
     end else begin
-      unique case (mif.dtype)
-        S8: mif.rd = `B2R(m, idx);
-        U8: mif.rd = `BU2R(m, idx);
-        S16: mif.rd = `H2R(m, idx);
-        U16: mif.rd = `HU2R(m, idx);
-        S32: mif.rd = `W2R(m, idx);
-        U32: mif.rd = `WU2R(m, idx);
-        US64: mif.rd = `D2R(m, idx);
-        default: ;
-      endcase
+      if (mif.valid) begin
+        unique case (mif.dtype)
+          S8: mif.rd = `B2R(m, idx);
+          U8: mif.rd = `BU2R(m, idx);
+          S16: mif.rd = `H2R(m, idx);
+          U16: mif.rd = `HU2R(m, idx);
+          S32: mif.rd = `W2R(m, idx);
+          U32: mif.rd = `WU2R(m, idx);
+          US64: mif.rd = `D2R(m, idx);
+          default: ;
+        endcase
+      end
     end
   end
 
@@ -1792,6 +1886,9 @@ module sram (
         m[i] <= '0;
       end
     end else begin
+      if (mif.valid) begin
+        `LOGI("GET IN");
+      end
       if (mif.valid && mif.we) begin
         unique case (mif.dtype)
           S8: `write_data(m, idx, mif.wd, 8);
@@ -1818,7 +1915,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/div.hex";
+  localparam string HEX = "isa/mem.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
@@ -1949,7 +2046,7 @@ module scoreboard (
     if (!rst_n) begin
     end else begin
       if (mif.valid && mif.we) begin
-        if (mif.wd == 0) begin
+        if (mif.wd == 1) begin
           $write("%sPASS%s", `COLOR_GREEN, `COLOR_NONE);
         end else begin
           $write("%sFAIL:%0d%s", `COLOR_RED, mif.wd, `COLOR_NONE);
