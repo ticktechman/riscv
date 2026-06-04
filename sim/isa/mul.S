@@ -39,20 +39,21 @@ _start:
     li t3, -2
     bne t2, t3, fail
 
+#----------------------------------------
+.equ TOHOST_BASE, 0x0000000080001000
 pass:
-    lui t0, 0x2
-    li t1, 'P'
-    sb t1, 0(t0)
-    li t1, '\n'
-    sb t1, 0(t0)
-    j end
+    li  t0, TOHOST_BASE
+    li   t1, 1
+    sw   t1, 0(t0)
+    j    end
 
 fail:
-    lui t0, 0x2
-    li t1, 'F'
-    sb t1, 0(t0)
-    li t1, '\n'
-    sb t1, 0(t0)
-    j end
+    li  t0, TOHOST_BASE
+    li   t1, 2
+    sw   t1, 0(t0)
+    j    end
+
 end:
-  ebreak
+    ebreak
+#----------------------------------------
+

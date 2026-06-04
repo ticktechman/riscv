@@ -1882,13 +1882,10 @@ module sram (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      foreach (m[i]) begin
-        m[i] <= '0;
-      end
+      // foreach (m[i]) begin
+      //   m[i] <= '0;
+      // end
     end else begin
-      if (mif.valid) begin
-        `LOGI("GET IN");
-      end
       if (mif.valid && mif.we) begin
         unique case (mif.dtype)
           S8: `write_data(m, idx, mif.wd, 8);
@@ -1915,7 +1912,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/mem.hex";
+  localparam string HEX = "isa/isa.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
