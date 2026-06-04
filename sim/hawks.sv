@@ -787,7 +787,7 @@ module ifu (
           end
           FETCH: begin
             if (mif.ready) begin
-              `LOGI($sformatf("pc:%h, instr=%h", pc_i, mif.rd[31:0]));
+              `LOGI($sformatf("pc=%0h, instr=%h", pc_i, mif.rd[31:0]));
               mif.valid <= 0;
               instr_o <= mif.rd[31:0];
               state <= IDLE;
@@ -1511,7 +1511,7 @@ module alu (
         end
         default: result_o = '0;
       endcase
-      // `LOGI($sformatf("op:%0d, op1:%h op2_i:%h r:%h", op_i, op1, op2_i, result_o));
+      `LOGI($sformatf("op:%0d, op1:0x%0h op2:0x%0h res:0x%0h", op_i, op1_i, op2_i, result_o));
     end
   end
 endmodule
@@ -1883,7 +1883,7 @@ module sram (
           US64: mif.rd = `D2R(m, idx);
           default: ;
         endcase
-        `LOGI($sformatf("read M[%0d]=%h type:%0d", idx, mif.rd, mif.dtype));
+        `LOGI($sformatf("read M[%0d]=0x%0h type:%0d", idx, mif.rd, mif.dtype));
       end
     end
   end
@@ -1895,7 +1895,7 @@ module sram (
       // end
     end else begin
       if (mif.valid && mif.we) begin
-        `LOGI($sformatf("M[%0d]=%h  type:%0d", idx, mif.wd, mif.dtype));
+        `LOGI($sformatf("write M[%0d]=0x%0h  type:%0d", idx, mif.wd, mif.dtype));
         unique case (mif.dtype)
           S8: `write_data(m, idx, mif.wd, 8);
           U8: `write_data(m, idx, mif.wd, 8);
@@ -2012,7 +2012,7 @@ module rfu (
     end else begin : writeback
       if (valid && wb_src_i != WB_SRC_NONE && rd_i != 0) begin
         x[rd_i] <= r;
-        `LOGI($sformatf("WB: x[%02d]=%h", rd_i, r));
+        `LOGI($sformatf("WB: x[%02d]=0x%0h", rd_i, r));
       end
     end
   end
