@@ -847,7 +847,6 @@ module idu (
   always_comb begin : decode
     ecause = EXC_NONE;
     if (valid) begin
-      `LOGI("decode");
       id_o        = '0;
       wb_src_o    = WB_SRC_NONE;
       id_o.opcode = opcode_e'(instr_i[6:0]);
@@ -1341,8 +1340,9 @@ module exu (
     if (valid) begin
       rif.r1 = id_i.rs1;
       rif.r2 = id_i.rs2;
+      `LOGI($sformatf("alu:%0d div:%0d mul:%0d amo:%0d", id_i.alu_op, id_i.div_op, id_i.mult_op, id_i.amo_op));
     end
-    if (id_i.reg_write) begin
+    if (valid && id_i.reg_write) begin
       if (id_i.alu_op != ALU_NONE) begin
         wb = alu_result;
       end else if (id_i.mult_op != MULT_NONE) begin
@@ -1407,6 +1407,7 @@ module exu (
   always_comb begin
     btarget = '0;
     btaken  = 0;
+    ready_o = div_done;
     if (id_i.opcode == OPCODE_BRANCH) begin
       // meet branch
       if (alu_result[0]) begin
@@ -1441,7 +1442,6 @@ module exu (
     if (!rst_n) begin
     end else begin
       if (valid) begin
-        ready_o <= div_done;
         btaken_o <= btaken;
         btarget_o <= btarget;
         wb_o <= wb;
@@ -1653,7 +1653,11 @@ module div (
     is_rem_d = is_rem_q;
     res_inv_d = res_inv_q;
     rem_inv_d = rem_inv_q;
-    done_o = is_divider ? 1'b0 : 1'b1;
+    if (!valid) begin
+      done_o = 0;
+    end else begin
+      done_o = is_divider ? 1'b0 : 1'b1;
+    end
 
     if (is_divider) begin
       case (state_q)
@@ -1683,6 +1687,7 @@ module div (
           else cnt_d = cnt_q - 6'd1;
         end
         FINISH: begin
+          `LOGI($sformatf("op:%0d: op1:%0d op2:%0d res:%0d", op_i, op1_i, op2_i, result_o));
           done_o = 1'b1;
           if (valid) state_d = IDLE;
         end
@@ -1921,7 +1926,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/mem.hex";
+  localparam string HEX = "isa/mul.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
