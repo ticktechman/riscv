@@ -14,10 +14,10 @@ _start:
     # 2. 写循环 (Write Loop)
     # ==========================================
 write_loop:
-    sb   t1, 0(t0)       # Store Byte: 将 t1 写入到 t0 指向的内存地址
+    sd   t1, 0(t0)       # Store Byte: 将 t1 写入到 t0 指向的内存地址
 
-    addi t0, t0, 1       # 地址 + 1
-    addi t1, t1, 1       # 数据 + 1
+    addi t0, t0, 8       # 地址 + 1
+    addi t1, t1, 8       # 数据 + 1
     addi t2, t2, -1      # 计数 - 1
     bnez t2, write_loop  # 如果计数不为0，继续写
 
@@ -32,13 +32,13 @@ write_loop:
     # 4. 读校验循环 (Read & Check Loop)
     # ==========================================
 read_loop:
-    lb   t3, 0(t0)       # Load Byte: 从内存读取数据到 t3
+    ld   t3, 0(t0)       # Load Byte: 从内存读取数据到 t3
 
     # --- 核心校验逻辑 ---
     bne  t3, t1, fail    # [关键] 如果 读取值(t3) != 期望值(t1)，跳转 fail
 
-    addi t0, t0, 1       # 地址 + 1
-    addi t1, t1, 1       # 期望数据 + 1
+    addi t0, t0, 8       # 地址 + 1
+    addi t1, t1, 8       # 期望数据 + 1
     addi t2, t2, -1      # 计数 - 1
     bnez t2, read_loop   # 如果未读完，继续校验
 

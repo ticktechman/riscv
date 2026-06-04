@@ -383,7 +383,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(500)
+    .COUNTER(1000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -491,7 +491,7 @@ module soc (
     .rif(rf.master)
   );
 
-  reg_t mem_rd, mem_wd;
+  reg_t mem_wd;
   addr_t mem_addr;
   lsu lsu1 (
     .clk(clk),
@@ -505,7 +505,7 @@ module soc (
     .amo_op_i(id_out.amo_op),
     .addr_i(mem_addr),
     .wd_i(mem_wd),
-    .rd_o(mem_rd)
+    .rd_o(wb_mem)
   );
 
   rfu rfu1 (
@@ -644,6 +644,7 @@ module bus #(
       assign mreq[m].addr = masters[m].addr;
       assign mreq[m].we = masters[m].we;
       assign mreq[m].wd = masters[m].wd;
+      assign mreq[m].dtype = masters[m].dtype;
       assign masters[m].ready = mrsp[m].ready;
       assign masters[m].error = mrsp[m].error;
       assign masters[m].rd = mrsp[m].rd;
@@ -654,6 +655,7 @@ module bus #(
       assign slaves[s].addr = sreq[s].addr;
       assign slaves[s].we = sreq[s].we;
       assign slaves[s].wd = sreq[s].wd;
+      assign slaves[s].dtype = sreq[s].dtype;
       assign srsp[s].ready = slaves[s].ready;
       assign srsp[s].error = slaves[s].error;
       assign srsp[s].rd = slaves[s].rd;
@@ -1761,17 +1763,35 @@ module lsu (
   state_e state;
   mcause_e ecause;
   logic load, store;
+  datatype_e dtype;
 
   always_comb begin
     load  = ld_op_i != LD_NONE;
     store = sd_op_i != SD_NONE;
-  end
+    if (load) begin
+      dtype = ldop2dtype(ld_op_i);
+    end else begin
+      dtype = sdop2dtype(sd_op_i);
+    end
 
-  always_comb begin
+    ready_o = 1;
+    ecause  = EXC_NONE;
+    if (valid && (load || store)) begin
+      ready_o = 0;
+      if (state == MEM && mif.ready == 1) begin
+        ready_o = 1;
+        if (mif.error) begin
+          ecause = load ? EXC_LOAD_ACCESS_FAULT : EXC_STORE_ACCESS_FAULT;
+        end
+      end
+    end
+
     if (ecause != EXC_NONE) begin
       exc_o.fired = 1;
       exc_o.cause = ecause;
       exc_o.eval  = 0;
+    end else begin
+      exc_o.fired = 0;
     end
   end
 
@@ -1779,10 +1799,7 @@ module lsu (
     if (!rst_n) begin
       state <= IDLE;
     end else begin
-      ready_o <= 1;
       if (valid && (load || store)) begin
-        `LOGI($sformatf("addr:%h wd_i:%h", addr_i, wd_i));
-        ready_o <= 0;
         unique case (state)
           IDLE: begin
             mif.valid <= 1;
@@ -1790,25 +1807,15 @@ module lsu (
             mif.addr <= addr_i;
             mif.wd <= store ? wd_i : 0;
             state <= MEM;
-            if (load) begin
-              mif.dtype <= ldop2dtype(ld_op_i);
-            end else begin
-              mif.dtype <= sdop2dtype(sd_op_i);
-            end
+            mif.dtype <= dtype;
           end
           MAPPING: begin
           end
           MEM: begin
             if (mif.ready) begin
               mif.valid <= 0;
-              if (mif.error) begin
-                ecause <= load ? EXC_LOAD_ACCESS_FAULT : EXC_STORE_ACCESS_FAULT;
-              end
-              if (load) begin
-                rd_o <= mif.rd;
-              end
-              ready_o <= 1;
-              state   <= IDLE;
+              if (load) rd_o <= mif.rd;
+              state <= IDLE;
             end
           end
           default: ;
@@ -1876,6 +1883,7 @@ module sram (
           US64: mif.rd = `D2R(m, idx);
           default: ;
         endcase
+        `LOGI($sformatf("read M[%0d]=%h type:%0d", idx, mif.rd, mif.dtype));
       end
     end
   end
@@ -1887,6 +1895,7 @@ module sram (
       // end
     end else begin
       if (mif.valid && mif.we) begin
+        `LOGI($sformatf("M[%0d]=%h  type:%0d", idx, mif.wd, mif.dtype));
         unique case (mif.dtype)
           S8: `write_data(m, idx, mif.wd, 8);
           U8: `write_data(m, idx, mif.wd, 8);
@@ -1912,7 +1921,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/isa.hex";
+  localparam string HEX = "isa/mem.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
