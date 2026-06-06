@@ -207,16 +207,16 @@ package hawks;
 
   typedef enum {
     SYS_NONE,
-    SYS_ECALL,
+    SYS_ECALL,   // 1
     SYS_EBREAK,
     SYS_MRET,
     SYS_SRET,
-    SYS_WFI,
+    SYS_WFI,     // 5
     SYS_URET,
     SYS_FENCE,
     SYS_CSRRW,
     SYS_CSRRS,
-    SYS_CSRRC,
+    SYS_CSRRC,   // 10
     SYS_CSRRWI,
     SYS_CSRRSI,
     SYS_CSRRCI
@@ -344,6 +344,160 @@ package hawks;
     WB_SRC_CSR
   } wb_src_e;
 
+  typedef enum logic [1:0] {
+    M_USER    = 2'b00,
+    M_SUPER   = 2'b01,
+    M_MACHINE = 2'b11
+  } priviledge_e;
+
+  typedef struct packed {
+    logic         SD;              // [63] Dirty state
+    logic [62:43] reserved_62_43;  // [62:43] WPRI
+    logic         MDT;             // [42] M-mode Trap Disable
+    logic         MPELP;           // [41] M-mode Previous Landing Pad
+    logic         reserved_40;     // [40] WPRI
+    logic         MPV;             // [39] M-mode Previous Virtualization
+    logic         GVA;             // [38] Guest Virtual Address
+    logic         MBE;             // [37] Memory Privilege Big Endian
+    logic         SBE;             // [36] Supervisor Big Endian
+    logic [35:34] SXL;             // [35:34] Supervisor Mode XLEN
+    logic [33:32] UXL;             // [33:32] User Mode XLEN
+    logic [31:25] reserved_31_25;  // [31:25] WPRI
+    logic         SDT;             // [24] Store/Load Trap (or SDT)
+    logic         SPELP;           // [23] Supervisor Previous Landing Pad
+    logic         TSR;             // [22] Trap SRET
+    logic         TW;              // [21] Timeout Wait
+    logic         TVM;             // [20] Trap Virtual Memory
+    logic         MXR;             // [19] Make eXecutable Readable
+    logic         SUM;             // [18] permit Supervisor User Memory access
+    logic         MPRV;            // [17] Modify PRiVilege
+    logic [16:15] XS;              // [16:15] Extension State
+    logic [14:13] FS;              // [14:13] Floating-point Unit State
+    logic [12:11] MPP;             // [12:11] Machine Previous Privilege mode
+    logic [10:9]  VS;              // [10:9] Vector Extension State (Added!)
+    logic         SPP;             // [8] Supervisor Previous Privilege mode
+    logic         MPIE;            // [7] Machine Previous Interrupt Enable
+    logic         UBE;             // [6] User Mode Big Endian
+    logic         SPIE;            // [5] Supervisor Previous Interrupt Enable
+    logic         reserved_4;      // [4] WPRI
+    logic         MIE;             // [3] Machine Interrupt Enable
+    logic         reserved_2;      // [2] WPRI
+    logic         SIE;             // [1] Supervisor Interrupt Enable
+    logic         reserved_0;      // [0] WPRI
+  } mstatus_t;
+
+  typedef struct packed {
+    logic [63:48] custom_63_48;              // [63:48] Designated for custom use / reserved
+    logic [47:32] reserved_47_32;            // [47:32] reserved
+    logic [31:24] custom_31_24;              // [31:24] Designated for custom use
+    logic [23:20] reserved_23_20;            // [23:20] Reserved
+    logic         hardware_error;            // [19]   hardware error
+    logic         software_check;            // [18]   software check
+    logic         reserved_17;               // [17]   Reserved
+    logic         double_trap;               // [16]   double trap
+    logic         store_amo_page_fault;      // [15]   Store/AMO page fault
+    logic         reserved_14;               // [14]   Reserved
+    logic         load_page_fault;           // [13]   Load page fault
+    logic         instruction_page_fault;    // [12]  Instruction page fault
+    logic         ecall_from_m_mode;         // [11] ecall from m-mode
+    logic         reserved_10;               // [10] Reserved
+    logic         ecall_from_s_mode;         // [9]    Environment call from S-mode
+    logic         ecall_from_u_mode;         // [8]    Environment call from U-mode
+    logic         store_amo_access_fault;    // [7]   Store/AMO access fault
+    logic         store_amo_misaligned;      // [6]    Store/AMO address misaligned
+    logic         load_access_fault;         // [5]    Load access fault
+    logic         load_misaligned;           // [4]    Load address misaligned
+    logic         breakpoint;                // [3]    Breakpoint
+    logic         illegal_instruction;       // [2]    Illegal instruction
+    logic         instruction_access_fault;  // [1] Instruction access fault
+    logic         instruction_misaligned;    // [0] Instruction address misaligned
+  } medeleg_t;
+
+  typedef struct packed {
+    logic [63:12] reserved_63_12;  // [63:12] Reserved / Designated for platform use
+    logic         MEI;             // [11] Machine external interrupt
+    logic         reserved_10;     // [10]   Reserved
+    logic         SEI;             // [9]  Supervisor external interrupt
+    logic         reserved_8;      // [8]    Reserved
+    logic         MTI;             // [7]  Machine timer interrupt
+    logic         reserved_6;      // [6]    Reserved
+    logic         STI;             // [5]  Supervisor timer interrupt
+    logic         reserved_4;      // [4]    Reserved
+    logic         MSI;             // [3]  Machine software interrupt
+    logic         reserved_2;      // [2]    Reserved
+    logic         SSI;             // [1]  Supervisor software interrupt
+    logic         reserved_0;      // [0]    Reserved
+  } mintr_t;
+
+  typedef struct packed {
+    logic [63:62] MXL;
+    logic [61:26] reserved_26_61;
+    logic Z;
+    logic Y;
+    logic X;
+    logic W;
+    logic V;
+    logic U;
+    logic T;
+    logic S;
+    logic R;
+    logic Q;
+    logic P;
+    logic O;
+    logic N;
+    logic M;
+    logic L;
+    logic K;
+    logic J;
+    logic I;
+    logic H;
+    logic G;
+    logic F;
+    logic E;
+    logic D;
+    logic C;
+    logic B;
+    logic A;
+  } misa_t;
+
+  typedef struct packed {
+    logic [63:60] MODE;  // [63:60] Mode: Address translation mode (Sv39=8, Sv48=9, Sv57=10, Bare=0)
+    logic [59:44] ASID;  // [59:44] ASID: Address Space Identifier
+    logic [43:0]  PPN;   // [43:0]  PPN: Physical Page Number of the root page table
+  } satp_t;
+
+  typedef struct packed {
+    logic [28:0] HPM;  // Bits [31:3]: 硬件性能监视器计数器使能位 (hpmcounter3~31)
+    logic        IR;   // Bit 2: 指令执行计数器使能位 (instret)
+    logic        TM;   // Bit 1: 时间计数器使能位 (time)
+    logic        CY;   // Bit 0: 周期计数器使能位 (cycle)
+  } mcounteren_t;
+
+  `define PTE_A 64'h40
+  `define PTE_D 64'h80
+
+  typedef enum logic [1:0] {
+    PG_4K,
+    PG_2M,
+    PG_1G
+  } pagesize_e;
+
+  typedef struct packed {
+    logic        cached;
+    pagesize_e   PGSIZE;  // page size
+    logic [15:0] ASID;    // 地址空间标识符
+    logic [26:0] VPN;     // 虚拟页号
+    logic [43:0] PPN;     // 物理页号
+    logic        V;       // 有效位 (Valid)
+    logic        G;       // 全局位 (Global)
+    logic        U;       // 用户态权限 (User)
+    logic        X;       // 可执行权限 (Execute)
+    logic        W;       // 可写权限 (Write)
+    logic        R;       // 可读权限 (Read)
+    logic        D;       // 脏位 (Dirty)
+    logic        A;       // 已访问位 (Accessed)
+  } tlb_entry_t;
+
 endpackage
 
 import hawks::*;
@@ -376,7 +530,7 @@ module top ();
   logic clk, rst_n, intr;
 
   initial begin
-    $dumpfile("hawks.vcd");
+    $dumpfile("waveforms.vcd");
     $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
     intr = 1'b0;
@@ -530,6 +684,31 @@ module soc (
     .csr_i(wb_csr),
     .amo_i(wb_amo),
     .mem_i(wb_mem)
+  );
+
+  satp_t satp;
+  mstatus_t mstatus;
+  priviledge_e priv;
+  exception_t exc_in, exc_out;
+  logic tlb_invalid;
+  logic itimer, iext, interrupted;
+  csr csr1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(stage == STG_EXEC),
+    .op_i(id_out.sys_op),
+    .op1_i(id_out.op_s1 == OP_SRC_REG ? rf.master.v1 : {59'b0, id_out.csr_imm}),
+    .which_i(id_out.csr),
+    .wb_o(wb_csr),
+    .satp_o(satp),
+    .mstatus_o(mstatus),
+    .priv_o(priv),
+    .exc_i(exc_in),
+    .exc_o(exc_out),
+    .tlb_invalid_o(tlb_invalid),
+    .irq_timer_i(itimer),
+    .irq_ex_i(iext),
+    .interrupted_o(interrupted)
   );
 
   rom rom1 (
@@ -1087,6 +1266,7 @@ module idu (
 
         OPCODE_SYSTEM: begin
           `LOGI("SYSTEM");
+          id_o.op_s1 = OP_SRC_REG;
           unique case (f3)
             3'b000: begin
               unique case (instr_i[31:20])
@@ -1131,6 +1311,7 @@ module idu (
 
             3'b101: begin  // CSRRWI
               id_o.reg_write = 1;
+              id_o.op_s1     = OP_SRC_IMM;
               id_o.sys_op    = SYS_CSRRWI;
               wb_src_o       = WB_SRC_CSR;
               id_o.csr       = instr_i[31:20];
@@ -1139,6 +1320,7 @@ module idu (
 
             3'b110: begin  // CSRRSI
               id_o.reg_write = 1;
+              id_o.op_s1     = OP_SRC_IMM;
               id_o.sys_op    = SYS_CSRRSI;
               wb_src_o       = WB_SRC_CSR;
               id_o.csr       = instr_i[31:20];
@@ -1147,6 +1329,7 @@ module idu (
 
             3'b111: begin  // CSRRCI
               id_o.reg_write = 1;
+              id_o.op_s1     = OP_SRC_IMM;
               id_o.sys_op    = SYS_CSRRCI;
               wb_src_o       = WB_SRC_CSR;
               id_o.csr       = instr_i[31:20];
@@ -1344,6 +1527,7 @@ module idu (
         IMM_J:   id_o.imm = {{43{instr_i[31]}}, instr_i[31], instr_i[19:12], instr_i[20], instr_i[30:21], 1'b0};
         default: id_o.imm = '0;
       endcase
+      `LOGI($sformatf("ops1:%0d", id_o.op_s1));
     end
   end
 endmodule
@@ -1669,10 +1853,10 @@ module div (
   logic is_divider, is_rv64w;
 
   assign is_divider = op_i != DIV_NONE;
-  assign is_rv64w = op_i inside {DIV_DIVW, DIV_REMW, DIV_REMUW, DIV_DIVUW};
-  assign is_signed = op_i inside {DIV_DIV, DIV_DIVW, DIV_REM, DIV_REMW};
-  assign a_sign    = is_rv64w ? op1_i[31] : op1_i[63];
-  assign b_sign    = is_rv64w ? op2_i[31] : op2_i[63];
+  assign is_rv64w   = op_i inside {DIV_DIVW, DIV_REMW, DIV_REMUW, DIV_DIVUW};
+  assign is_signed  = op_i inside {DIV_DIV, DIV_DIVW, DIV_REM, DIV_REMW};
+  assign a_sign     = is_rv64w ? op1_i[31] : op1_i[63];
+  assign b_sign     = is_rv64w ? op2_i[31] : op2_i[63];
 
   always_comb begin
     logic [63:0] v1, v2;
@@ -1758,25 +1942,25 @@ module div (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state_q <= IDLE;
-      a_q <= 0;
-      b_q <= 0;
-      quot_q <= 0;
-      cnt_q <= 0;
+      state_q       <= IDLE;
+      a_q           <= 0;
+      b_q           <= 0;
+      quot_q        <= 0;
+      cnt_q         <= 0;
       is_div_zero_q <= 0;
-      is_rem_q <= 0;
-      res_inv_q <= 0;
-      rem_inv_q <= 0;
+      is_rem_q      <= 0;
+      res_inv_q     <= 0;
+      rem_inv_q     <= 0;
     end else begin
-      state_q <= state_d;
-      a_q <= a_d;
-      b_q <= b_d;
-      quot_q <= quot_d;
-      cnt_q <= cnt_d;
+      state_q       <= state_d;
+      a_q           <= a_d;
+      b_q           <= b_d;
+      quot_q        <= quot_d;
+      cnt_q         <= cnt_d;
       is_div_zero_q <= is_div_zero_d;
-      is_rem_q <= is_rem_d;
-      res_inv_q <= res_inv_d;
-      rem_inv_q <= rem_inv_d;
+      is_rem_q      <= is_rem_d;
+      res_inv_q     <= res_inv_d;
+      rem_inv_q     <= rem_inv_d;
     end
   end
 
@@ -1809,7 +1993,9 @@ module amo (
   always_comb begin
     result_o = alu_result_i;
     if (valid) begin
-      `LOGI($sformatf("op1:%0h, op2:%0h", op1_i, op2_i));
+      if (op_i != AMO_NONE) begin
+        `LOGI($sformatf("op:%0d op1:%0h, op2:%0h", op_i, op1_i, op2_i));
+      end
       unique case (op_i)
         AMO_MAX, AMO_MAXU: result_o = alu_result_i == 0 ? op1_i : op2_i;
         AMO_MIN, AMO_MINU: result_o = alu_result_i == 0 ? op2_i : op1_i;
@@ -2036,7 +2222,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/amo.hex";
+  localparam string HEX = "isa/csr.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
@@ -2085,14 +2271,19 @@ endmodule
 // - priviledge management
 //------------------------------------
 module csr (
-  input  logic       clk,
-  input  logic       rst_n,
-  input  logic       valid,
-  input  sys_op_e    op_i,          // system instr
-  output reg_t       wb_o,          // csr instr write back
-  input  exception_t exc_i,         // exception from others
-  output exception_t exc_o,         // csr instr exception and it will come back at WB stage
-  output logic       tlb_invalid_o, // to mmu
+  input  logic               clk,
+  input  logic               rst_n,
+  input  logic               valid,
+  input  sys_op_e            op_i,          // system instr
+  input  reg_t               op1_i,
+  input  logic        [11:0] which_i,       // index of register
+  output reg_t               wb_o,          // csr instr write back
+  output satp_t              satp_o,        // satp for mmu
+  output mstatus_t           mstatus_o,     // mstatus for mmu
+  output priviledge_e        priv_o,        // current priviledge for mmu
+  input  exception_t         exc_i,         // exception from others
+  output exception_t         exc_o,         // csr instr exception and it will come back at WB stage
+  output logic               tlb_invalid_o, // to mmu
 
   // irq interface
   input  logic irq_timer_i,   // timer int from clint
@@ -2102,6 +2293,162 @@ module csr (
   // 1. csr rw(check permission: priv-[9:8] and ro, rw[11:10])
   // 2. handle exception according to current priv and deleg
   // 3. handle int according to current priv and deleg
+  `define MSTATUS_WR_MASK 64'h000006f001fe1fea
+  `define SSTATUS_WR_MASK 64'h8000000f000de122
+
+  `define USIP 0
+  `define SSIP 1
+  `define MSIP 3
+  `define STIP 5
+  `define MTIP 7
+  `define SEIP 9
+  `define MEIP 11
+  `define SIE_MASK 64'h0222
+  `define SIP_MASK 64'h0222
+  `define MIE_MASK 64'h0aaa
+  `define MIP_MASK 64'h0aaa
+
+  mstatus_t mstatus;
+  medeleg_t medeleg;
+  mintr_t mideleg, mie, mip;
+  misa_t misa;
+
+  reg_t mtvec, mtval, mepc, mcause, mhartid, mscratch;
+  reg_t stvec, stval, sepc, scause, sscratch, satp;
+  reg_t cycle;
+  mcounteren_t mcounteren, scounteren;
+  priviledge_e priv;
+
+  // assign reg for mmu
+  always_comb begin
+    priv_o    = priv;
+    satp_o    = satp;
+    mstatus_o = mstatus;
+  end
+
+  reg_t rd;
+  always_comb begin
+    unique case (which_i)
+      MSTATUS:    rd = mstatus;
+      MISA:       rd = misa;
+      MEDELEG:    rd = medeleg;
+      MIDELEG:    rd = mideleg;
+      MIE:        rd = mie;
+      MTVEC:      rd = mtvec;
+      MSCRATCH:   rd = mscratch;
+      MEPC:       rd = mepc;
+      MCAUSE:     rd = mcause;
+      MTVAL:      rd = mtval;
+      MIP:        rd = mip;
+      MHARTID:    rd = mhartid;
+      SSTATUS:    rd = mstatus;  //& `SSTATUS_READ_MASK;
+      SIE:        rd = mie & `SIE_MASK;
+      STVEC:      rd = stvec;
+      SSCRATCH:   rd = sscratch;
+      SEPC:       rd = sepc;
+      SCAUSE:     rd = scause;
+      STVAL:      rd = stval;
+      SIP:        rd = mip & `SIP_MASK;
+      SATP:       rd = satp;
+      MCOUNTEREN: rd = {32'b0, mcounteren};
+      SCOUNTEREN: rd = {32'b0, scounteren};
+      CYCLE:      rd = cycle;
+      default:    rd = '0;
+    endcase
+  end
+
+  reg_t next;
+  always_comb begin
+    next = 0;
+    if (valid) begin
+      // `LOGI($sformatf("op:%0d op1:%0h, rd:%0h", op_i, op1_i, rd));
+      unique case (op_i)
+        SYS_CSRRW, SYS_CSRRWI: next = op1_i;
+        SYS_CSRRS, SYS_CSRRSI: next = rd | op1_i;
+        SYS_CSRRC, SYS_CSRRCI: next = rd & (~op1_i);
+        default: ;
+      endcase
+      if (op_i >= SYS_CSRRW) begin
+        `LOGI($sformatf("op:%0d, next=%0h", op_i, next));
+      end
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      priv     <= M_MACHINE;
+      mstatus  <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
+      misa     <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
+      medeleg  <= '0;
+      mideleg  <= '0;
+      mtvec    <= '0;
+      mtval    <= '0;
+      mscratch <= '0;
+      mepc     <= '0;
+      mcause   <= '0;
+      mie      <= '0;
+      mip      <= '0;
+      mhartid  <= '0;
+      stvec    <= '0;
+      sscratch <= '0;
+      stval    <= '0;
+      scause   <= '0;
+      satp     <= '0;
+      cycle    <= '0;
+    end else begin
+      cycle <= cycle + 1;
+      if (valid) begin
+        if (tlb_invalid_o == 1) begin
+          tlb_invalid_o <= 0;
+        end
+        wb_o <= rd;
+
+        unique case (op_i)
+          SYS_ECALL: begin
+          end
+          SYS_EBREAK: begin
+          end
+          SYS_MRET: begin
+          end
+          SYS_SRET: begin
+          end
+          SYS_FENCE: begin
+          end
+          SYS_WFI: begin
+          end
+          default: ;
+        endcase
+        if (op_i >= SYS_CSRRW) begin
+          unique case (which_i)
+            MSTATUS: mstatus <= (mstatus & ~`MSTATUS_WR_MASK) | (next & `MSTATUS_WR_MASK);
+            MEDELEG: medeleg <= next;
+            MIDELEG: mideleg <= next;
+            MIE: mie <= (mie & ~`MIE_MASK) | (next & `MIE_MASK);
+            MTVEC: mtvec <= next;
+            MSCRATCH: mscratch <= next;
+            MIP: mip <= (mip & ~`MIP_MASK) | (next & `MIP_MASK);
+            MEPC: mepc <= next;
+            MCAUSE: mcause <= next;
+            MTVAL: mtval <= next;
+
+            SSTATUS: mstatus <= (mstatus & ~`SSTATUS_WR_MASK) | (next & `SSTATUS_WR_MASK);
+            SIE: mie <= (mie & ~`SIE_MASK) | (next & `SIE_MASK);
+            STVEC: stvec <= next;
+            SSCRATCH: sscratch <= next;
+            SEPC: sepc <= next;
+            SCAUSE: scause <= next;
+            STVAL: stval <= next;
+            SIP: mip <= (mip & ~`SIP_MASK) | (next & `SIP_MASK);
+            SATP: satp <= next;
+            MCOUNTEREN: mcounteren <= next[31:0];
+            SCOUNTEREN: mcounteren <= next[31:0];
+            default: ;
+          endcase
+        end
+
+      end
+    end
+  end
 endmodule
 
 //------------------------------------
@@ -2109,17 +2456,17 @@ endmodule
 // - 32 64bits common register rw
 //------------------------------------
 module rfu (
-  input logic clk,
-  input logic rst_n,
-  input logic valid,
-  output logic ready_o,
-  regif.slave rif,
-  input wb_src_e wb_src_i,
-  input logic [4:0] rd_i,
-  input reg_t alu_i,
-  input reg_t mem_i,
-  input reg_t amo_i,
-  input reg_t csr_i
+  input  logic             clk,
+  input  logic             rst_n,
+  input  logic             valid,
+  output logic             ready_o,
+         regif.slave       rif,
+  input  wb_src_e          wb_src_i,
+  input  logic       [4:0] rd_i,
+  input  reg_t             alu_i,
+  input  reg_t             mem_i,
+  input  reg_t             amo_i,
+  input  reg_t             csr_i
 );
   reg_t x[REGMAX];
   reg_t r;
