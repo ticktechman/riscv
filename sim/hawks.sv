@@ -76,6 +76,7 @@ package hawks;
     STG_IDLE,
     STG_FETCH,
     STG_DECODE,
+    STG_AMO,
     STG_EXEC,
     STG_MEM,
     STG_WB
@@ -472,7 +473,8 @@ module soc (
     .ready_o(id_ready),
     .exc_o(exc[2]),
     .id_o(id_out),
-    .wb_src_o(wb_src)
+    .wb_src_o(wb_src),
+    .rif(rf.master)
   );
 
   exu exu1 (
@@ -483,16 +485,20 @@ module soc (
     .exc_o(exc[3]),
     .pc_i(pc),
     .id_i(id_out),
+    .op_amo_i(amo_rd),
     .btarget_o(btarget),
     .btaken_o(btaken),
     .wb_o(wb_alu),
+    .wb_amo_o(wb_amo),
     .mem_addr_o(mem_addr),
     .mem_wd_o(mem_wd),
+    .amo_wd_o(amo_wd),
     .rif(rf.master)
   );
 
   reg_t mem_wd;
   addr_t mem_addr;
+  reg_t amo_wd, amo_rd;
   lsu lsu1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -503,9 +509,13 @@ module soc (
     .ld_op_i(id_out.ld_op),
     .sd_op_i(id_out.sd_op),
     .amo_op_i(id_out.amo_op),
+    .amo_valid_i(stage == STG_AMO),
     .addr_i(mem_addr),
+    .amo_addr_i(rf.master.v1),  // rs1_val
     .wd_i(mem_wd),
-    .rd_o(wb_mem)
+    .amo_wd_i(amo_wd),
+    .rd_o(wb_mem),
+    .amo_rd_o(amo_rd)
   );
 
   rfu rfu1 (
@@ -577,6 +587,20 @@ module soc (
               stage <= STG_WB;
               exc_stage <= stage;
             end else begin
+              if (id_out.amo_op != AMO_NONE) begin
+                stage <= STG_AMO;
+              end else begin
+                stage <= STG_EXEC;
+              end
+            end
+          end
+        end
+        STG_AMO: begin
+          if (ls_ready) begin
+            if (exc[4].fired) begin
+              stage <= STG_EXEC;
+              exc_stage <= stage;
+            end else begin
               stage <= STG_EXEC;
             end
           end
@@ -599,7 +623,7 @@ module soc (
         STG_WB: begin
           if (exc_stage != STG_IDLE) begin
             // TODO handle exception change pc and return to fetch stage
-            `LOGI($sformatf("exc fired at stage: %0d cause:%0d", exc_stage, exc[0].cause));
+            `LOGI($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
             pc <= pc + 4;
             exc_stage <= STG_IDLE;
             stage <= STG_FETCH;
@@ -817,6 +841,7 @@ module idu (
   input instr_t instr_i,
 
   // decode output
+  regif.master rif,
   output id_t id_o,
   output wb_src_e wb_src_o
 );
@@ -856,6 +881,8 @@ module idu (
       f3          = instr_i[14:12];
       f7          = instr_i[31:25];
       fc          = {f7, f3};
+      rif.r1      = instr_i[19:15];
+      rif.r2      = instr_i[24:20];
 
       unique case (id_o.opcode)
         OPCODE_OP: begin
@@ -1165,6 +1192,7 @@ module idu (
               7'b0000100, 3'b010
             } : begin
               id_o.amo_op = AMO_SWAPW;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1172,6 +1200,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_ADDW;
               id_o.alu_op = ALU_ADDW;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1179,6 +1208,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_XORW;
               id_o.alu_op = ALU_XOR;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1186,6 +1216,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_ORW;
               id_o.alu_op = ALU_OR;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1193,6 +1224,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_ANDW;
               id_o.alu_op = ALU_AND;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1200,6 +1232,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MINW;
               id_o.alu_op = ALU_SLT;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1207,6 +1240,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MAXW;
               id_o.alu_op = ALU_SLT;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1214,6 +1248,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MINUW;
               id_o.alu_op = ALU_SLTU;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
@@ -1221,12 +1256,14 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MAXUW;
               id_o.alu_op = ALU_SLTU;
+              id_o.ld_op  = LD_LW;
               id_o.sd_op  = SD_SW;
             end
             {
               7'b0000100, 3'b011
             } : begin
               id_o.amo_op = AMO_SWAP;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1234,6 +1271,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_ADD;
               id_o.alu_op = ALU_ADD;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1241,6 +1279,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_XOR;
               id_o.alu_op = ALU_XOR;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1248,6 +1287,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_OR;
               id_o.alu_op = ALU_OR;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1255,6 +1295,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_AND;
               id_o.alu_op = ALU_AND;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1262,6 +1303,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MIN;
               id_o.alu_op = ALU_SLT;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1269,6 +1311,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MAX;
               id_o.alu_op = ALU_SLT;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1276,6 +1319,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MINU;
               id_o.alu_op = ALU_SLTU;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             {
@@ -1283,6 +1327,7 @@ module idu (
             } : begin
               id_o.amo_op = AMO_MAXU;
               id_o.alu_op = ALU_SLTU;
+              id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
             default: id_o.amo_op = AMO_NONE;
@@ -1312,36 +1357,33 @@ endmodule
 // - addr calc: ld/sd, branch/jal(r)
 //------------------------------------
 module exu (
-  input logic clk,
-  input logic rst_n,
-  input logic valid,
-  output logic ready_o,
-  output exception_t exc_o,
-  input addr_t pc_i,
-  input id_t id_i,
-  output addr_t btarget_o,
-  output logic btaken_o,
-  output reg_t wb_o,
-  output addr_t mem_addr_o,
-  output reg_t mem_wd_o,
-  regif.master rif
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic        valid,
+  output logic        ready_o,
+  output exception_t  exc_o,
+  input  addr_t       pc_i,
+  input  id_t         id_i,
+  input  reg_t        op_amo_i,
+  output addr_t       btarget_o,
+  output logic        btaken_o,
+  output reg_t        wb_o,
+  output reg_t        wb_amo_o,
+  output addr_t       mem_addr_o,
+  output reg_t        mem_wd_o,
+  output reg_t        amo_wd_o,
+         regif.master rif
 );
   reg_t alu_result;
-  reg_t wb, mem_wd;
+  reg_t wb, wb_amo, mem_wd, amo_wd;
   addr_t mem_addr, btarget;
   logic btaken;
 
   // handle register read and writeback
   always_comb begin
-    rif.r1 = 0;
-    rif.r2 = 0;
-    exc_o = '0;
-    wb = 0;
-    if (valid) begin
-      rif.r1 = id_i.rs1;
-      rif.r2 = id_i.rs2;
-      `LOGI($sformatf("alu:%0d div:%0d mul:%0d amo:%0d", id_i.alu_op, id_i.div_op, id_i.mult_op, id_i.amo_op));
-    end
+    wb     = '0;
+    wb_amo = '0;
+    exc_o  = '0;
     if (valid && id_i.reg_write) begin
       if (id_i.alu_op != ALU_NONE) begin
         wb = alu_result;
@@ -1353,6 +1395,9 @@ module exu (
       if (id_i.opcode inside {OPCODE_JAL, OPCODE_JALR}) begin
         wb = pc_i + 4;
       end
+      if (id_i.amo_op != AMO_NONE) begin
+        wb_amo = op_amo_i;
+      end
     end
   end
 
@@ -1362,8 +1407,13 @@ module exu (
     op1 = 0;
     op2 = 0;
     if (valid) begin
-      op1 = id_i.op_s1 == OP_SRC_REG ? rif.v1 : pc_i;
+      unique case (id_i.op_s1)
+        OP_SRC_REG: op1 = rif.v1;
+        OP_SRC_AMO: op1 = op_amo_i;
+        default:    op1 = pc_i;
+      endcase
       op2 = id_i.op_s2 == OP_SRC_REG ? rif.v2 : id_i.imm;
+      `LOGI($sformatf("a:%0d d:%0d m:%0d amo:%0d", id_i.alu_op, id_i.div_op, id_i.mult_op, id_i.amo_op));
     end
   end
 
@@ -1401,6 +1451,15 @@ module exu (
     .op2_i(op2),
     .result_o(div_result),
     .done_o(div_done)
+  );
+
+  amo amo1 (
+    .valid(valid),
+    .op_i(id_i.amo_op),
+    .alu_result_i(alu_result),
+    .op1_i(op1),
+    .op2_i(op2),
+    .result_o(amo_wd)
   );
 
   // handle branch and jump
@@ -1442,17 +1501,18 @@ module exu (
     if (!rst_n) begin
     end else begin
       if (valid) begin
-        btaken_o <= btaken;
-        btarget_o <= btarget;
-        wb_o <= wb;
+        btaken_o   <= btaken;
+        btarget_o  <= btarget;
+        wb_o       <= wb;
+        wb_amo_o   <= wb_amo;
         mem_addr_o <= mem_addr;
-        mem_wd_o <= mem_wd;
+        mem_wd_o   <= mem_wd;
+        amo_wd_o   <= amo_wd;
       end
     end
   end
 
 endmodule
-
 
 //------------------------------------
 // alu
@@ -1735,6 +1795,38 @@ module div (
 endmodule
 
 //------------------------------------
+// amo
+//------------------------------------
+module amo (
+  input logic valid,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  input reg_t alu_result_i,
+  input amo_op_e op_i,
+  output reg_t result_o
+);
+
+  always_comb begin
+    result_o = alu_result_i;
+    if (valid) begin
+      `LOGI($sformatf("op1:%0h, op2:%0h", op1_i, op2_i));
+      unique case (op_i)
+        AMO_MAX, AMO_MAXU: result_o = alu_result_i == 0 ? op1_i : op2_i;
+        AMO_MIN, AMO_MINU: result_o = alu_result_i == 0 ? op2_i : op1_i;
+        AMO_MAXW: result_o = ($signed(op1_i[31:0]) > $signed(op2_i[31:0])) ? op1_i : op2_i;
+        AMO_MAXUW: result_o = (op1_i[31:0] > op2_i[31:0]) ? op1_i : op2_i;
+        AMO_MINW: result_o = ($signed(op1_i[31:0]) < $signed(op2_i[31:0])) ? op1_i : op2_i;
+        AMO_MINUW: result_o = (op1_i[31:0] < op2_i[31:0]) ? op1_i : op2_i;
+        AMO_SWAP: result_o = op2_i;
+        AMO_SWAPW: result_o = {32'(op2_i[31]), op2_i[31:0]};
+        AMO_SCW, AMO_SC: result_o = op2_i;
+        default: ;
+      endcase
+    end
+  end
+
+endmodule
+//------------------------------------
 // lsu
 // - load data / store data
 // - use mmu to map va to pa
@@ -1748,16 +1840,20 @@ module lsu (
   memif.master mif,
 
   // common interface for each stage
-  input logic valid,
-  output logic ready_o,
+  input  logic       valid,
+  output logic       ready_o,
   output exception_t exc_o,
 
-  input ld_op_e  ld_op_i,
-  input sd_op_e  sd_op_i,
-  input amo_op_e amo_op_i,
-  input addr_t   addr_i,
-  input reg_t    wd_i,
-  output reg_t   rd_o
+  input  ld_op_e  ld_op_i,
+  input  sd_op_e  sd_op_i,
+  input  amo_op_e amo_op_i,
+  input  logic    amo_valid_i,
+  input  addr_t   addr_i,
+  input  addr_t   amo_addr_i,
+  input  reg_t    wd_i,
+  input  reg_t    amo_wd_i,
+  output reg_t    rd_o,
+  output reg_t    amo_rd_o
 );
   typedef enum {
     IDLE,
@@ -1769,10 +1865,21 @@ module lsu (
   mcause_e ecause;
   logic load, store;
   datatype_e dtype;
+  addr_t addr;
+  reg_t wd;
 
   always_comb begin
-    load  = ld_op_i != LD_NONE;
-    store = sd_op_i != SD_NONE;
+    if (amo_op_i != AMO_NONE) begin
+      load  = ld_op_i != LD_NONE;
+      store = sd_op_i != SD_NONE && !amo_valid_i;
+      addr  = amo_addr_i;
+      wd    = amo_wd_i;
+    end else begin
+      load  = ld_op_i != LD_NONE;
+      store = sd_op_i != SD_NONE;
+      addr  = addr_i;
+      wd    = wd_i;
+    end
     if (load) begin
       dtype = ldop2dtype(ld_op_i);
     end else begin
@@ -1781,7 +1888,7 @@ module lsu (
 
     ready_o = 1;
     ecause  = EXC_NONE;
-    if (valid && (load || store)) begin
+    if ((valid || amo_valid_i) && (load || store)) begin
       ready_o = 0;
       if (state == MEM && mif.ready == 1) begin
         ready_o = 1;
@@ -1804,13 +1911,13 @@ module lsu (
     if (!rst_n) begin
       state <= IDLE;
     end else begin
-      if (valid && (load || store)) begin
+      if ((valid || amo_valid_i) && (load || store)) begin
         unique case (state)
           IDLE: begin
             mif.valid <= 1;
             mif.we <= store;
-            mif.addr <= addr_i;
-            mif.wd <= store ? wd_i : 0;
+            mif.addr <= addr;
+            mif.wd <= store ? wd : 0;
             state <= MEM;
             mif.dtype <= dtype;
           end
@@ -1819,7 +1926,13 @@ module lsu (
           MEM: begin
             if (mif.ready) begin
               mif.valid <= 0;
-              if (load) rd_o <= mif.rd;
+              if (load) begin
+                if (amo_valid_i) begin
+                  amo_rd_o <= mif.rd;
+                end else begin
+                  rd_o <= mif.rd;
+                end
+              end
               state <= IDLE;
             end
           end
@@ -1895,21 +2008,18 @@ module sram (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      // foreach (m[i]) begin
-      //   m[i] <= '0;
-      // end
+      foreach (m[i]) begin
+        m[i] <= '0;
+      end
     end else begin
       if (mif.valid && mif.we) begin
-        `LOGI($sformatf("write M[%0d]=0x%0h  type:%0d", idx, mif.wd, mif.dtype));
+        `LOGI($sformatf("write M[%0d]=0x%0h type:%0d", idx, mif.wd, mif.dtype));
         unique case (mif.dtype)
-          S8: `write_data(m, idx, mif.wd, 8);
-          U8: `write_data(m, idx, mif.wd, 8);
-          S16: `write_data(m, idx, mif.wd, 16);
-          U16: `write_data(m, idx, mif.wd, 16);
-          S32: `write_data(m, idx, mif.wd, 32);
-          U32: `write_data(m, idx, mif.wd, 32);
-          US64: `write_data(m, idx, mif.wd, 64);
-          default: ;
+          S8, U8:   `write_data(m, idx, mif.wd, 8);
+          S16, U16: `write_data(m, idx, mif.wd, 16);
+          S32, U32: `write_data(m, idx, mif.wd, 32);
+          US64:     `write_data(m, idx, mif.wd, 64);
+          default:  ;
         endcase
       end
     end
@@ -1926,7 +2036,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/mul.hex";
+  localparam string HEX = "isa/amo.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
@@ -1965,6 +2075,7 @@ module mmu (
   input logic rst_n
 );
 
+
 endmodule
 
 //------------------------------------
@@ -1974,9 +2085,23 @@ endmodule
 // - priviledge management
 //------------------------------------
 module csr (
-  input logic clk,
-  input logic rst_n
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic       valid,
+  input  sys_op_e    op_i,          // system instr
+  output reg_t       wb_o,          // csr instr write back
+  input  exception_t exc_i,         // exception from others
+  output exception_t exc_o,         // csr instr exception and it will come back at WB stage
+  output logic       tlb_invalid_o, // to mmu
+
+  // irq interface
+  input  logic irq_timer_i,   // timer int from clint
+  input  logic irq_ex_i,      // external int from PLIC
+  output logic interrupted_o  // for wfi
 );
+  // 1. csr rw(check permission: priv-[9:8] and ro, rw[11:10])
+  // 2. handle exception according to current priv and deleg
+  // 3. handle int according to current priv and deleg
 endmodule
 
 //------------------------------------
