@@ -23,7 +23,7 @@ package hawks;
 `ifdef DEBUG_LOG
   `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
   `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
-  `define LOGE(msg) $display("[E|%9t|%m] %s", $realtime, msg)
+  `define LOGE(msg) $display("%s[E|%9t|%m] %s%s", `COLOR_RED, $realtime, msg, `COLOR_NONE)
 `else
   `define LOGI(msg)
   `define LOGW(msg)
@@ -2307,6 +2307,9 @@ module csr (
   `define SIP_MASK 64'h0222
   `define MIE_MASK 64'h0aaa
   `define MIP_MASK 64'h0aaa
+  `define TM(i, en) (i == TIME && !en.TM)
+  `define CY(i, en) (i == CYCLE && !en.CY)
+  `define IR(i, en) (i == INSTRET && !en.IR)
 
   mstatus_t mstatus;
   medeleg_t medeleg;
@@ -2358,8 +2361,13 @@ module csr (
   end
 
   reg_t next;
+  logic illegal;
+  logic write;
+  logic cy, tm, ir;
   always_comb begin
     next = 0;
+    illegal = 0;
+    write = 1;
     if (valid) begin
       // `LOGI($sformatf("op:%0d op1:%0h, rd:%0h", op_i, op1_i, rd));
       unique case (op_i)
@@ -2370,31 +2378,51 @@ module csr (
       endcase
       if (op_i >= SYS_CSRRW) begin
         `LOGI($sformatf("op:%0d, next=%0h", op_i, next));
+        // csr rw(check permission: priv-[9:8] and ro, rw[11:10])
+        if (op_i inside {SYS_CSRRC, SYS_CSRRS, SYS_CSRRSI, SYS_CSRRCI} && op1_i == 0) begin
+          write = 0;
+        end
+        // check writable
+        if (write && which_i[11:10] == 2'b11) begin
+          illegal = 1;
+        end
+        // check priviledge
+        if (which_i[9:8] > priv) begin
+          illegal = 1;
+        end else begin
+          if (priv == M_USER) begin
+            illegal = `TM(which_i, scounteren) || `CY(which_i, scounteren) || `IR(which_i, scounteren);
+          end else if (priv == M_SUPER) begin
+            illegal = `TM(which_i, mcounteren) || `CY(which_i, mcounteren) || `IR(which_i, mcounteren);
+          end
+        end
       end
     end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      priv     <= M_MACHINE;
-      mstatus  <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
-      misa     <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
-      medeleg  <= '0;
-      mideleg  <= '0;
-      mtvec    <= '0;
-      mtval    <= '0;
-      mscratch <= '0;
-      mepc     <= '0;
-      mcause   <= '0;
-      mie      <= '0;
-      mip      <= '0;
-      mhartid  <= '0;
-      stvec    <= '0;
-      sscratch <= '0;
-      stval    <= '0;
-      scause   <= '0;
-      satp     <= '0;
-      cycle    <= '0;
+      priv       <= M_MACHINE;
+      mstatus    <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
+      misa       <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
+      medeleg    <= '0;
+      mideleg    <= '0;
+      mtvec      <= '0;
+      mtval      <= '0;
+      mscratch   <= '0;
+      mepc       <= '0;
+      mcause     <= '0;
+      mie        <= '0;
+      mip        <= '0;
+      mhartid    <= '0;
+      stvec      <= '0;
+      sscratch   <= '0;
+      stval      <= '0;
+      scause     <= '0;
+      satp       <= '0;
+      cycle      <= '0;
+      mcounteren <= '0;
+      scounteren <= '0;
     end else begin
       cycle <= cycle + 1;
       if (valid) begin
@@ -2419,33 +2447,40 @@ module csr (
           default: ;
         endcase
         if (op_i >= SYS_CSRRW) begin
-          unique case (which_i)
-            MSTATUS: mstatus <= (mstatus & ~`MSTATUS_WR_MASK) | (next & `MSTATUS_WR_MASK);
-            MEDELEG: medeleg <= next;
-            MIDELEG: mideleg <= next;
-            MIE: mie <= (mie & ~`MIE_MASK) | (next & `MIE_MASK);
-            MTVEC: mtvec <= next;
-            MSCRATCH: mscratch <= next;
-            MIP: mip <= (mip & ~`MIP_MASK) | (next & `MIP_MASK);
-            MEPC: mepc <= next;
-            MCAUSE: mcause <= next;
-            MTVAL: mtval <= next;
+          // check permission
+          if (illegal) begin
+            `LOGE("illegal csr operation");
+            exc_o.fired <= 1;
+            exc_o.cause <= EXC_ILLEGAL_INSTRUCTION;
+            exc_o.eval  <= 0;
+          end else begin
+            unique case (which_i)
+              MSTATUS: mstatus <= (mstatus & ~`MSTATUS_WR_MASK) | (next & `MSTATUS_WR_MASK);
+              MEDELEG: medeleg <= next;
+              MIDELEG: mideleg <= next;
+              MIE: mie <= (mie & ~`MIE_MASK) | (next & `MIE_MASK);
+              MTVEC: mtvec <= next;
+              MSCRATCH: mscratch <= next;
+              MIP: mip <= (mip & ~`MIP_MASK) | (next & `MIP_MASK);
+              MEPC: mepc <= next;
+              MCAUSE: mcause <= next;
+              MTVAL: mtval <= next;
 
-            SSTATUS: mstatus <= (mstatus & ~`SSTATUS_WR_MASK) | (next & `SSTATUS_WR_MASK);
-            SIE: mie <= (mie & ~`SIE_MASK) | (next & `SIE_MASK);
-            STVEC: stvec <= next;
-            SSCRATCH: sscratch <= next;
-            SEPC: sepc <= next;
-            SCAUSE: scause <= next;
-            STVAL: stval <= next;
-            SIP: mip <= (mip & ~`SIP_MASK) | (next & `SIP_MASK);
-            SATP: satp <= next;
-            MCOUNTEREN: mcounteren <= next[31:0];
-            SCOUNTEREN: mcounteren <= next[31:0];
-            default: ;
-          endcase
+              SSTATUS: mstatus <= (mstatus & ~`SSTATUS_WR_MASK) | (next & `SSTATUS_WR_MASK);
+              SIE: mie <= (mie & ~`SIE_MASK) | (next & `SIE_MASK);
+              STVEC: stvec <= next;
+              SSCRATCH: sscratch <= next;
+              SEPC: sepc <= next;
+              SCAUSE: scause <= next;
+              STVAL: stval <= next;
+              SIP: mip <= (mip & ~`SIP_MASK) | (next & `SIP_MASK);
+              SATP: satp <= next;
+              MCOUNTEREN: mcounteren <= next[31:0];
+              SCOUNTEREN: mcounteren <= next[31:0];
+              default: ;
+            endcase
+          end
         end
-
       end
     end
   end
