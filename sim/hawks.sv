@@ -690,6 +690,7 @@ module soc (
   mstatus_t mstatus;
   priviledge_e priv;
   logic tlb_invalid;
+  logic exc_fired;
   logic itimer, iext, interrupted;
   csr csr1 (
     .clk(clk),
@@ -702,6 +703,7 @@ module soc (
     .satp_o(satp),
     .mstatus_o(mstatus),
     .priv_o(priv),
+    .exc_fired_i(exc_fired),
     .exc_i(exc[0]),
     .exc_o(exc[5]),
     .tlb_invalid_o(tlb_invalid),
@@ -739,6 +741,11 @@ module soc (
       end else begin
         exc[0] = exc[idx];
       end
+    end
+    if (stage == STG_WB && exc[0].fired) begin
+      exc_fired = 1;
+    end else begin
+      exc_fired = 0;
     end
   end
 
@@ -812,7 +819,7 @@ module soc (
         STG_WB: begin
           if (exc_stage != STG_IDLE) begin
             // TODO handle exception change pc and return to fetch stage
-            `LOGE($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
+            `LOGE($sformatf("current:%0d exc at stage: %0d cause:%0d", stage, exc_stage, exc[0].cause));
             pc <= pc + 4;
             exc_stage <= STG_IDLE;
             stage <= STG_FETCH;
@@ -959,7 +966,7 @@ module ifu (
     ecause  = EXC_NONE;
 
     if (valid && pc_i[1:0] != 0) begin
-      `LOGI($sformatf("pc misaligned: %h", pc_i));
+      `LOGI($sformatf("pc misaligned:0x%h", pc_i));
       ecause  = EXC_INSTR_ADDR_MISALIGNED;
       ready_o = 1;
     end
@@ -967,7 +974,7 @@ module ifu (
     if (valid && state == FETCH && mif.ready) begin
       ready_o = 1;
       if (mif.error) begin
-        `LOGE($sformatf("load instr error: %h", pc_i));
+        `LOGE($sformatf("load instr error: 0x%h", pc_i));
         ecause = EXC_INSTR_ACCESS_FAULT;
       end
     end
@@ -975,7 +982,7 @@ module ifu (
 
   // handle exception
   always_comb begin
-    exc_o = '0;
+    exc_o.fired = 0;
     if (ecause != EXC_NONE) begin
       exc_o.fired = 1;
       exc_o.cause = ecause;
@@ -1000,7 +1007,7 @@ module ifu (
           end
           FETCH: begin
             if (mif.ready) begin
-              `LOGI($sformatf("pc=%0h, instr=%h", pc_i, mif.rd[31:0]));
+              `LOGI($sformatf("pc=0x%0h, instr=0x%h", pc_i, mif.rd[31:0]));
               mif.valid <= 0;
               instr_o <= mif.rd[31:0];
               state <= IDLE;
@@ -1044,7 +1051,7 @@ module idu (
 
   // handle exceptions
   always_comb begin
-    exc_o = '0;
+    exc_o.fired = 0;
     if (ecause != EXC_NONE) begin
       exc_o.fired = 1;
       exc_o.cause = ecause;
@@ -2004,7 +2011,7 @@ module amo (
     result_o = alu_result_i;
     if (valid) begin
       if (op_i != AMO_NONE) begin
-        `LOGI($sformatf("op:%0d op1:%0h, op2:%0h", op_i, op1_i, op2_i));
+        `LOGI($sformatf("op:%0d op1:0x%0h, op2:0x%0h", op_i, op1_i, op2_i));
       end
       unique case (op_i)
         AMO_MAX, AMO_MAXU: result_o = alu_result_i == 0 ? op1_i : op2_i;
@@ -2232,7 +2239,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/csr.hex";
+  localparam string HEX = "isa/ecall.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
@@ -2291,6 +2298,7 @@ module csr (
   output satp_t              satp_o,        // satp for mmu
   output mstatus_t           mstatus_o,     // mstatus for mmu
   output priviledge_e        priv_o,        // current priviledge for mmu
+  input  logic               exc_fired_i,   // trigger csr to handle exception
   input  exception_t         exc_i,         // exception from others
   output exception_t         exc_o,         // csr instr exception and it will come back at WB stage
   output logic               tlb_invalid_o, // to mmu
@@ -2378,8 +2386,9 @@ module csr (
     next = 0;
     illegal = 0;
     write = 1;
+    exc_o.fired = 0;
     if (valid) begin
-      // `LOGI($sformatf("op:%0d op1:%0h, rd:%0h", op_i, op1_i, rd));
+      // `LOGI($sformatf("op:%0d op1:0x%0h, rd:0x%0h", op_i, op1_i, rd));
       unique case (op_i)
         SYS_CSRRW, SYS_CSRRWI: next = op1_i;
         SYS_CSRRS, SYS_CSRRSI: next = rd | op1_i;
@@ -2387,7 +2396,7 @@ module csr (
         default: ;
       endcase
       if (op_i >= SYS_CSRRW) begin
-        `LOGI($sformatf("op:%0d, next=%0h", op_i, next));
+        `LOGI($sformatf("op:%0d, next=0x%0h", op_i, next));
         // csr rw(check permission: priv-[9:8] and ro, rw[11:10])
         if (op_i inside {SYS_CSRRC, SYS_CSRRS, SYS_CSRRSI, SYS_CSRRCI} && op1_i == 0) begin
           write = 0;
@@ -2495,6 +2504,12 @@ module csr (
           end
         end
       end
+    end
+  end
+
+  always_comb begin
+    if (exc_fired_i) begin
+      `LOGE($sformatf("cause:%0d val:0x%0h", exc_i.cause, exc_i.eval));
     end
   end
 endmodule
