@@ -593,7 +593,7 @@ module soc (
   addr_t pc, btarget, ttarget;
   instr_t instr;
   id_t id_out;
-  exception_t exc[5];
+  exception_t exc[6];
 
   memif master_ports[MASTER_CNT] ();
   memif slave_ports[SLAVE_CNT] ();
@@ -689,7 +689,6 @@ module soc (
   satp_t satp;
   mstatus_t mstatus;
   priviledge_e priv;
-  exception_t exc_in, exc_out;
   logic tlb_invalid;
   logic itimer, iext, interrupted;
   csr csr1 (
@@ -703,8 +702,8 @@ module soc (
     .satp_o(satp),
     .mstatus_o(mstatus),
     .priv_o(priv),
-    .exc_i(exc_in),
-    .exc_o(exc_out),
+    .exc_i(exc[0]),
+    .exc_o(exc[5]),
     .tlb_invalid_o(tlb_invalid),
     .irq_timer_i(itimer),
     .irq_ex_i(iext),
@@ -729,14 +728,20 @@ module soc (
     .mif(slave_ports[2].slave)
   );
 
+  // copy exception to exc[0]
   int idx;
   always_comb begin
-    exc[0] = '0;
+    exc[0].fired = 0;
     idx = int'(exc_stage);
     if (exc_stage != STG_IDLE) begin
-      exc[0] = exc[idx];
+      if (exc_stage == STG_EXEC) begin
+        exc[0] = exc[5].fired ? exc[5] : exc[idx];
+      end else begin
+        exc[0] = exc[idx];
+      end
     end
   end
+
   // pipeline fsm
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -786,7 +791,12 @@ module soc (
         end
         STG_EXEC: begin
           if (ex_ready) begin
-            stage <= STG_MEM;
+            if (exc[5].fired || exc[3].fired) begin
+              exc_stage <= STG_EXEC;
+              stage <= STG_WB;
+            end else begin
+              stage <= STG_MEM;
+            end
           end
         end
         STG_MEM: begin
@@ -802,7 +812,7 @@ module soc (
         STG_WB: begin
           if (exc_stage != STG_IDLE) begin
             // TODO handle exception change pc and return to fetch stage
-            `LOGI($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
+            `LOGE($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
             pc <= pc + 4;
             exc_stage <= STG_IDLE;
             stage <= STG_FETCH;
@@ -2307,9 +2317,9 @@ module csr (
   `define SIP_MASK 64'h0222
   `define MIE_MASK 64'h0aaa
   `define MIP_MASK 64'h0aaa
-  `define TM(i, en) (i == TIME && !en.TM)
-  `define CY(i, en) (i == CYCLE && !en.CY)
-  `define IR(i, en) (i == INSTRET && !en.IR)
+  `define TM(en) (which_i == TIME && !en.TM)
+  `define CY(en) (which_i == CYCLE && !en.CY)
+  `define IR(en) (which_i == INSTRET && !en.IR)
 
   mstatus_t mstatus;
   medeleg_t medeleg;
@@ -2391,10 +2401,16 @@ module csr (
           illegal = 1;
         end else begin
           if (priv == M_USER) begin
-            illegal = `TM(which_i, scounteren) || `CY(which_i, scounteren) || `IR(which_i, scounteren);
+            illegal = `TM(scounteren) || `CY(scounteren) || `IR(scounteren);
           end else if (priv == M_SUPER) begin
-            illegal = `TM(which_i, mcounteren) || `CY(which_i, mcounteren) || `IR(which_i, mcounteren);
+            illegal = `TM(mcounteren) || `CY(mcounteren) || `IR(mcounteren);
           end
+        end
+
+        if (illegal) begin
+          exc_o.fired = 1;
+          exc_o.cause = EXC_ILLEGAL_INSTRUCTION;
+          exc_o.eval  = 0;
         end
       end
     end
@@ -2450,9 +2466,6 @@ module csr (
           // check permission
           if (illegal) begin
             `LOGE("illegal csr operation");
-            exc_o.fired <= 1;
-            exc_o.cause <= EXC_ILLEGAL_INSTRUCTION;
-            exc_o.eval  <= 0;
           end else begin
             unique case (which_i)
               MSTATUS: mstatus <= (mstatus & ~`MSTATUS_WR_MASK) | (next & `MSTATUS_WR_MASK);
