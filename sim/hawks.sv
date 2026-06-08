@@ -534,7 +534,8 @@ module top ();
     $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
     intr = 1'b0;
-    // #1000 intr = 1'b1;
+    #150 intr = 1'b1;
+    #10 intr = 1'b0;
   end
 
   clkgen #(
@@ -584,8 +585,7 @@ module soc (
   input logic intr_i
 );
 
-  logic if_ready, id_ready, ex_ready, ls_ready, rf_ready;
-
+  logic stage_ready[5];
   logic btaken, ttaken;
   wb_src_e wb_src;
   reg_t wb_alu, wb_amo, wb_csr, wb_mem;
@@ -615,7 +615,7 @@ module soc (
     .valid(stage == STG_FETCH),
     .pc_i(pc),
     .instr_o(instr),
-    .ready_o(if_ready),
+    .ready_o(stage_ready[0]),
     .exc_o(exc[1])
   );
 
@@ -624,7 +624,7 @@ module soc (
     .rst_n(rst_n),
     .valid(stage == STG_DECODE),
     .instr_i(instr),
-    .ready_o(id_ready),
+    .ready_o(stage_ready[1]),
     .priv_i(priv),
     .mstatus_i(mstatus),
     .exc_o(exc[2]),
@@ -637,7 +637,7 @@ module soc (
     .clk(clk),
     .rst_n(rst_n),
     .valid(stage == STG_EXEC),
-    .ready_o(ex_ready),
+    .ready_o(stage_ready[2]),
     .exc_o(exc[3]),
     .pc_i(pc),
     .id_i(id_out),
@@ -660,7 +660,7 @@ module soc (
     .rst_n(rst_n),
     .mif(master_ports[1].master),
     .valid(stage == STG_MEM),
-    .ready_o(ls_ready),
+    .ready_o(stage_ready[3]),
     .exc_o(exc[4]),
     .ld_op_i(id_out.ld_op),
     .sd_op_i(id_out.sd_op),
@@ -678,7 +678,7 @@ module soc (
     .clk(clk),
     .rst_n(rst_n),
     .valid(stage == STG_WB),
-    .ready_o(rf_ready),
+    .ready_o(stage_ready[4]),
     .rif(rf.slave),
     .wb_src_i(wb_src),
     .rd_i(id_out.rd),
@@ -693,7 +693,7 @@ module soc (
   priviledge_e priv;
   logic tlb_invalid;
   logic exc_fired;
-  logic itimer, iext, interrupted;
+  logic itimer, interrupted;
   logic halt;
   csr csr1 (
     .clk(clk),
@@ -717,7 +717,7 @@ module soc (
     .tlb_invalid_o(tlb_invalid),
     .halt_o(halt),
     .irq_timer_i(itimer),
-    .irq_ex_i(iext),
+    .irq_ex_i(intr_i),
     .interrupted_o(interrupted)
   );
 
@@ -771,7 +771,7 @@ module soc (
           stage <= STG_FETCH;
         end
         STG_FETCH: begin
-          if (if_ready) begin
+          if (stage_ready[0]) begin
             if (exc[1].fired) begin
               stage <= STG_WB;
               exc_stage <= stage;
@@ -781,7 +781,7 @@ module soc (
           end
         end
         STG_DECODE: begin
-          if (id_ready) begin
+          if (stage_ready[1]) begin
             stage <= STG_EXEC;
             if (exc[2].fired) begin
               stage <= STG_WB;
@@ -796,7 +796,7 @@ module soc (
           end
         end
         STG_AMO: begin
-          if (ls_ready) begin
+          if (stage_ready[3]) begin
             if (exc[4].fired) begin
               stage <= STG_EXEC;
               exc_stage <= stage;
@@ -806,7 +806,7 @@ module soc (
           end
         end
         STG_EXEC: begin
-          if (ex_ready) begin
+          if (stage_ready[2]) begin
             if (exc[5].fired || exc[3].fired) begin
               exc_stage <= STG_EXEC;
               stage <= STG_WB;
@@ -816,7 +816,7 @@ module soc (
           end
         end
         STG_MEM: begin
-          if (ls_ready) begin
+          if (stage_ready[3]) begin
             if (exc[4].fired) begin
               stage <= STG_WB;
               exc_stage <= stage;
@@ -826,20 +826,23 @@ module soc (
           end
         end
         STG_WB: begin
-          if (exc_stage != STG_IDLE) begin
-            // TODO handle exception change pc and return to fetch stage
-            `LOGE($sformatf("current:%0d exc at stage: %0d cause:%0d", stage, exc_stage, exc[0].cause));
-            if (ttaken) begin
-              pc <= ttarget;
-            end else begin
-              pc <= pc + 4;
+          if (halt) begin
+            `LOGW("WFI");
+            if (interrupted) begin
+              stage <= STG_FETCH;
+              pc <= (ttaken ? ttarget : pc + 4);
             end
-            exc_stage <= STG_IDLE;
-            stage <= STG_FETCH;
           end else begin
-            if (rf_ready) begin
-              if (btaken) begin
-                pc = btarget;
+            `LOGI($sformatf("ttaken:%b btaken:%b", ttaken, btaken));
+            if (exc_stage != STG_IDLE) begin
+              `LOGE($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
+              exc_stage = STG_IDLE;
+            end
+            if (stage_ready[4]) begin
+              if (ttaken) begin
+                pc <= ttarget;
+              end else if (btaken) begin
+                pc <= btarget;
               end else begin
                 pc <= pc + 4;
               end
@@ -2275,7 +2278,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/ecall.hex";
+  localparam string HEX = "isa/wfi.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
@@ -2564,8 +2567,9 @@ module csr (
     cause         = EXC_NONE;
     epc           = '0;
     priv_next     = M_USER;
-    trap_o        = '0;
+    trap_o        = 0;
     trap_target_o = '0;
+    interrupted_o = 0;
 
     if (commit_i && exc_fired_i) begin
       if (priv < M_MACHINE) begin
@@ -2596,10 +2600,7 @@ module csr (
         trap_o        = 1;
         trap_target_o = mtvec;
       end
-    end
-
-    // handle xRET
-    if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
+    end else if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
       if (op_i == SYS_SRET) begin
         priv_next     = mstatus.SPP ? M_SUPER : M_USER;
         status        = mstatus;
@@ -2620,9 +2621,37 @@ module csr (
         trap_o        = 1;
         trap_target_o = mepc;
       end
+    end else if (commit_i && m_intr != reg_t'(0)) begin
+      interrupted_o = 1;
+      if (mstatus.MIE) begin
+        trap_o = 1;
+        trap_target_o = mtvec;
+        status = mstatus;
+        status.MPP = priv;
+        status.MPIE = mstatus.MIE;
+        status.MIE = 0;
+        priv_next = M_MACHINE;
+        cause = mintr2cause(m_intr);
+        epc = pc_i;
+      end
+    end else if (commit_i && s_intr != reg_t'(0)) begin
+      interrupted_o = 1;
+      if (mstatus.SIE) begin
+        trap_o = 1;
+        trap_target_o = stvec;
+        status = mstatus;
+        status.SPP = (priv == M_USER ? 0 : 1);
+        status.SPIE = mstatus.SIE;
+        status.SIE = 0;
+        priv_next = M_MACHINE;
+        cause = mintr2cause(s_intr);
+        epc = pc_i;
+      end
     end
+
   end
 
+  // update register when trapped or xRET
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
@@ -2640,8 +2669,7 @@ module csr (
           mcause <= cause;
           mstatus <= status;
         end
-      end
-      if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
+      end else if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
         mstatus <= status;
         priv    <= priv_next;
         if (op_i == SYS_SRET) begin
@@ -2649,9 +2677,67 @@ module csr (
         end else begin
           mcause <= '0;
         end
+      end else if (commit_i && m_intr != reg_t'(0)) begin
+        if (mstatus.MIE) begin
+          mstatus <= status;
+          priv <= priv_next;
+          mepc <= epc;
+          mcause <= cause;
+        end
+      end else if (commit_i && s_intr != reg_t'(0)) begin
+        if (mstatus.SIE) begin
+          mstatus <= status;
+          priv <= priv_next;
+          sepc <= epc;
+          scause <= cause;
+        end
       end
     end
   end
+
+  // handle interrupt
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (mideleg.STI) begin
+        mip.STI <= irq_timer_i;
+      end else begin
+        mip.MTI <= irq_timer_i;
+      end
+      if (mideleg.SEI) begin
+        mip.SEI <= irq_ex_i;
+      end else begin
+        mip.MEI <= irq_ex_i;
+      end
+    end
+  end
+
+  mintr_t m_intr, s_intr;
+  always_comb begin
+    m_intr = mip & mie & (~mideleg);
+    s_intr = mip & mie & (mideleg);
+  end
+
+  function automatic mcause_e mintr2cause(mintr_t u);
+    if (u.MEI) begin
+      return INTR_MACHINE_EXT;
+    end else if (u.MSI) begin
+      return INTR_MACHINE_SW;
+    end else begin
+      return INTR_MACHINE_TMR;
+    end
+  endfunction
+
+  function automatic mcause_e sintr2cause(mintr_t u);
+    if (u.SEI) begin
+      return INTR_SUPERVISOR_EXT;
+    end else if (u.SSI) begin
+      return INTR_SUPERVISOR_SW;
+    end else begin
+      return INTR_SUPERVISOR_TMR;
+    end
+  endfunction
+
 endmodule
 
 //------------------------------------
