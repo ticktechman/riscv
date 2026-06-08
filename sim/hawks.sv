@@ -22,7 +22,7 @@ package hawks;
 
 `ifdef DEBUG_LOG
   `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
-  `define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
+  `define LOGW(msg) $display("%s[W|%9t|%m] %s%s", `COLOR_YELLOW, $realtime, msg, `COLOR_NONE)
   `define LOGE(msg) $display("%s[E|%9t|%m] %s%s", `COLOR_RED, $realtime, msg, `COLOR_NONE)
 `else
   `define LOGI(msg)
@@ -586,7 +586,7 @@ module soc (
 
   logic if_ready, id_ready, ex_ready, ls_ready, rf_ready;
 
-  logic btaken;
+  logic btaken, ttaken;
   wb_src_e wb_src;
   reg_t wb_alu, wb_amo, wb_csr, wb_mem;
   stage_e stage, exc_stage;
@@ -625,6 +625,8 @@ module soc (
     .valid(stage == STG_DECODE),
     .instr_i(instr),
     .ready_o(id_ready),
+    .priv_i(priv),
+    .mstatus_i(mstatus),
     .exc_o(exc[2]),
     .id_o(id_out),
     .wb_src_o(wb_src),
@@ -692,10 +694,14 @@ module soc (
   logic tlb_invalid;
   logic exc_fired;
   logic itimer, iext, interrupted;
+  logic halt;
   csr csr1 (
     .clk(clk),
     .rst_n(rst_n),
     .valid(stage == STG_EXEC),
+    .commit_i(stage == STG_WB),
+    .pc_i(pc),
+    .instr_i(instr),
     .op_i(id_out.sys_op),
     .op1_i(id_out.op_s1 == OP_SRC_REG ? rf.master.v1 : {59'b0, id_out.csr_imm}),
     .which_i(id_out.csr),
@@ -706,7 +712,10 @@ module soc (
     .exc_fired_i(exc_fired),
     .exc_i(exc[0]),
     .exc_o(exc[5]),
+    .trap_o(ttaken),
+    .trap_target_o(ttarget),
     .tlb_invalid_o(tlb_invalid),
+    .halt_o(halt),
     .irq_timer_i(itimer),
     .irq_ex_i(iext),
     .interrupted_o(interrupted)
@@ -820,7 +829,11 @@ module soc (
           if (exc_stage != STG_IDLE) begin
             // TODO handle exception change pc and return to fetch stage
             `LOGE($sformatf("current:%0d exc at stage: %0d cause:%0d", stage, exc_stage, exc[0].cause));
-            pc <= pc + 4;
+            if (ttaken) begin
+              pc <= ttarget;
+            end else begin
+              pc <= pc + 4;
+            end
             exc_stage <= STG_IDLE;
             stage <= STG_FETCH;
           end else begin
@@ -1035,6 +1048,8 @@ module idu (
 
   // stage specific input
   input instr_t instr_i,
+  input mstatus_t mstatus_i,
+  input priviledge_e priv_i,
 
   // decode output
   regif.master rif,
@@ -1056,8 +1071,19 @@ module idu (
       exc_o.fired = 1;
       exc_o.cause = ecause;
       exc_o.eval  = {32'b0, instr_i};
+      if (ecause >= EXC_ECALL_U_MODE && ecause <= EXC_ECALL_M_MODE) begin
+        exc_o.eval = 0;
+      end
     end
   end
+
+  function automatic mcause_e mcause_of_ecall(priviledge_e priv);
+    unique case (priv)
+      M_USER:  return EXC_ECALL_U_MODE;
+      M_SUPER: return EXC_ECALL_S_MODE;
+      default: return EXC_ECALL_M_MODE;
+    endcase
+  endfunction
 
   // instr decoding
   logic [2:0] f3;
@@ -1289,16 +1315,27 @@ module idu (
               unique case (instr_i[31:20])
                 12'h000: begin
                   id_o.sys_op = SYS_ECALL;
-                  ecause = EXC_ECALL_U_MODE;  //TODO
+                  ecause = mcause_of_ecall(priv_i);
                 end
                 12'h001: begin
                   id_o.sys_op = SYS_EBREAK;
                   ecause = EXC_BREAKPOINT;
                 end
                 12'h002: id_o.sys_op = SYS_URET;
-                12'h102: id_o.sys_op = SYS_SRET;
-                12'h105: id_o.sys_op = SYS_WFI;
-                12'h302: id_o.sys_op = SYS_MRET;
+                12'h102: begin
+                  id_o.sys_op = SYS_SRET;
+                  if (priv_i < M_SUPER) ecause = EXC_ILLEGAL_INSTRUCTION;
+                end
+                12'h105: begin
+                  id_o.sys_op = SYS_WFI;
+                  if (priv_i == M_USER && mstatus_i.TW == 1) begin
+                    ecause = EXC_ILLEGAL_INSTRUCTION;
+                  end
+                end
+                12'h302: begin
+                  id_o.sys_op = SYS_MRET;
+                  if (priv_i < M_MACHINE) ecause = EXC_ILLEGAL_INSTRUCTION;
+                end
                 default: ;
               endcase
               if (f7 == 7'b0001001) begin
@@ -1544,7 +1581,6 @@ module idu (
         IMM_J:   id_o.imm = {{43{instr_i[31]}}, instr_i[31], instr_i[19:12], instr_i[20], instr_i[30:21], 1'b0};
         default: id_o.imm = '0;
       endcase
-      `LOGI($sformatf("ops1:%0d", id_o.op_s1));
     end
   end
 endmodule
@@ -2291,17 +2327,23 @@ module csr (
   input  logic               clk,
   input  logic               rst_n,
   input  logic               valid,
-  input  sys_op_e            op_i,          // system instr
+  input  logic               commit_i,
+  input  addr_t              pc_i,
+  input  instr_t             instr_i,
+  input  sys_op_e            op_i,           // system instr
   input  reg_t               op1_i,
-  input  logic        [11:0] which_i,       // index of register
-  output reg_t               wb_o,          // csr instr write back
-  output satp_t              satp_o,        // satp for mmu
-  output mstatus_t           mstatus_o,     // mstatus for mmu
-  output priviledge_e        priv_o,        // current priviledge for mmu
-  input  logic               exc_fired_i,   // trigger csr to handle exception
-  input  exception_t         exc_i,         // exception from others
-  output exception_t         exc_o,         // csr instr exception and it will come back at WB stage
-  output logic               tlb_invalid_o, // to mmu
+  input  logic        [11:0] which_i,        // index of register
+  output reg_t               wb_o,           // csr instr write back
+  output satp_t              satp_o,         // satp for mmu
+  output mstatus_t           mstatus_o,      // mstatus for mmu
+  output priviledge_e        priv_o,         // current priviledge for mmu
+  input  logic               exc_fired_i,    // trigger csr to handle exception
+  input  exception_t         exc_i,          // exception from others
+  output exception_t         exc_o,          // csr instr exception and it will come back at WB stage
+  output logic               tlb_invalid_o,  // to mmu
+  output logic               halt_o,
+  output logic               trap_o,
+  output addr_t              trap_target_o,
 
   // irq interface
   input  logic irq_timer_i,   // timer int from clint
@@ -2339,6 +2381,7 @@ module csr (
   reg_t cycle;
   mcounteren_t mcounteren, scounteren;
   priviledge_e priv;
+  mcause_e ecause;
 
   // assign reg for mmu
   always_comb begin
@@ -2419,9 +2462,25 @@ module csr (
         if (illegal) begin
           exc_o.fired = 1;
           exc_o.cause = EXC_ILLEGAL_INSTRUCTION;
-          exc_o.eval  = 0;
+          exc_o.eval  = {32'b0, instr_i};
         end
       end
+    end
+  end
+
+  always_comb begin
+    tlb_invalid_o = 0;
+    halt_o = 0;
+    if (commit_i) begin
+      unique case (op_i)
+        SYS_FENCE: begin
+          tlb_invalid_o = 1;
+        end
+        SYS_WFI: begin
+          halt_o = 1;
+        end
+        default: ;
+      endcase
     end
   end
 
@@ -2451,26 +2510,7 @@ module csr (
     end else begin
       cycle <= cycle + 1;
       if (valid) begin
-        if (tlb_invalid_o == 1) begin
-          tlb_invalid_o <= 0;
-        end
         wb_o <= rd;
-
-        unique case (op_i)
-          SYS_ECALL: begin
-          end
-          SYS_EBREAK: begin
-          end
-          SYS_MRET: begin
-          end
-          SYS_SRET: begin
-          end
-          SYS_FENCE: begin
-          end
-          SYS_WFI: begin
-          end
-          default: ;
-        endcase
         if (op_i >= SYS_CSRRW) begin
           // check permission
           if (illegal) begin
@@ -2507,9 +2547,109 @@ module csr (
     end
   end
 
+  // handle exception and xRET
+  logic strap;
+  mstatus_t status;
+  mcause_e cause;
+  reg_t epc;
+  priviledge_e priv_next;
+
+  function automatic logic edeleg(mcause_e cause);
+    return medeleg[cause[5:0]];
+  endfunction
+
   always_comb begin
-    if (exc_fired_i) begin
-      `LOGE($sformatf("cause:%0d val:0x%0h", exc_i.cause, exc_i.eval));
+    strap         = '0;
+    status        = '0;
+    cause         = EXC_NONE;
+    epc           = '0;
+    priv_next     = M_USER;
+    trap_o        = '0;
+    trap_target_o = '0;
+
+    if (commit_i && exc_fired_i) begin
+      if (priv < M_MACHINE) begin
+        if (edeleg(exc_i.cause)) begin
+          strap = 1;
+        end
+      end
+      if (strap) begin
+        // strap
+        cause         = exc_i.cause;
+        epc           = pc_i;
+        priv_next     = M_SUPER;
+        status        = mstatus;
+        status.SPP    = priv == M_USER ? 0 : 1;
+        status.SPIE   = mstatus.SIE;
+        status.SIE    = 0;
+        trap_o        = 1;
+        trap_target_o = stvec;
+      end else begin
+        // mtrap
+        cause         = exc_i.cause;
+        epc           = pc_i;
+        priv_next     = M_MACHINE;
+        status        = mstatus;
+        status.MPP    = priv == M_USER ? 0 : 1;
+        status.MPIE   = mstatus.MIE;
+        status.MIE    = 0;
+        trap_o        = 1;
+        trap_target_o = mtvec;
+      end
+    end
+
+    // handle xRET
+    if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
+      if (op_i == SYS_SRET) begin
+        priv_next     = mstatus.SPP ? M_SUPER : M_USER;
+        status        = mstatus;
+        status.SPP    = '0;
+        status.SIE    = mstatus.SPIE;
+        status.SPIE   = '0;
+        trap_o        = 1;
+        trap_target_o = sepc;
+      end else begin
+        status = mstatus;
+        if (mstatus.MPP < M_MACHINE) begin
+          status.MPRV = 0;
+        end
+        status.MPP    = 0;
+        status.MIE    = mstatus.MPIE;
+        status.MPIE   = 0;
+        priv_next     = priviledge_e'(mstatus.MPP);
+        trap_o        = 1;
+        trap_target_o = mepc;
+      end
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (commit_i && exc_i.fired) begin
+        if (strap) begin
+          `LOGW("strap");
+          priv <= priv_next;
+          sepc <= epc;
+          scause <= cause;
+          mstatus <= status;
+        end else begin
+          `LOGW("mtrap");
+          priv <= priv_next;
+          mepc <= epc;
+          mcause <= cause;
+          mstatus <= status;
+        end
+      end
+      if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
+        mstatus <= status;
+        priv    <= priv_next;
+        if (op_i == SYS_SRET) begin
+          scause <= '0;
+        end else begin
+          mcause <= '0;
+        end
+      end
     end
   end
 endmodule
