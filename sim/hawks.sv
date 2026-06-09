@@ -15,7 +15,7 @@
 // types and structures
 //------------------------------------
 package hawks;
-  localparam int unsigned MASTER_CNT = 2;
+  localparam int unsigned MASTER_CNT = 3;
   localparam int unsigned SLAVE_CNT = 3;
   localparam int unsigned REGMAX = 32;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
@@ -30,6 +30,10 @@ package hawks;
   `define LOGE(msg)
 `endif
 
+  `define LOGPTE(tag, x) `LOGI($sformatf("%s(PPN-%h D%b A%b U%b X%b W%b R%b V%b)", \
+     tag, x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
+  `define LOGTLB(tag, x) `LOGI($sformatf("%s(PPN-%0h VPN-%0h ASID-%0h c%b D%b A%b U%b X%b W%b R%b V%b)", \
+     tag, x.PPN, x.VPN, x.ASID, x.cached, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
 
   `define COLOR_NONE "\033[0m"
   `define COLOR_RED "\033[31m"
@@ -473,6 +477,22 @@ package hawks;
     logic        CY;   // Bit 0: 周期计数器使能位 (cycle)
   } mcounteren_t;
 
+  typedef struct packed {
+    logic         N;               // [63] N
+    logic [62:61] PBMT;            // [62:61] PBMT
+    logic [60:54] reserved_54_60;  // [60:54] reserved
+    logic [53:10] PPN;             // [53:10] PPN: Physical Page Number
+    logic [9:8]   RSW;             // [9:8]  RSW: Reserved for use by supervisor software
+    logic         D;               // [7]    D: Dirty bit
+    logic         A;               // [6]    A: Accessed bit
+    logic         G;               // [5]    G: Global bit
+    logic         U;               // [4]    U: User bit
+    logic         X;               // [3]    X: Execute permission
+    logic         W;               // [2]    W: Write permission
+    logic         R;               // [1]    R: Read permission
+    logic         V;               // [0]    V: Valid bit
+  } pte_t;
+
   `define PTE_A 64'h40
   `define PTE_D 64'h80
 
@@ -522,6 +542,15 @@ interface regif;
   modport slave(input r1, r2, output v1, v2);
 endinterface
 
+interface mmapingif;
+  logic valid, ready, error;
+  logic [2:0] rwx;
+  addr_t va, pa;
+
+  modport master(input ready, error, pa, output valid, rwx, va);
+  modport slave(output ready, error, pa, input valid, rwx, va);
+endinterface
+
 
 //------------------------------
 // top entry module (no args)
@@ -534,7 +563,7 @@ module top ();
     $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
     intr = 1'b0;
-    #150 intr = 1'b1;
+    #186 intr = 1'b1;
     #10 intr = 1'b0;
   end
 
@@ -612,6 +641,7 @@ module soc (
     .clk(clk),
     .rst_n(rst_n),
     .mif(master_ports[0].master),
+    .mapif(imap.master),
     .valid(stage == STG_FETCH),
     .pc_i(pc),
     .instr_o(instr),
@@ -659,6 +689,7 @@ module soc (
     .clk(clk),
     .rst_n(rst_n),
     .mif(master_ports[1].master),
+    .mapif(dmap.master),
     .valid(stage == STG_MEM),
     .ready_o(stage_ready[3]),
     .exc_o(exc[4]),
@@ -720,6 +751,20 @@ module soc (
     .irq_ex_i(intr_i),
     .interrupted_o(interrupted)
   );
+
+  mmapingif imap (), dmap ();
+  mmu mmu1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mstatus_i(mstatus),
+    .priv_i(priv),
+    .satp_i(satp),
+    .tlb_invalid_i(tlb_invalid),
+    .imapif(imap.slave),
+    .dmapif(dmap.slave),
+    .mif(master_ports[2].master)
+  );
+
 
   rom rom1 (
     .clk(clk),
@@ -833,7 +878,6 @@ module soc (
               pc <= (ttaken ? ttarget : pc + 4);
             end
           end else begin
-            `LOGI($sformatf("ttaken:%b btaken:%b", ttaken, btaken));
             if (exc_stage != STG_IDLE) begin
               `LOGE($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
               exc_stage = STG_IDLE;
@@ -958,6 +1002,7 @@ module ifu (
   input logic clk,
   input logic rst_n,
   memif.master mif,
+  mmapingif.master mapif,
 
   // instr fetch interface
   input  logic   valid,
@@ -982,15 +1027,23 @@ module ifu (
     ecause  = EXC_NONE;
 
     if (valid && pc_i[1:0] != 0) begin
-      `LOGI($sformatf("pc misaligned:0x%h", pc_i));
+      `LOGI($sformatf("pc misaligned:0x%0h", pc_i));
       ecause  = EXC_INSTR_ADDR_MISALIGNED;
       ready_o = 1;
+    end
+
+    if (valid && state == MAPPING && mapif.ready) begin
+      if (mapif.error) begin
+        `LOGE($sformatf("instr page fault: 0x%0h", pc_i));
+        ecause  = EXC_INSTR_PAGE_FAULT;
+        ready_o = 1;
+      end
     end
 
     if (valid && state == FETCH && mif.ready) begin
       ready_o = 1;
       if (mif.error) begin
-        `LOGE($sformatf("load instr error: 0x%h", pc_i));
+        `LOGE($sformatf("load instr error: 0x%0h pa:0x%0h", pc_i, mapif.pa));
         ecause = EXC_INSTR_ACCESS_FAULT;
       end
     end
@@ -1014,11 +1067,23 @@ module ifu (
         unique case (state)
           IDLE: begin
             if (ecause == EXC_NONE) begin
-              mif.addr <= pc_i;
-              mif.dtype <= U32;
-              mif.we <= 0;
-              mif.valid <= 1;
-              state <= FETCH;
+              mapif.valid <= 1;
+              mapif.va    <= pc_i;
+              state       <= MAPPING;
+            end
+          end
+          MAPPING: begin
+            if (mapif.ready) begin
+              mapif.valid <= 0;
+              if (!mapif.error) begin
+                mif.addr  <= mapif.pa;
+                mif.dtype <= U32;
+                mif.we    <= 0;
+                mif.valid <= 1;
+                state     <= FETCH;
+              end else begin
+                state <= IDLE;
+              end
             end
           end
           FETCH: begin
@@ -2080,6 +2145,7 @@ module lsu (
   input logic clk,
   input logic rst_n,
   memif.master mif,
+  mmapingif.master mapif,
 
   // common interface for each stage
   input  logic       valid,
@@ -2103,9 +2169,9 @@ module lsu (
     MEM
   } state_e;
 
+  logic load, store;
   state_e state;
   mcause_e ecause;
-  logic load, store;
   datatype_e dtype;
   addr_t addr;
   reg_t wd;
@@ -2132,6 +2198,12 @@ module lsu (
     ecause  = EXC_NONE;
     if ((valid || amo_valid_i) && (load || store)) begin
       ready_o = 0;
+      if (state == MAPPING && mapif.ready == 1) begin
+        if (mapif.error) begin
+          ecause  = load ? EXC_LOAD_PAGE_FAULT : EXC_STORE_PAGE_FAULT;
+          ready_o = 1;
+        end
+      end
       if (state == MEM && mif.ready == 1) begin
         ready_o = 1;
         if (mif.error) begin
@@ -2156,14 +2228,27 @@ module lsu (
       if ((valid || amo_valid_i) && (load || store)) begin
         unique case (state)
           IDLE: begin
-            mif.valid <= 1;
-            mif.we <= store;
-            mif.addr <= addr;
-            mif.wd <= store ? wd : 0;
-            state <= MEM;
-            mif.dtype <= dtype;
+            if (ecause == EXC_NONE) begin
+              mapif.valid <= 1;
+              mapif.va    <= addr;
+              mapif.rwx   <= {load, store, 1'b0};
+              state       <= MAPPING;
+            end
           end
           MAPPING: begin
+            if (mapif.ready) begin
+              mapif.valid <= 0;
+              if (mapif.error) begin
+                state <= IDLE;
+              end else begin
+                mif.valid <= 1;
+                mif.we <= store;
+                mif.addr <= mapif.pa;
+                mif.wd <= store ? wd : 0;
+                state <= MEM;
+                mif.dtype <= dtype;
+              end
+            end
           end
           MEM: begin
             if (mif.ready) begin
@@ -2278,7 +2363,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/wfi.hex";
+  localparam string HEX = "isa/mmu.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
@@ -2313,10 +2398,308 @@ endmodule
 // - exception to outside
 //------------------------------------
 module mmu (
-  input logic clk,
-  input logic rst_n
+  input logic        clk,
+  input logic        rst_n,
+  input mstatus_t    mstatus_i,
+  input priviledge_e priv_i,
+  input satp_t       satp_i,
+  input logic        tlb_invalid_i,
+        mmapingif    imapif,
+        mmapingif    dmapif,
+        memif.master mif
 );
 
+  typedef enum {
+    WS_IDLE,
+    WS_LDPGD,
+    WS_LDPMD,
+    WS_LDPTE,
+    WS_UPDATE_AD,
+    WS_DONE
+  } walking_state_e;
+
+  `define VPN2(va) va[38:30]
+  `define VPN1(va) va[29:21]
+  `define VPN0(va) va[20:12]
+  `define PGD_ADDR(ppn, va) {8'h00, ppn, 12'(`VPN2(va) << 3)}
+  `define PMD_ADDR(ppn, va) {8'h00, ppn, 12'(`VPN1(va) << 3)}
+  `define PTE_ADDR(ppn, va) {8'h00, ppn, 12'(`VPN0(va) << 3)}
+
+  `define cache_tlb(tlb, va) begin \
+    tlb.cached <= 1;       \
+    tlb.PGSIZE <= pgsize;  \
+    tlb.ASID <= satp_i.ASID; \
+    tlb.VPN <= va[38:12];  \
+    tlb.PPN <= pte.PPN;    \
+    tlb.V <= pte.V;        \
+    tlb.R <= pte.R;        \
+    tlb.W <= pte.W;        \
+    tlb.X <= pte.X;        \
+    tlb.U <= pte.U;        \
+    tlb.D <= pte.D;        \
+    tlb.A <= pte.A;        \
+  end
+
+  `define build_pa_by_pte(pa, pte, va) begin \
+    unique case (pgsize) \
+      PG_1G:   pa <= {8'b0, pte.PPN[53:28], va[29:0]}; \
+      PG_2M:   pa <= {8'b0, pte.PPN[53:19], va[20:0]}; \
+      PG_4K:   pa <= {8'b0, pte.PPN[53:10], va[11:0]}; \
+      default: pa <= '0; \
+    endcase \
+  end
+
+  `define build_pa_by_tlb(pa, tlb, va) begin \
+    unique case (tlb.PGSIZE) \
+      PG_1G:   pa <= {8'b0, tlb.PPN[43:18], va[29:0]}; \
+      PG_2M:   pa <= {8'b0, tlb.PPN[43:9], va[20:0]};  \
+      PG_4K:   pa <= {8'b0, tlb.PPN[43:0], va[11:0]};  \
+      default: pa <= '0; \
+    endcase \
+  end
+  function automatic logic [26:0] vpnmask(pagesize_e pgsz);
+    unique case (pgsz)
+      PG_4K:   vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
+      PG_2M:   vpnmask = {9'h1ff, 9'h1ff, 9'h000};
+      PG_1G:   vpnmask = {9'h1ff, 9'h000, 9'h000};
+      default: vpnmask = {9'h1ff, 9'h1ff, 9'h1ff};
+    endcase
+  endfunction
+  function automatic logic tlb_aligned(tlb_entry_t tlb);
+    unique case (tlb.PGSIZE)
+      PG_1G:   return (tlb.PPN & 44'h3ffff) == 0;
+      PG_2M:   return (tlb.PPN & 44'h1ff) == 0;
+      default: return 1;
+    endcase
+  endfunction
+
+  tlb_entry_t itlb, dtlb;
+  pagesize_e pgsize;
+  pte_t pte;
+  logic leaf;
+  logic imap, dmap;
+  logic ihit, dhit, ialigned, daligned;
+  logic icheck, dcheck, lcheck;
+  logic [1:0] markad;
+  priviledge_e epriv;
+
+  always_comb begin
+    epriv = priv_i;
+    if (priv_i == M_MACHINE && mstatus_i.MPRV == 1) begin
+      epriv = priviledge_e'(mstatus_i.MPP);
+    end
+    pte = mif.rd;
+    leaf = pte.V & (pte.R | pte.W | pte.X);
+    imap = priv_i != M_MACHINE && satp_i.MODE == 8 && imapif.valid == 1;
+    dmap = epriv < M_MACHINE && satp_i.MODE == 8 && dmapif.valid == 1;
+
+    ihit = itlb.cached && (itlb.VPN & vpnmask(itlb.PGSIZE)) == (imapif.va[38:12] & vpnmask(itlb.PGSIZE)) &&
+        (itlb.G || itlb.ASID == satp_i.ASID);
+    dhit = dtlb.cached && (dtlb.VPN & vpnmask(dtlb.PGSIZE)) == (dmapif.va[38:12] & vpnmask(dtlb.PGSIZE)) &&
+        (dtlb.G || dtlb.ASID == satp_i.ASID);
+
+    icheck = itlb.V && itlb.X && ((priv_i == M_SUPER && itlb.U == 0) || (priv_i == M_USER && itlb.U == 1));
+    dcheck = dtlb.V && ((dmapif.rwx[2] == 1 && (dtlb.R || (mstatus_i.MXR && dtlb.X))) || (dmapif.rwx[1] == 1 && dtlb.W));
+    lcheck = (epriv == M_USER && dtlb.U == 1) || (epriv == M_SUPER && (dtlb.U == 0 || mstatus_i.SUM));
+
+    ialigned = tlb_aligned(itlb);
+    daligned = tlb_aligned(dtlb);
+
+    markad = '0;
+    if (ihit) begin
+      markad[0] = !itlb.A;
+    end
+    if (dhit) begin
+      markad[0] = !dtlb.A;
+      markad[1] = dmapif.rwx[1] == 1 ? !dtlb.D : 0;
+    end
+  end
+
+  // controller
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (tlb_invalid_i) begin
+        `LOGW("invalid TLB");
+        itlb <= '0;
+        dtlb <= '0;
+      end
+
+      imapif.ready <= 0;
+      dmapif.ready <= 0;
+      imapif.error <= 0;
+      dmapif.error <= 0;
+      if (imapif.valid && !imap) begin
+        `LOGI($sformatf("no map instr: %0h priv:%0d, mode:%0d", imapif.va, priv_i, satp_i.MODE));
+        imapif.pa    <= imapif.va;
+        imapif.ready <= 1;
+      end
+      if (dmapif.valid && !dmap) begin
+        `LOGI($sformatf("no map data: %0h", dmapif.va));
+        dmapif.pa    <= dmapif.va;
+        dmapif.ready <= 1;
+      end
+
+      if (imap && ihit) begin
+        if (ialigned && icheck) begin
+          imapif.ready <= 1;
+          `build_pa_by_tlb(imapif.pa, itlb, imapif.va);
+          if (|markad && !walking) begin
+            `LOGI("data trigger update PTE");
+            walking    <= 1;
+            walking_va <= imapif.va;
+            update_ad  <= markad;
+            iwalking   <= 1;
+          end
+        end else begin
+          `LOGTLB("itlb", itlb);
+          imapif.ready <= 1;
+          imapif.error <= 1;
+        end
+      end
+      if (dmap && dhit) begin
+        if (daligned && dcheck && lcheck) begin
+          dmapif.ready <= 1;
+          `build_pa_by_tlb(dmapif.pa, dtlb, dmapif.va);
+          if (|markad && !walking) begin
+            `LOGI("data trigger update PTE");
+            walking    <= 1;
+            walking_va <= dmapif.va;
+            update_ad  <= markad;
+            iwalking   <= 0;
+          end
+        end else begin
+          dmapif.ready <= 1;
+          dmapif.error <= 1;
+        end
+      end
+
+      if (dmap && !dhit) begin
+        if (!walking) begin
+          walking    <= 1;
+          walking_va <= dmapif.va;
+          update_ad  <= 2'b0;
+          iwalking   <= 0;
+        end
+      end else if (imap && !ihit) begin
+        if (!walking) begin
+          walking    <= 1;
+          walking_va <= imapif.va;
+          update_ad  <= 2'b0;
+          iwalking   <= 1;
+        end
+      end
+
+    end
+  end
+
+
+  // page table walking
+  logic walking, iwalking;
+  walking_state_e wstate;
+  addr_t walking_va;
+  logic [1:0] update_ad;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wstate   <= WS_IDLE;
+      walking  <= 0;
+      iwalking <= 0;
+    end else begin
+      if (walking) begin
+        unique case (wstate)
+          WS_IDLE: begin
+            wstate <= WS_LDPGD;
+            mif.valid <= 1'b1;
+            mif.we <= 1'b0;
+            mif.dtype <= US64;
+            mif.addr <= `PGD_ADDR(satp_i.PPN, walking_va);
+            `LOGI($sformatf("ptw:0x%0h va:0x%0h", `PGD_ADDR(satp_i.PPN, walking_va), walking_va));
+          end
+          WS_LDPGD: begin
+            if (mif.ready) begin
+              `LOGPTE("pgd", pte);
+              mif.valid <= 1'b0;
+              if (!pte.V || leaf) begin
+                wstate <= WS_DONE;
+                pgsize <= PG_1G;
+                if (iwalking) begin
+                  `cache_tlb(itlb, walking_va)
+                end else begin
+                  `cache_tlb(dtlb, walking_va)
+                end
+              end else begin
+                mif.valid <= 1'b1;
+                mif.we <= 1'b0;
+                mif.dtype <= US64;
+                wstate <= WS_LDPMD;
+                mif.addr <= `PMD_ADDR(pte.PPN, walking_va);
+              end
+            end
+          end
+          WS_LDPMD: begin
+            if (mif.ready) begin
+              `LOGPTE("pmd", pte);
+              mif.valid <= 1'b0;
+              if (!pte.V || leaf) begin
+                wstate <= WS_DONE;
+                pgsize <= PG_2M;
+                if (iwalking) begin
+                  `cache_tlb(itlb, walking_va)
+                end else begin
+                  `cache_tlb(dtlb, walking_va)
+                end
+              end else begin
+                mif.valid <= 1'b1;
+                mif.we <= 1'b0;
+                mif.dtype <= US64;
+                wstate <= WS_LDPTE;
+                mif.addr <= `PTE_ADDR(pte.PPN, walking_va);
+              end
+            end
+          end
+          WS_LDPTE: begin
+            if (mif.ready) begin
+              `LOGPTE("pte", pte);
+              mif.valid <= 1'b0;
+              wstate <= WS_DONE;
+              pgsize <= PG_4K;
+              if (iwalking) begin
+                `cache_tlb(itlb, walking_va)
+              end else begin
+                `cache_tlb(dtlb, walking_va)
+              end
+            end
+          end
+          WS_UPDATE_AD: begin
+            if (mif.ready) begin
+              `LOGPTE("AD updated", pte);
+              mif.valid <= 1'b0;
+              wstate <= WS_DONE;
+              update_ad <= '0;
+            end
+          end
+          WS_DONE: begin
+            if (|update_ad) begin
+              mif.valid <= 1'b1;
+              mif.we <= 1'b1;
+              mif.dtype <= US64;
+              wstate <= WS_UPDATE_AD;
+              unique case (update_ad)
+                2'b01:   mif.wd <= mif.rd;
+                2'b10:   mif.wd <= mif.rd | `PTE_D;
+                2'b11:   mif.wd <= mif.rd | `PTE_A | `PTE_D;
+                default: ;
+              endcase
+              `LOGPTE("update AD", pte)
+            end else begin
+              wstate  <= WS_IDLE;
+              walking <= '0;
+            end
+          end
+        endcase
+      end
+    end
+  end
 
 endmodule
 
@@ -2519,6 +2902,7 @@ module csr (
           if (illegal) begin
             `LOGE("illegal csr operation");
           end else begin
+            `LOGI($sformatf("CSR[%03h]=%0h", which_i, next));
             unique case (which_i)
               MSTATUS: mstatus <= (mstatus & ~`MSTATUS_WR_MASK) | (next & `MSTATUS_WR_MASK);
               MEDELEG: medeleg <= next;
@@ -2602,6 +2986,7 @@ module csr (
       end
     end else if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
       if (op_i == SYS_SRET) begin
+        `LOGI("SRET");
         priv_next     = mstatus.SPP ? M_SUPER : M_USER;
         status        = mstatus;
         status.SPP    = '0;
@@ -2610,6 +2995,7 @@ module csr (
         trap_o        = 1;
         trap_target_o = sepc;
       end else begin
+        `LOGI("MRET");
         status = mstatus;
         if (mstatus.MPP < M_MACHINE) begin
           status.MPRV = 0;
