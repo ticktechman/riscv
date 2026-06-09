@@ -568,7 +568,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(1000)
+    .COUNTER(8000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -1638,6 +1638,8 @@ module idu (
             default: id_o.amo_op = AMO_NONE;
           endcase
         end
+        OPCODE_FENCE: begin
+        end
         default: ecause = EXC_ILLEGAL_INSTRUCTION;
       endcase
 
@@ -2363,7 +2365,8 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/mmu.hex";
+  // localparam string HEX = "isa/mmu.hex";
+  localparam string HEX = "riscv-tests/rv64si-p-scall.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
