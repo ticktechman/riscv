@@ -574,8 +574,6 @@ module top ();
     $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
     intr = 1'b0;
-    #186 intr = 1'b1;
-    #10 intr = 1'b0;
   end
 
   clkgen #(
@@ -584,11 +582,20 @@ module top ();
     .clk(clk),
     .rst_n(rst_n)
   );
+  logic halt;
 
   soc soc1 (
     .clk(clk),
     .rst_n(rst_n),
+    .halt_o(halt),
     .intr_i(intr)
+  );
+
+  raptor raptor1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .halt_i(halt),
+    .intr_o(intr)
   );
 
 endmodule
@@ -620,9 +627,10 @@ endmodule
 // soc include (pipeline 5 stages, mmu, csr, ...)
 //-------------------------------------
 module soc (
-  input logic clk,
-  input logic rst_n,
-  input logic intr_i
+  input  logic clk,
+  input  logic rst_n,
+  input  logic intr_i,
+  output logic halt_o
 );
 
   logic stage_ready[5];
@@ -738,6 +746,7 @@ module soc (
   logic exc_fired;
   logic itimer, interrupted;
   logic halt;
+  assign halt_o = halt;
   csr csr1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -795,6 +804,7 @@ module soc (
     .rst_n(rst_n),
     .mif(slave_ports[2].slave)
   );
+
 
   // copy exception to exc[0]
   int idx;
@@ -2431,7 +2441,7 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/lrsc.hex";
+  localparam string HEX = "isa/wfi.hex";
   // localparam string HEX = "riscv-tests/rv64si-p-scall.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
@@ -3253,9 +3263,23 @@ endmodule
 // raptor for exception, irq
 //------------------------------------
 module raptor (
-  input logic clk,
-  input logic rst_n
+  input  logic clk,
+  input  logic rst_n,
+  input  logic halt_i,
+  output logic intr_o
 );
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      intr_o <= 0;
+    end else begin
+      if (halt_i) begin
+        intr_o <= 1;
+      end else begin
+        intr_o <= 0;
+      end
+    end
+  end
 
 endmodule
 
