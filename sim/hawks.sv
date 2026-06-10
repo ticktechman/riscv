@@ -51,6 +51,8 @@ package hawks;
   `define WU2I(r, a) {r[a+3], r[a+2], r[a+1], r[a]}
   `define write_data(r, off, data, sz) for (idx_t i = 0; i < sz; i++) r[off+i] <= data[8*i+:8]
 
+  `define overlap(s1, t1, s2, t2) ((s1>=s2 && s1<=s2+databytes(t2)) || (s2>=s1 && s2<s1+databytes(t1)))
+
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
   typedef logic [31:0] instr_t;
@@ -75,6 +77,15 @@ package hawks;
     U32,
     US64
   } datatype_e;
+
+  function automatic addr_t databytes(datatype_e dtype);
+    unique case (dtype)
+      S8, U8:   return 64'd1;
+      S16, U16: return 64'd2;
+      S32, U32: return 64'd4;
+      default:  return 64'd8;
+    endcase
+  endfunction
 
   typedef enum {
     STG_IDLE,
@@ -568,7 +579,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(8000)
+    .COUNTER(1000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -702,7 +713,8 @@ module soc (
     .wd_i(mem_wd),
     .amo_wd_i(amo_wd),
     .rd_o(wb_mem),
-    .amo_rd_o(amo_rd)
+    .amo_rd_o(amo_rd),
+    .trap_i(ttaken)
   );
 
   rfu rfu1 (
@@ -803,6 +815,11 @@ module soc (
     end
   end
 
+  logic enter_amo;
+  always_comb begin
+    enter_amo = !(id_out.amo_op inside {AMO_NONE, AMO_LR, AMO_LRW, AMO_SC, AMO_SCW});
+  end
+
   // pipeline fsm
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -832,7 +849,7 @@ module soc (
               stage <= STG_WB;
               exc_stage <= stage;
             end else begin
-              if (id_out.amo_op != AMO_NONE) begin
+              if (enter_amo) begin
                 stage <= STG_AMO;
               end else begin
                 stage <= STG_EXEC;
@@ -1371,6 +1388,7 @@ module idu (
           wb_src_o       = WB_SRC_ALU;
           id_o.alu_op    = ALU_ADD;
           id_o.rs1       = 0;
+          rif.r1         = 0;
           id_o.op_s1     = OP_SRC_REG;
           id_o.op_s2     = OP_SRC_IMM;
         end
@@ -1470,12 +1488,14 @@ module idu (
             {
               7'b0001000, 3'b010
             } : begin
+              wb_src_o    = WB_SRC_MEM;
               id_o.amo_op = AMO_LRW;
               id_o.ld_op  = LD_LW;
             end
             {
               7'b0001100, 3'b010
             } : begin
+              wb_src_o    = WB_SRC_MEM;
               id_o.amo_op = AMO_SCW;
               id_o.sd_op  = SD_SW;
             end
@@ -1489,6 +1509,7 @@ module idu (
             {
               7'b0001100, 3'b011
             } : begin
+              wb_src_o    = WB_SRC_MEM;
               wb_src_o    = WB_SRC_NONE;
               id_o.amo_op = AMO_SC;
               id_o.sd_op  = SD_SD;
@@ -2163,22 +2184,37 @@ module lsu (
   input  reg_t    wd_i,
   input  reg_t    amo_wd_i,
   output reg_t    rd_o,
-  output reg_t    amo_rd_o
+  output reg_t    amo_rd_o,
+  input  logic    trap_i
 );
   typedef enum {
     IDLE,
     MAPPING,
-    MEM
+    MEM,
+    SC_FAIL
   } state_e;
 
+  typedef struct packed {
+    reg_t      hartid;
+    logic      valid;
+    addr_t     addr;
+    datatype_e dtype;
+  } lrmark_t;
+
   logic load, store;
+  logic lrenable, scenable;
   state_e state;
   mcause_e ecause;
   datatype_e dtype;
   addr_t addr;
   reg_t wd;
 
+  lrmark_t lrmark;
+
   always_comb begin
+    lrenable = amo_op_i inside {AMO_LR, AMO_LRW} && valid;
+    scenable = amo_op_i inside {AMO_SC, AMO_SCW} && valid;
+
     if (amo_op_i != AMO_NONE) begin
       load  = ld_op_i != LD_NONE;
       store = sd_op_i != SD_NONE && !amo_valid_i;
@@ -2206,6 +2242,9 @@ module lsu (
           ready_o = 1;
         end
       end
+      if (state == SC_FAIL) begin
+        ready_o = 1;
+      end
       if (state == MEM && mif.ready == 1) begin
         ready_o = 1;
         if (mif.error) begin
@@ -2225,8 +2264,13 @@ module lsu (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state <= IDLE;
+      state  <= IDLE;
+      lrmark <= '0;
     end else begin
+      if (trap_i) begin
+        lrmark <= '0;
+      end
+
       if ((valid || amo_valid_i) && (load || store)) begin
         unique case (state)
           IDLE: begin
@@ -2243,27 +2287,49 @@ module lsu (
               if (mapif.error) begin
                 state <= IDLE;
               end else begin
-                mif.valid <= 1;
-                mif.we <= store;
-                mif.addr <= mapif.pa;
-                mif.wd <= store ? wd : 0;
-                state <= MEM;
-                mif.dtype <= dtype;
+                if (store && scenable && !`overlap(lrmark.addr, lrmark.dtype, mapif.pa, dtype)) begin
+                  `LOGE("sc failed");
+                  state <= SC_FAIL;
+                  rd_o  <= 1;
+                end else begin
+                  mif.valid <= 1;
+                  mif.we <= store;
+                  mif.addr <= mapif.pa;
+                  mif.wd <= store ? wd : 0;
+                  state <= MEM;
+                  mif.dtype <= dtype;
+                end
               end
             end
           end
           MEM: begin
             if (mif.ready) begin
               mif.valid <= 0;
-              if (load) begin
+              if (load && mif.error == 0) begin
+                if (lrenable) begin
+                  lrmark.valid <= 1;
+                  lrmark.dtype <= amo_op_i == AMO_LR ? US64 : S32;
+                  lrmark.addr  <= mif.addr;
+                end
+
                 if (amo_valid_i) begin
                   amo_rd_o <= mif.rd;
                 end else begin
                   rd_o <= mif.rd;
                 end
+              end else if (store && mif.error == 0) begin
+                if (`overlap(lrmark.addr, lrmark.dtype, mif.addr, dtype)) begin
+                  if (scenable) begin
+                    rd_o <= 0;
+                  end
+                  lrmark <= '0;
+                end
               end
               state <= IDLE;
             end
+          end
+          SC_FAIL: begin
+            state <= IDLE;
           end
           default: ;
         endcase
@@ -2365,8 +2431,8 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  // localparam string HEX = "isa/mmu.hex";
-  localparam string HEX = "riscv-tests/rv64si-p-scall.hex";
+  localparam string HEX = "isa/lrsc.hex";
+  // localparam string HEX = "riscv-tests/rv64si-p-scall.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
