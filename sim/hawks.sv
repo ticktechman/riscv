@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 //------------------------------------
 // types and structures
 //------------------------------------
@@ -62,7 +62,7 @@ package hawks;
     addr_t END;
   } mmap_t;
 
-  parameter mmap_t maping[SLAVE_CNT] = '{
+  parameter mmap_t mapping[SLAVE_CNT] = '{
       '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
       '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
       '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_2fff)}
@@ -647,11 +647,10 @@ module soc (
   memif slave_ports[SLAVE_CNT] ();
   regif rf ();
 
-  bus #(
-    .mmaping(maping)
-  ) bus1 (
+  bus bus1 (
     .clk(clk),
     .rst_n(rst_n),
+    .mmapping(mapping),
     .masters(master_ports),
     .slaves(slave_ports)
   );
@@ -932,11 +931,10 @@ endmodule
 // bus related types and module
 //------------------------------------
 // shared single channel crossbar
-module bus #(
-  parameter mmap_t mmaping[SLAVE_CNT]
-) (
+module bus (
   input logic clk,
   input logic rst_n,
+  input mmap_t mmapping[SLAVE_CNT],
   memif.slave masters[MASTER_CNT],
   memif.master slaves[SLAVE_CNT]
 );
@@ -991,10 +989,10 @@ module bus #(
     addr = 0;
     if (master_selected != -1) begin
       addr = mreq[master_selected].addr;
-      foreach (mmaping[i]) begin
-        if (addr >= mmaping[i].BASE && addr <= mmaping[i].END) begin
+      foreach (mmapping[i]) begin
+        if (addr >= mmapping[i].BASE && addr <= mmapping[i].END) begin
           slave_selected = i;
-          addr = addr - mmaping[i].BASE;
+          addr = addr - mmapping[i].BASE;
           break;
         end
       end
@@ -2441,8 +2439,8 @@ module rom (
   memif.slave mif
 );
   localparam addr_t SIZE = 4 * 1024;
-  localparam string HEX = "isa/wfi.hex";
-  // localparam string HEX = "riscv-tests/rv64si-p-scall.hex";
+  // localparam string HEX = "isa/wfi.hex";
+  localparam string HEX = "riscv-tests/rv64si-p-scall.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
