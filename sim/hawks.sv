@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 //------------------------------------
 // types and structures
 //------------------------------------
@@ -21,9 +21,9 @@ package hawks;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
 `ifdef DEBUG_LOG
-  `define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
-  `define LOGW(msg) $display("%s[W|%9t|%m] %s%s", `COLOR_YELLOW, $realtime, msg, `COLOR_NONE)
-  `define LOGE(msg) $display("%s[E|%9t|%m] %s%s", `COLOR_RED, $realtime, msg, `COLOR_NONE)
+  `define LOGI(msg) $display("[I|%9t|%m.%0d] %s", $realtime, `__LINE__, msg)
+  `define LOGW(msg) $display("%s[W|%9t|%m.%0d] %s%s", `COLOR_YELLOW, $realtime, `__LINE__, msg, `COLOR_NONE)
+  `define LOGE(msg) $display("%s[E|%9t|%m.%0d] %s%s", `COLOR_RED, $realtime, `__LINE__, msg, `COLOR_NONE)
 `else
   `define LOGI(msg)
   `define LOGW(msg)
@@ -32,8 +32,8 @@ package hawks;
 
   `define LOGPTE(tag, x) `LOGI($sformatf("%s(PPN-%h D%b A%b U%b X%b W%b R%b V%b)", \
      tag, x.PPN, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
-  `define LOGTLB(tag, x) `LOGI($sformatf("%s(PPN-%0h VPN-%0h ASID-%0h c%b D%b A%b U%b X%b W%b R%b V%b)", \
-     tag, x.PPN, x.VPN, x.ASID, x.cached, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
+  `define LOGTLB(tag, x) `LOGI($sformatf("%s(PPN-%0h VPN-%0h ASID-%0h PG:%0d c%b D%b A%b U%b X%b W%b R%b V%b)", \
+     tag, x.PPN, x.VPN, x.ASID, x.PGSIZE, x.cached, x.D, x.A, x.U, x.X, x.W, x.R, x.V));
 
   `define COLOR_NONE "\033[0m"
   `define COLOR_RED "\033[31m"
@@ -65,7 +65,7 @@ package hawks;
   parameter mmap_t mapping[SLAVE_CNT] = '{
       '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
       '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_2fff)}
+      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)}
   };
 
   typedef enum {
@@ -91,9 +91,9 @@ package hawks;
     STG_IDLE,
     STG_FETCH,
     STG_DECODE,
-    STG_AMO,
     STG_EXEC,
     STG_MEM,
+    STG_AMO,  // 5
     STG_WB
   } stage_e;
 
@@ -577,7 +577,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(1000)
+    .COUNTER(4000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -646,6 +646,9 @@ module soc (
   memif master_ports[MASTER_CNT] ();
   memif slave_ports[SLAVE_CNT] ();
   regif rf ();
+
+  initial begin
+  end
 
   bus bus1 (
     .clk(clk),
@@ -816,8 +819,10 @@ module soc (
       end else begin
         exc[0] = exc[idx];
       end
+      `LOGE($sformatf("exc: stage:%0d cause:0x%0h", exc_stage, exc[idx].cause));
     end
     if (stage == STG_WB && exc[0].fired) begin
+      `LOGE("fired");
       exc_fired = 1;
     end else begin
       exc_fired = 0;
@@ -906,7 +911,7 @@ module soc (
           end else begin
             if (exc_stage != STG_IDLE) begin
               `LOGE($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
-              exc_stage = STG_IDLE;
+              exc_stage <= STG_IDLE;
             end
             if (stage_ready[4]) begin
               if (ttaken) begin
@@ -1001,8 +1006,8 @@ module bus (
 
   // connect master and slave on both req and resp
   always_comb begin
-    foreach (sreq[i]) sreq[i] = '0;
-    foreach (mrsp[i]) mrsp[i] = '0;
+    foreach (sreq[i]) sreq[i].valid = '0;
+    foreach (mrsp[i]) mrsp[i].ready = '0;
 
     if (master_selected != -1 && slave_selected != -1) begin
       sreq[slave_selected] = mreq[master_selected];
@@ -1101,6 +1106,7 @@ module ifu (
             if (mapif.ready) begin
               mapif.valid <= 0;
               if (!mapif.error) begin
+                `LOGI($sformatf("pa:0x%0h va:0x%0h", mapif.pa, mapif.va));
                 mif.addr  <= mapif.pa;
                 mif.dtype <= U32;
                 mif.we    <= 0;
@@ -2262,6 +2268,7 @@ module lsu (
     end
 
     if (ecause != EXC_NONE) begin
+      `LOGE($sformatf("exc, cause: 0x%0h", ecause));
       exc_o.fired = 1;
       exc_o.cause = ecause;
       exc_o.eval  = 0;
@@ -2381,15 +2388,18 @@ module sram (
   typedef logic [$clog2(MAX)-1:0] idx_t;
   wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
   logic [7:0] m[MAX];
+
+  localparam string data = "riscv-tests/rv64si-p-icache-alias.hex.data";
   initial begin
-    foreach (m[i]) begin
-      m[i] = '0;
-    end
+    // foreach (m[i]) begin
+    //   m[i] = '0;
+    // end
+    $readmemh(data, m);
   end
 
   // bypass RAW
   always_comb begin
-    mif.ready = 1'b1;
+    mif.ready = mif.valid;
     if (mif.we && mif.valid) begin
       mif.rd = mif.wd;
     end else begin
@@ -2411,17 +2421,17 @@ module sram (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      foreach (m[i]) begin
-        m[i] <= '0;
-      end
+      // foreach (m[i]) begin
+      //   m[i] <= '0;
+      // end
     end else begin
       if (mif.valid && mif.we) begin
         `LOGI($sformatf("write M[%0d]=0x%0h type:%0d", idx, mif.wd, mif.dtype));
         unique case (mif.dtype)
-          S8, U8:   `write_data(m, idx, mif.wd, 8);
-          S16, U16: `write_data(m, idx, mif.wd, 16);
-          S32, U32: `write_data(m, idx, mif.wd, 32);
-          US64:     `write_data(m, idx, mif.wd, 64);
+          S8, U8:   `write_data(m, idx, mif.wd, 1);
+          S16, U16: `write_data(m, idx, mif.wd, 2);
+          S32, U32: `write_data(m, idx, mif.wd, 4);
+          US64:     `write_data(m, idx, mif.wd, 8);
           default:  ;
         endcase
       end
@@ -2438,9 +2448,9 @@ module rom (
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t SIZE = 4 * 1024;
+  localparam addr_t SIZE = 32 * 1024;
   // localparam string HEX = "isa/wfi.hex";
-  localparam string HEX = "riscv-tests/rv64si-p-scall.hex";
+  localparam string HEX = "riscv-tests/rv64si-p-icache-alias.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
@@ -2502,9 +2512,9 @@ module mmu (
   `define PMD_ADDR(ppn, va) {8'h00, ppn, 12'(`VPN1(va) << 3)}
   `define PTE_ADDR(ppn, va) {8'h00, ppn, 12'(`VPN0(va) << 3)}
 
-  `define cache_tlb(tlb, va) begin \
+  `define cache_tlb(tlb, pgsz, va) begin \
     tlb.cached <= 1;       \
-    tlb.PGSIZE <= pgsize;  \
+    tlb.PGSIZE <= pgsz;  \
     tlb.ASID <= satp_i.ASID; \
     tlb.VPN <= va[38:12];  \
     tlb.PPN <= pte.PPN;    \
@@ -2646,6 +2656,8 @@ module mmu (
             iwalking   <= 0;
           end
         end else begin
+          `LOGE($sformatf("dmap error: %b %b", dcheck, lcheck));
+          `LOGTLB("dtlb", dtlb);
           dmapif.ready <= 1;
           dmapif.error <= 1;
         end
@@ -2700,9 +2712,9 @@ module mmu (
                 wstate <= WS_DONE;
                 pgsize <= PG_1G;
                 if (iwalking) begin
-                  `cache_tlb(itlb, walking_va)
+                  `cache_tlb(itlb, PG_1G, walking_va)
                 end else begin
-                  `cache_tlb(dtlb, walking_va)
+                  `cache_tlb(dtlb, PG_1G, walking_va)
                 end
               end else begin
                 mif.valid <= 1'b1;
@@ -2721,9 +2733,9 @@ module mmu (
                 wstate <= WS_DONE;
                 pgsize <= PG_2M;
                 if (iwalking) begin
-                  `cache_tlb(itlb, walking_va)
+                  `cache_tlb(itlb, PG_2M, walking_va)
                 end else begin
-                  `cache_tlb(dtlb, walking_va)
+                  `cache_tlb(dtlb, PG_2M, walking_va)
                 end
               end else begin
                 mif.valid <= 1'b1;
@@ -2741,9 +2753,9 @@ module mmu (
               wstate <= WS_DONE;
               pgsize <= PG_4K;
               if (iwalking) begin
-                `cache_tlb(itlb, walking_va)
+                `cache_tlb(itlb, PG_4K, walking_va)
               end else begin
-                `cache_tlb(dtlb, walking_va)
+                `cache_tlb(dtlb, PG_4K, walking_va)
               end
             end
           end
@@ -2767,7 +2779,7 @@ module mmu (
                 2'b11:   mif.wd <= mif.rd | `PTE_A | `PTE_D;
                 default: ;
               endcase
-              `LOGPTE("update AD", pte)
+              `LOGI($sformatf("update: %0h", mif.rd));
             end else begin
               wstate  <= WS_IDLE;
               walking <= '0;
@@ -3033,6 +3045,7 @@ module csr (
     interrupted_o = 0;
 
     if (commit_i && exc_fired_i) begin
+      `LOGE($sformatf("exc fired: 0x%0h", exc_i.cause));
       if (priv < M_MACHINE) begin
         if (edeleg(exc_i.cause)) begin
           strap = 1;
@@ -3055,7 +3068,7 @@ module csr (
         epc           = pc_i;
         priv_next     = M_MACHINE;
         status        = mstatus;
-        status.MPP    = priv == M_USER ? 0 : 1;
+        status.MPP    = priv;
         status.MPIE   = mstatus.MIE;
         status.MIE    = 0;
         trap_o        = 1;
@@ -3063,7 +3076,7 @@ module csr (
       end
     end else if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
       if (op_i == SYS_SRET) begin
-        `LOGI("SRET");
+        `LOGI($sformatf("SRET->%0d", mstatus.SPP));
         priv_next     = mstatus.SPP ? M_SUPER : M_USER;
         status        = mstatus;
         status.SPP    = '0;
@@ -3072,7 +3085,7 @@ module csr (
         trap_o        = 1;
         trap_target_o = sepc;
       end else begin
-        `LOGI("MRET");
+        `LOGI($sformatf("MRET->%0d", mstatus.MPP));
         status = mstatus;
         if (mstatus.MPP < M_MACHINE) begin
           status.MPRV = 0;
