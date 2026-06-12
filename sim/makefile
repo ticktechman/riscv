@@ -73,7 +73,7 @@ mini.run: obj_dir/Vmini
 
 mini.test: $(HEX_FILES:.hex=.run)
 %.run: obj_dir/hawks
-	@printf "%25s" "$(shell basename $*): "
+	@printf "%28s" "$(shell basename $*): "
 	-@obj_dir/hawks +verilator+quiet +elf="riscv-tests/$(shell basename $*)"
 
 

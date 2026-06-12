@@ -12,6 +12,7 @@
 
 
 // `define DEBUG_LOG
+
 //------------------------------------
 // types and structures
 //------------------------------------
@@ -3327,6 +3328,54 @@ module rfu (
     ready_o = 1;
   end
 
+endmodule
+
+
+//------------------------------------
+// clint
+//------------------------------------
+module clint (
+  input logic clk,
+  input logic rst_n,
+  memif.slave mif,
+  output logic soft_o,
+  output logic timer_o
+);
+
+  reg_t mtime, msip, mtimecmp;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mtime    <= '0;
+      msip     <= '0;
+      mtimecmp <= '1;
+    end else begin
+      mtime <= mtime + 64'd1;
+      if (mif.valid && mif.we) begin
+        unique case (mif.addr)
+          64'h0000: msip[0] <= mif.wd[0];
+          64'h4000: mtimecmp <= mif.wd;
+          default:  ;
+        endcase
+      end
+    end
+  end
+
+  always_comb begin
+    mif.ready = mif.valid;
+    if (mif.valid && !mif.we) begin
+      unique case (mif.addr)
+        64'h0000: mif.rd = msip;
+        64'h4000: mif.rd = mtimecmp;
+        64'hBFF8: mif.rd = mtime;
+        default:  ;
+      endcase
+    end
+  end
+
+  always_comb begin
+    timer_o = (mtime >= mtimecmp);
+    soft_o  = mip[0];
+  end
 endmodule
 
 //------------------------------------
