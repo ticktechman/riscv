@@ -50,10 +50,10 @@ all: $(SIM)
 
 mini: obj_dir/Vmini
 hawks: obj_dir/hawks
+hawks.test: $(HEX_FILES:.hex=.run)
 
-obj_dir/hawks: hawks.sv
-	@verilator -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
-	@./$@
+obj_dir/hawks: hawks.sv elf.cpp
+	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include"  -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
 
 
 ME := "isa/mem.hex"
@@ -70,10 +70,9 @@ mini.run: obj_dir/Vmini
 	@echo ""
 
 mini.test: $(HEX_FILES:.hex=.run)
-%.run: obj_dir/Vmini
-	$(call gen-args,$*)
+%.run: obj_dir/hawks
 	@printf "%25s" "$(shell basename $*): "
-	-@obj_dir/Vmini +verilator+quiet $(SIM_ARGS)
+	-@obj_dir/hawks +verilator+quiet +elf="riscv-tests/$(shell basename $*)"
 
 
 .PHONY: mini.test

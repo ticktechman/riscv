@@ -10,7 +10,8 @@
  */
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+
+// `define DEBUG_LOG
 //------------------------------------
 // types and structures
 //------------------------------------
@@ -58,8 +59,8 @@ package hawks;
   typedef logic [31:0] instr_t;
 
   typedef struct packed {
-    addr_t BASE;
-    addr_t END;
+    longint unsigned BASE;
+    longint unsigned END;
   } mmap_t;
 
   parameter mmap_t mapping[SLAVE_CNT] = '{
@@ -577,7 +578,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(4000)
+    .COUNTER(20000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -647,13 +648,35 @@ module soc (
   memif slave_ports[SLAVE_CNT] ();
   regif rf ();
 
-  initial begin
+  import "DPI-C" function int elf_parse_mapping(
+    input  string elf_path,
+    output mmap_t mapping [3]
+  );
+
+  mmap_t maps[3] = '{default: 0};
+  int fd, ret;
+  initial begin : mmaps
+    string elf;
+    $value$plusargs("elf=%s", elf);
+    if (elf != "") begin
+      fd = $fopen(elf, "r");
+      if (fd != 0) begin
+        $fclose(fd);
+        ret = elf_parse_mapping(elf, maps);
+        `LOGI($sformatf("sections for %s", elf));
+        for (int i = 0; i < 3; i++) begin
+          `LOGI($sformatf("maps[%0d] base:%0h end:%0h", i, maps[i].BASE, maps[i].END));
+        end
+      end else begin
+        maps = mapping;
+      end
+    end
   end
 
   bus bus1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mmapping(mapping),
+    .mmapping(maps),
     .masters(master_ports),
     .slaves(slave_ports)
   );
@@ -1414,10 +1437,12 @@ module idu (
             3'b000: begin
               unique case (instr_i[31:20])
                 12'h000: begin
+                  `LOGI($sformatf("ECALL %0d", priv_i));
                   id_o.sys_op = SYS_ECALL;
                   ecause = mcause_of_ecall(priv_i);
                 end
                 12'h001: begin
+                  `LOGI("EBREAK");
                   id_o.sys_op = SYS_EBREAK;
                   ecause = EXC_BREAKPOINT;
                 end
@@ -2389,12 +2414,23 @@ module sram (
   wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
   logic [7:0] m[MAX];
 
-  localparam string data = "riscv-tests/rv64si-p-icache-alias.hex.data";
   initial begin
-    // foreach (m[i]) begin
-    //   m[i] = '0;
-    // end
-    $readmemh(data, m);
+    string elf;
+    int fd;
+    $value$plusargs("elf=%s", elf);
+    if (elf != "") begin
+      elf = {elf, ".hex.data"};
+      fd  = $fopen(elf, "r");
+      if (fd != 0) begin
+        $fclose(fd);
+        $readmemh(elf, m);
+        `LOGI($sformatf("ram load %s", elf));
+      end
+    end else begin
+      foreach (m[i]) begin
+        m[i] = '0;
+      end
+    end
   end
 
   // bypass RAW
@@ -2450,13 +2486,24 @@ module rom (
 );
   localparam addr_t SIZE = 32 * 1024;
   // localparam string HEX = "isa/wfi.hex";
-  localparam string HEX = "riscv-tests/rv64si-p-icache-alias.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
   logic [31:0] mem[SIZE];
 
   initial begin
-    $readmemh(HEX, mem);
+    string elf;
+    int fd;
+    $value$plusargs("elf=%s", elf);
+    if (elf != "") begin
+      elf = {elf, ".hex"};
+      fd  = $fopen(elf, "r");
+      if (fd != 0) begin
+        $fclose(fd);
+        $readmemh(elf, mem);
+        `LOGI($sformatf("rom load %s", elf));
+      end
+    end else begin
+    end
   end
 
   // bypass RAW
