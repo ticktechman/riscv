@@ -578,7 +578,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(20000)
+    .COUNTER(60000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n)
@@ -657,6 +657,7 @@ module soc (
   int fd, ret;
   initial begin : mmaps
     string elf;
+    maps = mapping;
     $value$plusargs("elf=%s", elf);
     if (elf != "") begin
       fd = $fopen(elf, "r");
@@ -668,7 +669,6 @@ module soc (
           `LOGI($sformatf("maps[%0d] base:%0h end:%0h", i, maps[i].BASE, maps[i].END));
         end
       end else begin
-        maps = mapping;
       end
     end
   end
@@ -756,7 +756,7 @@ module soc (
     .valid(stage == STG_WB),
     .ready_o(stage_ready[4]),
     .rif(rf.slave),
-    .wb_src_i(wb_src),
+    .wb_src_i(ttaken ? WB_SRC_NONE : wb_src),
     .rd_i(id_out.rd),
     .alu_i(wb_alu),
     .csr_i(wb_csr),
@@ -845,7 +845,6 @@ module soc (
       `LOGE($sformatf("exc: stage:%0d cause:0x%0h", exc_stage, exc[idx].cause));
     end
     if (stage == STG_WB && exc[0].fired) begin
-      `LOGE("fired");
       exc_fired = 1;
     end else begin
       exc_fired = 0;
@@ -1450,6 +1449,7 @@ module idu (
                 12'h102: begin
                   id_o.sys_op = SYS_SRET;
                   if (priv_i < M_SUPER) ecause = EXC_ILLEGAL_INSTRUCTION;
+                  if (mstatus_i.TSR) ecause = EXC_ILLEGAL_INSTRUCTION;
                 end
                 12'h105: begin
                   id_o.sys_op = SYS_WFI;
@@ -2889,6 +2889,7 @@ module csr (
   `define SIP_MASK 64'h0222
   `define MIE_MASK 64'h0aaa
   `define MIP_MASK 64'h0aaa
+  `define MTVEC_MASK 64'hffff_ffff_ffff_fffc
   `define TM(en) (which_i == TIME && !en.TM)
   `define CY(en) (which_i == CYCLE && !en.CY)
   `define IR(en) (which_i == INSTRET && !en.IR)
@@ -2960,6 +2961,11 @@ module csr (
         SYS_CSRRC, SYS_CSRRCI: next = rd & (~op1_i);
         default: ;
       endcase
+      if (mstatus.TVM && priv == M_SUPER) begin
+        if (op_i == SYS_FENCE) begin
+          illegal = 1;
+        end
+      end
       if (op_i >= SYS_CSRRW) begin
         `LOGI($sformatf("op:%0d, next=0x%0h", op_i, next));
         // csr rw(check permission: priv-[9:8] and ro, rw[11:10])
@@ -2981,11 +2987,17 @@ module csr (
           end
         end
 
-        if (illegal) begin
-          exc_o.fired = 1;
-          exc_o.cause = EXC_ILLEGAL_INSTRUCTION;
-          exc_o.eval  = {32'b0, instr_i};
+        if (mstatus.TVM && priv == M_SUPER) begin
+          if (which_i == SATP) begin
+            illegal = 1;
+          end
         end
+      end
+
+      if (illegal) begin
+        exc_o.fired = 1;
+        exc_o.cause = EXC_ILLEGAL_INSTRUCTION;
+        exc_o.eval  = {32'b0, instr_i};
       end
     end
   end
@@ -3044,7 +3056,7 @@ module csr (
               MEDELEG: medeleg <= next;
               MIDELEG: mideleg <= next;
               MIE: mie <= (mie & ~`MIE_MASK) | (next & `MIE_MASK);
-              MTVEC: mtvec <= next;
+              MTVEC: mtvec <= next & `MTVEC_MASK;
               MSCRATCH: mscratch <= next;
               MIP: mip <= (mip & ~`MIP_MASK) | (next & `MIP_MASK);
               MEPC: mepc <= next;
@@ -3053,7 +3065,7 @@ module csr (
 
               SSTATUS: mstatus <= (mstatus & ~`SSTATUS_WR_MASK) | (next & `SSTATUS_WR_MASK);
               SIE: mie <= (mie & ~`SIE_MASK) | (next & `SIE_MASK);
-              STVEC: stvec <= next;
+              STVEC: stvec <= next & `MTVEC_MASK;
               SSCRATCH: sscratch <= next;
               SEPC: sepc <= next;
               SCAUSE: scause <= next;

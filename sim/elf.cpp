@@ -137,6 +137,9 @@ int elf_parse_mapping(const char *elf, mmap_t *mapping) {
   elf_parse(elf, ".text.init", mapping);
   elf_parse(elf, ".tohost", mapping + 1);
   elf_parse(elf, ".data", mapping + 2);
+  if (mapping[2].BASE == 0 || mapping[2].END == 0) {
+    elf_parse(elf, ".bss", mapping + 2);
+  }
   return 0;
 }
 
