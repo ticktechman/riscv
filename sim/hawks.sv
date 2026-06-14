@@ -3385,6 +3385,7 @@ module clint (
         `LOGI($sformatf("time:%0d timecmp:%0d", mtime, mtimecmp));
       end
       if (mif.valid && mif.we) begin
+        `LOGI($sformatf("clint[0x%04h]=0x%0h", mif.addr, mif.wd));
         unique case (mif.addr)
           64'h0000: msip[0] <= mif.wd[0];
           64'h4000: mtimecmp <= mif.wd;
