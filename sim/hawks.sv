@@ -11,14 +11,14 @@
 `timescale 1ns / 100ps
 
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
 //------------------------------------
 package hawks;
   localparam int unsigned MASTER_CNT = 3;
-  localparam int unsigned SLAVE_CNT = 3;
+  localparam int unsigned SLAVE_CNT = 4;
   localparam int unsigned REGMAX = 32;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
@@ -64,10 +64,12 @@ package hawks;
     longint unsigned END;
   } mmap_t;
 
+  // clint (0x02000000~0x0200ffff)
   parameter mmap_t mapping[SLAVE_CNT] = '{
       '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
       '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)}
+      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)}
   };
 
   typedef enum {
@@ -130,12 +132,12 @@ package hawks;
     EXC_STORE_PAGE_FAULT      = 64'hf,   // 存储/AMO页面错误
     EXC_NONE                  = 64'hfff, // just for internal usage
 
-    INTR_SUPERVISOR_SW  = 64'h8000_0000_0000_0001,  // 监督级软件中断
-    INTR_MACHINE_SW     = 64'h8000_0000_0000_0003,  // 机器级软件中断
-    INTR_SUPERVISOR_TMR = 64'h8000_0000_0000_0005,  // 监督级定时器中断
-    INTR_MACHINE_TMR    = 64'h8000_0000_0000_0007,  // 机器级定时器中断
-    INTR_SUPERVISOR_EXT = 64'h8000_0000_0000_0009,  // 监督级外部中断
-    INTR_MACHINE_EXT    = 64'h8000_0000_0000_000B   // 机器级外部中断
+    INTR_SUPERVISOR_SW  = 64'h8000_0000_0000_0001,  // S-level software interrupt
+    INTR_MACHINE_SW     = 64'h8000_0000_0000_0003,  // M-level software interrupt
+    INTR_SUPERVISOR_TMR = 64'h8000_0000_0000_0005,  // S-level timer interrupt
+    INTR_MACHINE_TMR    = 64'h8000_0000_0000_0007,  // M-level timer interrupt
+    INTR_SUPERVISOR_EXT = 64'h8000_0000_0000_0009,  // S-level external interrupt
+    INTR_MACHINE_EXT    = 64'h8000_0000_0000_000B   // M-level external interrupt
   } mcause_e;
 
   typedef struct packed {
@@ -569,7 +571,7 @@ endinterface
 // top entry module (no args)
 //------------------------------
 module top ();
-  logic clk, rst_n, intr;
+  logic clk, rst_n, intr, rtc;
 
   initial begin
     $dumpfile("waveforms.vcd");
@@ -579,10 +581,11 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(60000)
+    .COUNTER(1000)
   ) clock (
     .clk(clk),
-    .rst_n(rst_n)
+    .rst_n(rst_n),
+    .rtc_o(rtc)
   );
   logic halt;
 
@@ -590,6 +593,7 @@ module top ();
     .clk(clk),
     .rst_n(rst_n),
     .halt_o(halt),
+    .rtc_i(rtc),
     .intr_i(intr)
   );
 
@@ -609,7 +613,8 @@ module clkgen #(
   parameter COUNTER = 10
 ) (
   output logic clk,
-  output logic rst_n
+  output logic rst_n,
+  output logic rtc_o
 );
   initial begin
     clk   = 0;
@@ -622,6 +627,7 @@ module clkgen #(
   end
 
   always #1 clk = ~clk;
+  always #20 rtc_o = ~rtc_o;
 endmodule
 
 
@@ -631,6 +637,7 @@ endmodule
 module soc (
   input  logic clk,
   input  logic rst_n,
+  input  logic rtc_i,
   input  logic intr_i,
   output logic halt_o
 );
@@ -651,10 +658,10 @@ module soc (
 
   import "DPI-C" function int elf_parse_mapping(
     input  string elf_path,
-    output mmap_t mapping [3]
+    output mmap_t mapping [SLAVE_CNT]
   );
 
-  mmap_t maps[3] = '{default: 0};
+  mmap_t maps[SLAVE_CNT] = '{default: 0};
   int fd, ret;
   initial begin : mmaps
     string elf;
@@ -666,7 +673,7 @@ module soc (
         $fclose(fd);
         ret = elf_parse_mapping(elf, maps);
         `LOGI($sformatf("sections for %s", elf));
-        for (int i = 0; i < 3; i++) begin
+        for (int i = 0; i < SLAVE_CNT; i++) begin
           `LOGI($sformatf("maps[%0d] base:%0h end:%0h", i, maps[i].BASE, maps[i].END));
         end
       end else begin
@@ -770,7 +777,7 @@ module soc (
   priviledge_e priv;
   logic tlb_invalid;
   logic exc_fired;
-  logic itimer, interrupted;
+  logic itimer, ipi, interrupted;
   logic halt;
   assign halt_o = halt;
   csr csr1 (
@@ -831,6 +838,14 @@ module soc (
     .mif(slave_ports[2].slave)
   );
 
+  clint clint1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[3]),
+    .rtc_i(rtc_i),
+    .timer_o(itimer),
+    .ipi_o(ipi)
+  );
 
   // copy exception to exc[0]
   int idx;
@@ -3169,6 +3184,7 @@ module csr (
         priv_next = M_MACHINE;
         cause = mintr2cause(m_intr);
         epc = pc_i;
+        `LOGW($sformatf("M-intr: %0h", cause));
       end
     end else if (commit_i && s_intr != reg_t'(0)) begin
       interrupted_o = 1;
@@ -3180,8 +3196,9 @@ module csr (
         status.SPIE = mstatus.SIE;
         status.SIE = 0;
         priv_next = M_MACHINE;
-        cause = mintr2cause(s_intr);
+        cause = sintr2cause(s_intr);
         epc = pc_i;
+        `LOGW($sformatf("S-intr: %0h", cause));
       end
     end
 
@@ -3332,24 +3349,41 @@ endmodule
 
 
 //------------------------------------
-// clint
+// clint (0x02000000~0x0200ffff)
+// - only MTIME and MSWI
+// - NO STIME and SSWI
 //------------------------------------
 module clint (
   input logic clk,
   input logic rst_n,
   memif.slave mif,
-  output logic soft_o,
-  output logic timer_o
+  input logic rtc_i,
+  output logic timer_o,
+  output logic ipi_o
 );
 
-  reg_t mtime, msip, mtimecmp;
+  reg_t mtime, mtimecmp;
+  logic [31:0] msip;
+  logic rtc_incr;
+
+  // rtc timer incr
+  rtcsyncer syncer1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .rtc_i(rtc_i),
+    .r_edge_o(rtc_incr)
+  );
+
+  // write interface
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      mtime    <= '0;
       msip     <= '0;
       mtimecmp <= '1;
     end else begin
-      mtime <= mtime + 64'd1;
+      if (rtc_incr) begin
+        mtime <= mtime + 64'd1;
+        `LOGI($sformatf("time:%0d timecmp:%0d", mtime, mtimecmp));
+      end
       if (mif.valid && mif.we) begin
         unique case (mif.addr)
           64'h0000: msip[0] <= mif.wd[0];
@@ -3360,11 +3394,12 @@ module clint (
     end
   end
 
+  // read interface
   always_comb begin
     mif.ready = mif.valid;
     if (mif.valid && !mif.we) begin
       unique case (mif.addr)
-        64'h0000: mif.rd = msip;
+        64'h0000: mif.rd = {32'b0, msip};
         64'h4000: mif.rd = mtimecmp;
         64'hBFF8: mif.rd = mtime;
         default:  ;
@@ -3374,8 +3409,58 @@ module clint (
 
   always_comb begin
     timer_o = (mtime >= mtimecmp);
-    soft_o  = mip[0];
+    ipi_o   = msip[0];
   end
+endmodule
+
+module rtcsyncer (
+  input  logic clk,
+  input  logic rst_n,
+  input  logic rtc_i,
+  output logic r_edge_o
+);
+  logic stage1;
+  logic stage2;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      stage1 <= 1'b0;
+    end else begin
+      stage1 <= rtc_i;
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      stage2 <= 1'b0;
+    end else begin
+      stage2 <= stage1;
+    end
+  end
+
+  assign r_edge_o = stage2 & (~stage1);
+endmodule
+
+//------------------------------------
+// plic (0c00_0000~1000_ffff)=64MB
+//   ctx = hart * priviledge(M + S)
+// - priority:       0c00_0000 (per int source 1024 max)
+// - pending:        0c00_1000 (per int source 1024 max)
+// - enable :        0c00_2000 (per ctx*source max 15872 * 1024)
+// - threshold:      0c20_0000 (per ctx*source max 15872 * 1024)
+// - claim/complete: 0c20_0004 (per ctx*source max 15872 * 1024)
+//------------------------------------
+module plic #(
+  parameter int unsigned SOURCECNT = 16,
+  parameter int unsigned CTXCNT = 2
+) (
+  input logic clk,
+  input logic rst_n,
+  input logic [SOURCECNT-1:0] sources_i,
+  output logic [CTXCNT-1:0] irq_o,
+  memif.slave mif
+);
+
 endmodule
 
 //------------------------------------
