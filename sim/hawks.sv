@@ -18,7 +18,7 @@
 //------------------------------------
 package hawks;
   localparam int unsigned MASTER_CNT = 3;
-  localparam int unsigned SLAVE_CNT = 4;
+  localparam int unsigned SLAVE_CNT = 5;
   localparam int unsigned REGMAX = 32;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
@@ -69,7 +69,8 @@ package hawks;
       '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
       '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
       '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
-      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)}
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)}
   };
 
   typedef enum {
@@ -847,6 +848,15 @@ module soc (
     .ipi_o(ipi)
   );
 
+  logic [15:0] intr_src;
+  logic [1:0] intr;
+  plic plic1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .src_i(intr_src),
+    .intr_o(intr),
+    .mif(slave_ports[4])
+  );
   // copy exception to exc[0]
   int idx;
   always_comb begin
@@ -3414,6 +3424,9 @@ module clint (
   end
 endmodule
 
+//------------------------------------
+// sync rtc clk to main core clk
+//------------------------------------
 module rtcsyncer (
   input  logic clk,
   input  logic rst_n,
@@ -3443,24 +3456,167 @@ module rtcsyncer (
 endmodule
 
 //------------------------------------
-// plic (0c00_0000~1000_ffff)=64MB
+// plic (0c00_0000~0fff_ffff)=64MB
 //   ctx = hart * priviledge(M + S)
-// - priority:       0c00_0000 (per int source 1024 max)
-// - pending:        0c00_1000 (per int source 1024 max)
-// - enable :        0c00_2000 (per ctx*source max 15872 * 1024)
-// - threshold:      0c20_0000 (per ctx*source max 15872 * 1024)
-// - claim/complete: 0c20_0004 (per ctx*source max 15872 * 1024)
+// - priority:       0c00_0000 (4B per int source 1023 max)
+// - pending:        0c00_1000 (1-bit per int source 1023 max)
+// - enable :        0c00_2000 (1-bit per ctx*source max 15872 * 1023)
+// - threshold:      0c20_0000 (4B per ctx 0 max 15872)
+// - claim/complete: 0c20_0004 (4B per ctx 0 max 15872)
+// - threshold:      0c20_1000 (4B per ctx 1 max 15872)
+// - claim/complete: 0c20_1004 (4B per ctx 1 max 15872)
 //------------------------------------
 module plic #(
-  parameter int unsigned SOURCECNT = 16,
-  parameter int unsigned CTXCNT = 2
+  parameter int unsigned SOURCE_CNT = 16,
+  parameter int unsigned CTX_CNT = 2,
+  parameter int unsigned MAX_PRIO = 7
 ) (
   input logic clk,
   input logic rst_n,
-  input logic [SOURCECNT-1:0] sources_i,
-  output logic [CTXCNT-1:0] irq_o,
+  input logic [SOURCE_CNT-1:0] src_i,
+  output logic [CTX_CNT-1:0] intr_o,
   memif.slave mif
 );
+  localparam int unsigned PRIO_BASE = 32'h00_0000;
+  localparam int unsigned PENDING_BASE = 32'h00_1000;
+  localparam int unsigned ENABLE_BASE = 32'h00_2000;
+  localparam int unsigned THRESHOLD_BASE = 32'h20_0000;
+  localparam int unsigned CLAIM_BASE = 32'h20_0004;
+  localparam int unsigned PLIC_END = 32'h3f_fffc;
+
+  localparam int unsigned PRIOW = $clog2(MAX_PRIO);
+  localparam int unsigned SRCW = $clog2(SOURCE_CNT);
+  localparam int unsigned SREM = (SOURCE_CNT % 32);
+
+  // per source var
+  logic [PRIOW-1:0] prio[SOURCE_CNT];
+  logic [SOURCE_CNT-1:0] ip, claim;
+
+  // per context var
+  logic [SOURCE_CNT-1:0] ie[CTX_CNT];
+  logic [PRIOW-1:0] threshold[CTX_CNT];
+  logic [SRCW-1:0] fired[CTX_CNT];
+
+  always_comb begin
+    ip = src_i & ~claim;
+    ip[0] = 0;
+  end
+
+
+  // calculate best intr
+  for (genvar ctx = 0; ctx < CTX_CNT; ctx++) begin : mygen
+    logic [PRIOW-1:0] max_prio;
+    always_comb begin
+      fired[ctx] = 0;
+      max_prio   = threshold[ctx] + 1;
+      for (int i = SOURCE_CNT - 1; i >= 0; i--) begin
+        if ((ip[i] & ie[ctx][i] == 1) && prio[i] >= max_prio) begin
+          max_prio   = prio[i];
+          fired[ctx] = SRCW'(i);
+        end
+      end
+    end
+  end
+
+  int unsigned ctx;
+  int unsigned src;
+  always_comb begin
+    ctx = CTX_CNT;
+    src = SOURCE_CNT;
+    if (mif.valid) begin
+      if (mif.addr[31:0] < PENDING_BASE) begin
+        src = (mif.addr[31:0] / 32'd4);
+      end else if (mif.addr[31:0] >= PENDING_BASE && mif.addr[31:0] < ENABLE_BASE) begin
+        src = (mif.addr[31:0] - ENABLE_BASE) * 32;
+      end else if (mif.addr[31:0] >= ENABLE_BASE && mif.addr[31:0] < THRESHOLD_BASE) begin
+        ctx = (mif.addr[31:0] - ENABLE_BASE) / 32'h80;
+        src = (mif.addr[31:0] - ctx * 32'h80) * 32;
+      end else if (mif.addr[31:0] >= THRESHOLD_BASE && mif.addr[31:0] < PLIC_END) begin
+        ctx = (mif.addr[31:0] - THRESHOLD_BASE) / 32'h1000;
+      end
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      // reg write
+      if (mif.valid && mif.we) begin
+        if (mif.addr[31:0] < PENDING_BASE) begin
+          if (src < SOURCE_CNT) begin
+            prio[src] <= mif.wd[PRIOW-1:0];
+          end
+        end else if (mif.addr[31:0] >= ENABLE_BASE && mif.addr[31:0] < THRESHOLD_BASE) begin
+          if (ctx < CTX_CNT && src < SOURCE_CNT) begin
+            if (src + 32 >= SOURCE_CNT) begin
+              ie[ctx][src+:SREM] <= mif.wd[(SREM)-1:0];
+            end else begin
+              for (int i = 0; i < 32; i++) begin
+                ie[ctx][src+i] <= mif.wd[i];
+              end
+            end
+          end
+        end else if (mif.addr[31:0] >= THRESHOLD_BASE && mif.addr[31:0] < PLIC_END) begin
+          if (ctx < CTX_CNT) begin
+            if (mif.addr[2:0] == 3'b000) begin
+              threshold[ctx] <= mif.wd[PRIOW-1:0];
+            end else if (mif.addr[2:0] == 3'b100) begin
+              if (mif.wd[31:0] < SOURCE_CNT && claim[mif.wd[SRCW-1:0]] == 1) begin
+                claim[mif.wd[SRCW-1:0]] <= 0;
+              end
+            end
+          end
+        end
+      end else if (mif.valid && !mif.we) begin
+        if (mif.addr[31:0] < PENDING_BASE) begin
+          if (src < SOURCE_CNT) begin
+            mif.rd <= {32'b0, 32'(prio[src])};
+          end
+        end else if (mif.addr[31:0] >= PENDING_BASE && mif.addr[31:0] < ENABLE_BASE) begin
+          if (src < SOURCE_CNT) begin
+            if (src + 32 >= SOURCE_CNT) begin
+              mif.rd <= '0;
+              for (int i = 0; i < SREM; i++) begin
+                mif.rd[i] <= ip[src+i];
+              end
+            end else begin
+              mif.rd[63:32] <= '0;
+              for (int i = 0; i < 32; i++) begin
+                mif.rd[i] <= ip[src+i];
+              end
+            end
+          end
+        end else if (mif.addr[31:0] >= ENABLE_BASE && mif.addr[31:0] < THRESHOLD_BASE) begin
+          if (ctx < CTX_CNT && src < SOURCE_CNT) begin
+            if (src + 32 >= SOURCE_CNT) begin
+              mif.rd <= '0;
+              mif.rd[SREM-1:0] <= ie[ctx][src+:SREM];
+            end else begin
+              mif.rd[63:32] <= '0;
+              for (int i = 0; i < 32; i++) begin
+                mif.rd[i] <= ie[ctx][src+i];
+              end
+            end
+          end
+        end else if (mif.addr[31:0] >= THRESHOLD_BASE && mif.addr[31:0] < PLIC_END) begin
+          if (ctx < CTX_CNT) begin
+            if (mif.addr[2:0] == 3'b000) begin
+              mif.rd <= '0;
+              mif.rd[PRIOW-1:0] <= threshold[ctx];
+            end else if (mif.addr[2:0] == 3'b100) begin
+              mif.rd <= '0;
+              mif.rd[SRCW-1:0] <= fired[ctx];
+              if (fired[ctx] > 0) begin
+                claim[fired[ctx]] <= 1;
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  assign mif.ready = mif.valid;
 
 endmodule
 

@@ -70,11 +70,15 @@ module mini (
   input logic rst_n
 );
 
+  logic [31:0] r;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       `LOGW("reset");
     end else begin
       `LOGI("hello");
+      r <= '1;
+      r[2:0] <= 3'b010;
+      `LOGI($sformatf("%0h", r));
     end
   end
 
