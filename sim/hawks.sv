@@ -18,7 +18,7 @@
 //------------------------------------
 package hawks;
   localparam int unsigned MASTER_CNT = 3;
-  localparam int unsigned SLAVE_CNT = 5;
+  localparam int unsigned SLAVE_CNT = 6;
   localparam int unsigned REGMAX = 32;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
@@ -70,7 +70,8 @@ package hawks;
       '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
       '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
       '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
-      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)}
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)}
   };
 
   typedef enum {
@@ -803,7 +804,7 @@ module soc (
     .tlb_invalid_o(tlb_invalid),
     .halt_o(halt),
     .irq_timer_i(itimer),
-    .irq_ex_i(intr_i),
+    .irq_ex_i(intr[0]),
     .interrupted_o(interrupted)
   );
 
@@ -857,6 +858,14 @@ module soc (
     .intr_o(intr),
     .mif(slave_ports[4])
   );
+
+  geni geni1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .intr_o(intr_src[2]),
+    .mif(slave_ports[5])
+  );
+
   // copy exception to exc[0]
   int idx;
   always_comb begin
@@ -3515,6 +3524,12 @@ module plic #(
           fired[ctx] = SRCW'(i);
         end
       end
+      if (fired[ctx] > 0) begin
+        `LOGW($sformatf("context %0d fired:%0d", ctx, fired[ctx]));
+        intr_o[ctx] = 1;
+      end else begin
+        intr_o[ctx] = 0;
+      end
     end
   end
 
@@ -3530,7 +3545,7 @@ module plic #(
         src = (mif.addr[31:0] - ENABLE_BASE) * 32;
       end else if (mif.addr[31:0] >= ENABLE_BASE && mif.addr[31:0] < THRESHOLD_BASE) begin
         ctx = (mif.addr[31:0] - ENABLE_BASE) / 32'h80;
-        src = (mif.addr[31:0] - ctx * 32'h80) * 32;
+        src = (mif.addr[31:0] - ENABLE_BASE - ctx * 32'h80) * 32;
       end else if (mif.addr[31:0] >= THRESHOLD_BASE && mif.addr[31:0] < PLIC_END) begin
         ctx = (mif.addr[31:0] - THRESHOLD_BASE) / 32'h1000;
       end
@@ -3539,16 +3554,21 @@ module plic #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      claim <= '0;
     end else begin
       // reg write
+      mif.ready <= 0;
       if (mif.valid && mif.we) begin
+        mif.ready <= 1;
         if (mif.addr[31:0] < PENDING_BASE) begin
           if (src < SOURCE_CNT) begin
             prio[src] <= mif.wd[PRIOW-1:0];
+            `LOGI($sformatf("set prio[%0d]=%0d", src, mif.wd[PRIOW-1:0]));
           end
         end else if (mif.addr[31:0] >= ENABLE_BASE && mif.addr[31:0] < THRESHOLD_BASE) begin
           if (ctx < CTX_CNT && src < SOURCE_CNT) begin
             if (src + 32 >= SOURCE_CNT) begin
+              `LOGI($sformatf("enable %0d %b", src, mif.wd[SREM-1:0]));
               ie[ctx][src+:SREM] <= mif.wd[(SREM)-1:0];
             end else begin
               for (int i = 0; i < 32; i++) begin
@@ -3568,6 +3588,7 @@ module plic #(
           end
         end
       end else if (mif.valid && !mif.we) begin
+        mif.ready <= 1;
         if (mif.addr[31:0] < PENDING_BASE) begin
           if (src < SOURCE_CNT) begin
             mif.rd <= {32'b0, 32'(prio[src])};
@@ -3604,6 +3625,7 @@ module plic #(
               mif.rd <= '0;
               mif.rd[PRIOW-1:0] <= threshold[ctx];
             end else if (mif.addr[2:0] == 3'b100) begin
+              `LOGI($sformatf("ctx:%0d %0d", ctx, fired[ctx]));
               mif.rd <= '0;
               mif.rd[SRCW-1:0] <= fired[ctx];
               if (fired[ctx] > 0) begin
@@ -3616,7 +3638,31 @@ module plic #(
     end
   end
 
+endmodule
+
+//------------------------------------
+// geni
+//------------------------------------
+module geni (
+  input logic clk,
+  input logic rst_n,
+  output logic intr_o,
+  memif.slave mif
+);
+
+  logic intr;
   assign mif.ready = mif.valid;
+  assign intr_o = intr;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (mif.valid && mif.we == 1) begin
+        `LOGW("WRITE geni");
+        intr <= mif.wd[0];
+      end
+    end
+  end
 
 endmodule
 
