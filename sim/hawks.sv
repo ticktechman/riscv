@@ -859,7 +859,7 @@ module soc (
     .mif(slave_ports[4])
   );
 
-  geni geni1 (
+  igen igen1 (
     .clk(clk),
     .rst_n(rst_n),
     .intr_o(intr_src[2]),
@@ -2699,12 +2699,12 @@ module mmu (
       imapif.error <= 0;
       dmapif.error <= 0;
       if (imapif.valid && !imap) begin
-        `LOGI($sformatf("no map instr: %0h priv:%0d, mode:%0d", imapif.va, priv_i, satp_i.MODE));
+        `LOGI($sformatf("bypass map instr: 0x%0h priv:%0d, mode:%0d", imapif.va, priv_i, satp_i.MODE));
         imapif.pa    <= imapif.va;
         imapif.ready <= 1;
       end
       if (dmapif.valid && !dmap) begin
-        `LOGI($sformatf("no map data: %0h", dmapif.va));
+        `LOGI($sformatf("bypass map data: 0x%0h", dmapif.va));
         dmapif.pa    <= dmapif.va;
         dmapif.ready <= 1;
       end
@@ -3641,9 +3641,9 @@ module plic #(
 endmodule
 
 //------------------------------------
-// geni
+// interrupt generater
 //------------------------------------
-module geni (
+module igen (
   input logic clk,
   input logic rst_n,
   output logic intr_o,
@@ -3658,7 +3658,6 @@ module geni (
     if (!rst_n) begin
     end else begin
       if (mif.valid && mif.we == 1) begin
-        `LOGW("WRITE geni");
         intr <= mif.wd[0];
       end
     end
