@@ -11,7 +11,7 @@
 `timescale 1ns / 100ps
 
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -20,7 +20,7 @@ package hawks;
   localparam int unsigned MASTER_CNT = 3;
   localparam int unsigned SLAVE_CNT = 7;
   localparam int unsigned REGMAX = 32;
-  localparam addr_t BOOT_ADDR = 64'h8000_0000;
+  localparam addr_t BOOT_ADDR = 64'h8000_2000;
 
 `ifdef DEBUG_LOG
   `define LOGI(msg) $display("[I|%9t|%m.%0d] %s", $realtime, `__LINE__, msg)
@@ -584,7 +584,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(1000)
+    .COUNTER(4000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -2463,7 +2463,7 @@ module sram (
     int fd;
     $value$plusargs("elf=%s", elf);
     if (elf != "") begin
-      elf = {elf, ".hex.data"};
+      elf = {elf, ".hex"};
       fd  = $fopen(elf, "r");
       if (fd != 0) begin
         $fclose(fd);
@@ -3714,13 +3714,11 @@ module uart8250 (
 
   typedef enum logic [7:0] {
     REG_RBR_THR_DLL = 0,
-    REG_IER,
-    REG_DLM,
-    REG_IIR,
-    REG_FCR,
+    REG_IER_DLM,
+    REG_IIR_FCR,
     REG_LCR,
     REG_MCR,
-    REG_LSR,
+    REG_LSR,  // 5
     REG_MSR
   } reg_e;
 
@@ -3818,18 +3816,20 @@ module uart8250 (
       mif.rd = '0;
       unique case (mif.addr[7:0])
         REG_RBR_THR_DLL: mif.rd[7:0] = dlab ? 8'h00 : rbr;
-        REG_IER: mif.rd[7:0] = dlab ? 8'h00 : ier;
-        REG_IIR: mif.rd[7:0] = iir;
+        REG_IER_DLM: mif.rd[7:0] = dlab ? 8'h00 : ier;
+        REG_IIR_FCR: mif.rd[7:0] = iir;
         REG_LCR: mif.rd[7:0] = lcr;
         REG_LSR: mif.rd[7:0] = lsr;
         default: ;
       endcase
+      `LOGI($sformatf("uart[%0d]: 0x%h", mif.addr[7:0], mif.rd[7:0]));
     end
   end
 
   //write
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      lsr <= '{THRE: 1, default: 0};
     end else begin
       if (mif.valid && mif.we) begin
         unique case (mif.addr[7:0])
@@ -3840,7 +3840,7 @@ module uart8250 (
               sim_host_putc(mif.wd[7:0]);
             end
           end
-          REG_IER: if (!dlab) ier <= mif.wd[7:0];
+          REG_IER_DLM: if (!dlab) ier <= mif.wd[7:0];
           REG_LCR: lcr <= mif.wd[7:0];
           default: ;
         endcase
@@ -3854,7 +3854,6 @@ module uart8250 (
 
       // simulate rx
       if (!lsr.DR) begin
-        // TODO: getc
         if (sim_host_getc(rbr) > 0) begin
           lsr.DR <= 1;
         end

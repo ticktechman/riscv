@@ -170,13 +170,13 @@ void sim_host_putc(char ch) {
   putchar(ch);
   fflush(stdout);
 }
-int sim_host_getc(char ch) {
+int sim_host_getc(char *ch) {
   fd_set readfds;
   FD_ZERO(&readfds);
   FD_SET(STDIN_FILENO, &readfds);
   struct timeval tv = {0, 0};
   if (select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0) {
-    if (read(STDIN_FILENO, &ch, 1) == 1)
+    if (read(STDIN_FILENO, ch, 1) == 1)
       return 1;
   }
   return 0;
