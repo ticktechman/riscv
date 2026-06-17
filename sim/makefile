@@ -54,7 +54,7 @@ hawks.test: $(HEX_FILES:.hex=.run)
 hawks.one: obj_dir/hawks
 	@$< +verilator+quiet +elf="isa/plic"
 
-obj_dir/hawks: hawks.sv elf.cpp
+obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include"  -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
 
 

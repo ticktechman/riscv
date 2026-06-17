@@ -18,7 +18,7 @@
 //------------------------------------
 package hawks;
   localparam int unsigned MASTER_CNT = 3;
-  localparam int unsigned SLAVE_CNT = 6;
+  localparam int unsigned SLAVE_CNT = 7;
   localparam int unsigned REGMAX = 32;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
@@ -71,7 +71,8 @@ package hawks;
       '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
       '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
       '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
-      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)}
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
   };
 
   typedef enum {
@@ -865,6 +866,14 @@ module soc (
     .intr_o(intr_src[2]),
     .mif(slave_ports[5])
   );
+
+  uart8250 uart1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[6]),
+    .intr_o(intr_src[1])
+  );
+
 
   // copy exception to exc[0]
   int idx;
@@ -3683,6 +3692,177 @@ module raptor (
         intr_o <= 1;
       end else begin
         intr_o <= 0;
+      end
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// uart 8250 (from NS-National Semiconductor)
+//------------------------------------
+module uart8250 (
+  input logic clk,
+  input logic rst_n,
+  memif mif,
+  output logic intr_o
+);
+  import "DPI-C" function void sim_uart_init();
+  import "DPI-C" function void sim_uart_cleanup();
+  import "DPI-C" function void sim_host_putc(input byte ch);
+  import "DPI-C" function int sim_host_getc(output byte ch);
+
+  typedef enum logic [7:0] {
+    REG_RBR_THR_DLL = 0,
+    REG_IER,
+    REG_DLM,
+    REG_IIR,
+    REG_FCR,
+    REG_LCR,
+    REG_MCR,
+    REG_LSR,
+    REG_MSR
+  } reg_e;
+
+  // 1. 中断允许寄存器 (IER) - DLAB=0
+  typedef struct packed {
+    logic [7:4] reserved_7_4;  // Bit [7:4]: 保留位
+    logic       EDSSI;         // Bit 3: 允许 Modem 状态中断
+    logic       ELSI;          // Bit 2: 允许接收线路状态中断
+    logic       ETBEI;         // Bit 1: 允许发送保持寄存器空中断
+    logic       ERBFI;         // Bit 0: 允许接收数据就绪中断
+  } ier_t;
+
+  // 2. 通信线控制寄存器 (LCR)
+  typedef struct packed {
+    logic       DLAB;  // Bit 7: 除数锁存访问位
+    logic       BC;    // Bit 6: Break 控制位
+    logic [2:0] PS;    // Bit [5:3]: 奇偶校验选择
+    logic       STB;   // Bit 2: 停止位长度 (0=1位, 1=1.5/2位)
+    logic [1:0] WLS;   // Bit [1:0]: 数据位长度 (00=5位, 01=6位, 10=7位, 11=8位)
+  } lcr_t;
+
+  // 3. Modem 控制寄存器 (MCR)
+  typedef struct packed {
+    logic [2:0] reserved_7_5;  // Bit [7:5]: 保留位
+    logic       LOOP;          // Bit 4: 本地回环测试模式
+    logic       OUT2;          // Bit 3: 通用输出引脚 2
+    logic       OUT1;          // Bit 2: 通用输出引脚 1
+    logic       RTS;           // Bit 1: 请求发送
+    logic       DTR;           // Bit 0: 数据终端准备好
+  } mcr_t;
+
+  // 4. 通信线状态寄存器 (LSR)
+  typedef struct packed {
+    logic ERR_FIFO;  // Bit 7: FIFO 中存在错误数据 (16550特有)
+    logic TEMT;      // Bit 6: 发送移位寄存器空
+    logic THRE;      // Bit 5: 发送保持寄存器空
+    logic BI;        // Bit 4: 线路间断 (Break Interrupt)
+    logic FE;        // Bit 3: 帧格式错误
+    logic PE;        // Bit 2: 奇偶校验错误
+    logic OE;        // Bit 1: 溢出错误
+    logic DR;        // Bit 0: 接收数据就绪
+  } lsr_t;
+
+  // 5. Modem 状态寄存器 (MSR)
+  typedef struct packed {
+    logic DCD;   // Bit 7: 数据载波检测当前状态
+    logic RI;    // Bit 6: 振铃指示当前状态
+    logic DSR;   // Bit 5: 数据设备就绪当前状态
+    logic CTS;   // Bit 4: 清除发送当前状态
+    logic DDCD;  // Bit 3: DCD 状态变化标志
+    logic TERI;  // Bit 2: RI 状态变化标志
+    logic DDSR;  // Bit 1: DSR 状态变化标志
+    logic DCTS;  // Bit 0: CTS 状态变化标志
+  } msr_t;
+
+  // 6. 中断识别寄存器 (IIR) - 只读
+  typedef struct packed {
+    logic [5:0] reserved_7_2;  // Bit [7:2]: 保留位
+    logic [1:0] IID;           // Bit [1:0]: 中断源识别 (00=Modem, 01=THR空, 10=接收就绪, 11=线路状态)
+  } iir_t;
+
+  // 7. FIFO 控制寄存器 (FCR) - 只写 (16550扩展)
+  typedef struct packed {
+    logic [1:0] reserved_7_6;  // Bit [7:6]: 保留位
+    logic [1:0] RXTRIG;        // Bit [5:4]: 接收 FIFO 触发中断阈值 (00=1B, 01=4B, 10=8B, 11=14B)
+    logic [1:0] reserved_3_2;  // Bit [3:2]: 保留位
+    logic       TX_FIFO_RST;   // Bit 1: 发送 FIFO 复位
+    logic       RX_FIFO_RST;   // Bit 0: 接收 FIFO 复位
+  } fcr_t;
+
+  initial begin
+    sim_uart_init();
+  end
+
+  final begin
+    sim_uart_cleanup();
+  end
+
+  logic [7:0] thr, rbr, data;
+  lsr_t lsr;
+  ier_t ier;
+  iir_t iir;
+  lcr_t lcr;
+  mcr_t mcr;
+  msr_t msr;
+  logic dlab, tx_busy;
+
+  assign dlab = lcr.DLAB;
+  assign intr_o = (ier.ERBFI & lsr.DR) | (ier.ETBEI & lsr.THRE);
+  assign mif.ready = mif.valid;
+
+  // read reg
+  always_comb begin
+    if (mif.valid && !mif.we) begin
+      mif.rd = '0;
+      unique case (mif.addr[7:0])
+        REG_RBR_THR_DLL: mif.rd[7:0] = dlab ? 8'h00 : rbr;
+        REG_IER: mif.rd[7:0] = dlab ? 8'h00 : ier;
+        REG_IIR: mif.rd[7:0] = iir;
+        REG_LCR: mif.rd[7:0] = lcr;
+        REG_LSR: mif.rd[7:0] = lsr;
+        default: ;
+      endcase
+    end
+  end
+
+  //write
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (mif.valid && mif.we) begin
+        unique case (mif.addr[7:0])
+          REG_RBR_THR_DLL: begin
+            if (!dlab && lsr.THRE) begin
+              lsr.THRE <= 0;
+              tx_busy  <= 1;
+              sim_host_putc(mif.wd[7:0]);
+            end
+          end
+          REG_IER: if (!dlab) ier <= mif.wd[7:0];
+          REG_LCR: lcr <= mif.wd[7:0];
+          default: ;
+        endcase
+      end
+
+      // simulate tx
+      if (tx_busy) begin
+        tx_busy  <= 0;
+        lsr.THRE <= 1;
+      end
+
+      // simulate rx
+      if (!lsr.DR) begin
+        // TODO: getc
+        if (sim_host_getc(rbr) > 0) begin
+          lsr.DR <= 1;
+        end
+      end
+
+      // clear DR when read
+      if (mif.valid && !mif.we && mif.addr[7:0] == REG_RBR_THR_DLL && !dlab) begin
+        lsr.DR <= 0;
       end
     end
   end
