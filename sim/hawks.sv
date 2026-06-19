@@ -20,7 +20,8 @@ package hawks;
   localparam int unsigned MASTER_CNT = 3;
   localparam int unsigned SLAVE_CNT = 7;
   localparam int unsigned REGMAX = 32;
-  localparam addr_t BOOT_ADDR = 64'h8000_2000;
+  // localparam addr_t BOOT_ADDR = 64'h8000_2000;
+  localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
 `ifdef DEBUG_LOG
   `define LOGI(msg) $display("[I|%9t|%m.%0d] %s", $realtime, `__LINE__, msg)
@@ -66,14 +67,24 @@ package hawks;
 
   // clint (0x02000000~0x0200ffff)
   parameter mmap_t mapping[SLAVE_CNT] = '{
-      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
-      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
-      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
-      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
-      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
-      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+      '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
+      '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h88ff_ffff)},  // sram
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
   };
+  // parameter mmap_t mapping[SLAVE_CNT] = '{
+  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
+  //     '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
+  //     '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
+  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
+  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
+  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
+  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+  // };
+
 
   typedef enum {
     S8,
@@ -584,7 +595,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(4000)
+    .COUNTER(4000000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -1570,6 +1581,8 @@ module idu (
           unique case (fc)
             {
               7'b0001000, 3'b010
+            }, {
+              7'b0001011, 3'b010
             } : begin
               wb_src_o    = WB_SRC_MEM;
               id_o.amo_op = AMO_LRW;
@@ -1577,6 +1590,8 @@ module idu (
             end
             {
               7'b0001100, 3'b010
+            }, {
+              7'b0001101, 3'b010
             } : begin
               wb_src_o    = WB_SRC_MEM;
               id_o.amo_op = AMO_SCW;
@@ -1584,6 +1599,8 @@ module idu (
             end
             {
               7'b0001000, 3'b011
+            }, {
+              7'b0001011, 3'b011
             } : begin
               wb_src_o    = WB_SRC_MEM;
               id_o.amo_op = AMO_LR;
@@ -1591,14 +1608,17 @@ module idu (
             end
             {
               7'b0001100, 3'b011
+            }, {
+              7'b0001101, 3'b011
             } : begin
               wb_src_o    = WB_SRC_MEM;
-              wb_src_o    = WB_SRC_NONE;
               id_o.amo_op = AMO_SC;
               id_o.sd_op  = SD_SD;
             end
             {
               7'b0000100, 3'b010
+            }, {
+              7'b0000111, 3'b010
             } : begin
               id_o.amo_op = AMO_SWAPW;
               id_o.ld_op  = LD_LW;
@@ -1606,6 +1626,8 @@ module idu (
             end
             {
               7'b0000000, 3'b010
+            }, {
+              7'b0000011, 3'b010
             } : begin
               id_o.amo_op = AMO_ADDW;
               id_o.alu_op = ALU_ADDW;
@@ -1614,6 +1636,8 @@ module idu (
             end
             {
               7'b0010000, 3'b010
+            }, {
+              7'b0010011, 3'b010
             } : begin
               id_o.amo_op = AMO_XORW;
               id_o.alu_op = ALU_XOR;
@@ -1622,6 +1646,8 @@ module idu (
             end
             {
               7'b0100000, 3'b010
+            }, {
+              7'b0100011, 3'b010
             } : begin
               id_o.amo_op = AMO_ORW;
               id_o.alu_op = ALU_OR;
@@ -1630,6 +1656,8 @@ module idu (
             end
             {
               7'b0110000, 3'b010
+            }, {
+              7'b0110011, 3'b010
             } : begin
               id_o.amo_op = AMO_ANDW;
               id_o.alu_op = ALU_AND;
@@ -1638,6 +1666,8 @@ module idu (
             end
             {
               7'b1000000, 3'b010
+            }, {
+              7'b1000011, 3'b010
             } : begin
               id_o.amo_op = AMO_MINW;
               id_o.alu_op = ALU_SLT;
@@ -1646,6 +1676,8 @@ module idu (
             end
             {
               7'b1010000, 3'b010
+            }, {
+              7'b1010011, 3'b010
             } : begin
               id_o.amo_op = AMO_MAXW;
               id_o.alu_op = ALU_SLT;
@@ -1654,6 +1686,8 @@ module idu (
             end
             {
               7'b1100000, 3'b010
+            }, {
+              7'b1100011, 3'b010
             } : begin
               id_o.amo_op = AMO_MINUW;
               id_o.alu_op = ALU_SLTU;
@@ -1662,6 +1696,8 @@ module idu (
             end
             {
               7'b1110000, 3'b010
+            }, {
+              7'b1110011, 3'b010
             } : begin
               id_o.amo_op = AMO_MAXUW;
               id_o.alu_op = ALU_SLTU;
@@ -1670,6 +1706,8 @@ module idu (
             end
             {
               7'b0000100, 3'b011
+            }, {
+              7'b0000111, 3'b011
             } : begin
               id_o.amo_op = AMO_SWAP;
               id_o.ld_op  = LD_LD;
@@ -1677,6 +1715,8 @@ module idu (
             end
             {
               7'b0000000, 3'b011
+            }, {
+              7'b0000011, 3'b011
             } : begin
               id_o.amo_op = AMO_ADD;
               id_o.alu_op = ALU_ADD;
@@ -1685,6 +1725,8 @@ module idu (
             end
             {
               7'b0010000, 3'b011
+            }, {
+              7'b0010011, 3'b011
             } : begin
               id_o.amo_op = AMO_XOR;
               id_o.alu_op = ALU_XOR;
@@ -1693,6 +1735,8 @@ module idu (
             end
             {
               7'b0100000, 3'b011
+            }, {
+              7'b0100011, 3'b011
             } : begin
               id_o.amo_op = AMO_OR;
               id_o.alu_op = ALU_OR;
@@ -1701,6 +1745,8 @@ module idu (
             end
             {
               7'b0110000, 3'b011
+            }, {
+              7'b0110011, 3'b011
             } : begin
               id_o.amo_op = AMO_AND;
               id_o.alu_op = ALU_AND;
@@ -1709,6 +1755,8 @@ module idu (
             end
             {
               7'b1000000, 3'b011
+            }, {
+              7'b1000011, 3'b011
             } : begin
               id_o.amo_op = AMO_MIN;
               id_o.alu_op = ALU_SLT;
@@ -1717,6 +1765,8 @@ module idu (
             end
             {
               7'b1010000, 3'b011
+            }, {
+              7'b1010011, 3'b011
             } : begin
               id_o.amo_op = AMO_MAX;
               id_o.alu_op = ALU_SLT;
@@ -1725,6 +1775,8 @@ module idu (
             end
             {
               7'b1100000, 3'b011
+            }, {
+              7'b1100011, 3'b011
             } : begin
               id_o.amo_op = AMO_MINU;
               id_o.alu_op = ALU_SLTU;
@@ -1733,13 +1785,18 @@ module idu (
             end
             {
               7'b1110000, 3'b011
+            }, {
+              7'b1110011, 3'b011
             } : begin
               id_o.amo_op = AMO_MAXU;
               id_o.alu_op = ALU_SLTU;
               id_o.ld_op  = LD_LD;
               id_o.sd_op  = SD_SD;
             end
-            default: id_o.amo_op = AMO_NONE;
+            default: begin
+              id_o.amo_op = AMO_NONE;
+              `LOGE($sformatf("unknown AMO f7:%b f3:%b", f7, f3));
+            end
           endcase
         end
         OPCODE_FENCE: begin
@@ -2453,7 +2510,8 @@ module sram (
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t MAX = 32 * 1024;
+  localparam addr_t MAX = 64 * 1024 * 1024;
+  // localparam addr_t MAX = 8 * 1024;
   typedef logic [$clog2(MAX)-1:0] idx_t;
   wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
   logic [7:0] m[MAX];
@@ -2528,7 +2586,7 @@ module rom (
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t SIZE = 32 * 1024;
+  localparam addr_t SIZE = 4 * 1024 * 1024;
   // localparam string HEX = "isa/wfi.hex";
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS+1:2];
@@ -2958,7 +3016,9 @@ module csr (
   end
 
   reg_t rd;
+  logic unexist;
   always_comb begin
+    unexist = 0;
     unique case (which_i)
       MSTATUS:    rd = mstatus;
       MISA:       rd = misa;
@@ -2984,7 +3044,10 @@ module csr (
       MCOUNTEREN: rd = {32'b0, mcounteren};
       SCOUNTEREN: rd = {32'b0, scounteren};
       CYCLE:      rd = cycle;
-      default:    rd = '0;
+      default: begin
+        rd = '0;
+        unexist = 1;
+      end
     endcase
   end
 
@@ -3035,6 +3098,9 @@ module csr (
           if (which_i == SATP) begin
             illegal = 1;
           end
+        end
+        if (unexist == 1) begin
+          illegal = 1;
         end
       end
 
@@ -3822,7 +3888,7 @@ module uart8250 (
         REG_LSR: mif.rd[7:0] = lsr;
         default: ;
       endcase
-      `LOGI($sformatf("uart[%0d]: 0x%h", mif.addr[7:0], mif.rd[7:0]));
+      `LOGI($sformatf("read uart[%0d]: 0x%h", mif.addr[7:0], mif.rd[7:0]));
     end
   end
 
@@ -3832,6 +3898,7 @@ module uart8250 (
       lsr <= '{THRE: 1, default: 0};
     end else begin
       if (mif.valid && mif.we) begin
+        `LOGI($sformatf("write uart[%0d]=%0h", mif.addr[7:0], mif.wd[7:0]));
         unique case (mif.addr[7:0])
           REG_RBR_THR_DLL: begin
             if (!dlab && lsr.THRE) begin
