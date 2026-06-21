@@ -6,7 +6,7 @@
 ##         author: ticktechman
 ##
 ###############################################################################
-.PHONY: all build test install doc
+.PHONY: all build test install doc hawks
 
 HEX_FILES := $(wildcard $(CURDIR)/riscv-tests/*.hex)
 
@@ -55,7 +55,7 @@ hawks.one: obj_dir/hawks
 	@$< +verilator+quiet +elf="isa/sbi"
 
 obj_dir/hawks: hawks.sv hawks.cpp
-	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include"  -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
+	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
 
 
 ME := "isa/mem.hex"
