@@ -287,6 +287,11 @@ package hawks;
     TIME    = 12'hC01,
     INSTRET = 12'hC02,
 
+    // m-mode register
+    MVENDORID = 12'hF11,
+    MARCHID   = 12'hF12,
+    MIMPID    = 12'hF13,
+
     // csr register in M mode
     MSTATUS    = 12'h300,
     MISA       = 12'h301,
@@ -595,7 +600,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(4000000)
+    .COUNTER(100000000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -814,6 +819,7 @@ module soc (
     .trap_o(ttaken),
     .trap_target_o(ttarget),
     .tlb_invalid_o(tlb_invalid),
+    .time_i(timeval),
     .halt_o(halt),
     .irq_timer_i(itimer),
     .irq_ex_i(intr[0]),
@@ -852,11 +858,13 @@ module soc (
     .mif(slave_ports[2].slave)
   );
 
+  reg_t timeval;
   clint clint1 (
     .clk(clk),
     .rst_n(rst_n),
     .mif(slave_ports[3]),
     .rtc_i(rtc_i),
+    .time_o(timeval),
     .timer_o(itimer),
     .ipi_o(ipi)
   );
@@ -2510,7 +2518,7 @@ module sram (
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t MAX = 64 * 1024 * 1024;
+  localparam addr_t MAX = 128 * 1024 * 1024;
   // localparam addr_t MAX = 8 * 1024;
   typedef logic [$clog2(MAX)-1:0] idx_t;
   wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
@@ -2595,7 +2603,7 @@ module rom (
   initial begin
     string elf;
     int fd;
-    $value$plusargs("elf=%s", elf);
+    // $value$plusargs("elf=%s", elf);
     if (elf != "") begin
       elf = {elf, ".hex"};
       fd  = $fopen(elf, "r");
@@ -2968,6 +2976,7 @@ module csr (
   output logic               halt_o,
   output logic               trap_o,
   output addr_t              trap_target_o,
+  input  reg_t               time_i,
 
   // irq interface
   input  logic irq_timer_i,   // timer int from clint
@@ -3001,9 +3010,10 @@ module csr (
   mintr_t mideleg, mie, mip;
   misa_t misa;
 
-  reg_t mtvec, mtval, mepc, mcause, mhartid, mscratch;
-  reg_t stvec, stval, sepc, scause, sscratch, satp;
+  reg_t mtvec, mtval, mepc, mcause, mhartid, mscratch, mvendorid, marchid, mimpid, mtime;
+  reg_t stvec, stval, sepc, scause, sscratch;
   reg_t cycle;
+  satp_t satp;
   mcounteren_t mcounteren, scounteren;
   priviledge_e priv;
   mcause_e ecause;
@@ -3044,6 +3054,10 @@ module csr (
       MCOUNTEREN: rd = {32'b0, mcounteren};
       SCOUNTEREN: rd = {32'b0, scounteren};
       CYCLE:      rd = cycle;
+      MVENDORID:  rd = mvendorid;
+      MARCHID:    rd = marchid;
+      MIMPID:     rd = mimpid;
+      TIME:       rd = mtime;
       default: begin
         rd = '0;
         unexist = 1;
@@ -3151,8 +3165,13 @@ module csr (
       cycle      <= '0;
       mcounteren <= '0;
       scounteren <= '0;
+      mvendorid  <= 64'h489;
+      marchid    <= 64'h1;
+      mimpid     <= 64'h0;
+      mtime      <= 64'h0;
     end else begin
       cycle <= cycle + 1;
+      mtime <= time_i;
       if (valid) begin
         wb_o <= rd;
         if (op_i >= SYS_CSRRW) begin
@@ -3181,7 +3200,12 @@ module csr (
               SCAUSE: scause <= next;
               STVAL: stval <= next;
               SIP: mip <= (mip & ~`SIP_MASK) | (next & `SIP_MASK);
-              SATP: satp <= next;
+              SATP: begin
+                satp[59:0] <= next[59:0];
+                if (next[63:60] == 4'h8) begin
+                  satp.MODE <= 4'h8;
+                end
+              end
               MCOUNTEREN: mcounteren <= next[31:0];
               SCOUNTEREN: mcounteren <= next[31:0];
               default: ;
@@ -3289,7 +3313,7 @@ module csr (
         status.SPP = (priv == M_USER ? 0 : 1);
         status.SPIE = mstatus.SIE;
         status.SIE = 0;
-        priv_next = M_MACHINE;
+        priv_next = M_SUPER;
         cause = sintr2cause(s_intr);
         epc = pc_i;
         `LOGW($sformatf("S-intr: %0h", cause));
@@ -3453,7 +3477,8 @@ module clint (
   memif.slave mif,
   input logic rtc_i,
   output logic timer_o,
-  output logic ipi_o
+  output logic ipi_o,
+  output reg_t time_o
 );
 
   reg_t mtime, mtimecmp;
@@ -3505,6 +3530,7 @@ module clint (
   always_comb begin
     timer_o = (mtime >= mtimecmp);
     ipi_o   = msip[0];
+    time_o  = mtime;
   end
 endmodule
 
