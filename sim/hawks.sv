@@ -593,14 +593,14 @@ module top ();
   logic clk, rst_n, intr, rtc;
 
   initial begin
-    $dumpfile("waveforms.vcd");
-    $dumpvars(0, top);
+    // $dumpfile("waveforms.vcd");
+    // $dumpvars(0, top);
     $timeformat(-9, 3, "", 9);
     intr = 1'b0;
   end
 
   clkgen #(
-    .COUNTER(100000000)
+    .COUNTER(450000000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -700,7 +700,7 @@ module soc (
     end
   end
 
-  bus bus1 (
+  xbar xbar1 (
     .clk(clk),
     .rst_n(rst_n),
     .mmapping(maps),
@@ -1021,7 +1021,7 @@ endmodule
 // bus related types and module
 //------------------------------------
 // shared single channel crossbar
-module bus (
+module xbar (
   input logic clk,
   input logic rst_n,
   input mmap_t mmapping[SLAVE_CNT],
