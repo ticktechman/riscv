@@ -11,7 +11,7 @@
 `timescale 1ns / 100ps
 
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -66,24 +66,24 @@ package hawks;
   } mmap_t;
 
   // clint (0x02000000~0x0200ffff)
-  parameter mmap_t mapping[SLAVE_CNT] = '{
-      '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
-      '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
-      '{BASE: addr_t'('h8000_0000), END: addr_t'('h88ff_ffff)},  // sram
-      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
-      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
-      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
-      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
-  };
   // parameter mmap_t mapping[SLAVE_CNT] = '{
-  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
-  //     '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-  //     '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
-  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
-  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
-  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
-  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+  //     '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
+  //     '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
+  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h88ff_ffff)},  // sram
+  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
+  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
+  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
+  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
   // };
+  parameter mmap_t mapping[SLAVE_CNT] = '{
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
+      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
+      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+  };
 
 
   typedef enum {
@@ -160,6 +160,7 @@ package hawks;
     reg_t    eval;
   } exception_t;
 
+  // 32-bit instruction imm type
   typedef enum {
     IMM_NONE,
     IMM_I,
@@ -322,7 +323,10 @@ package hawks;
     SCAUSE     = 12'h142,
     STVAL      = 12'h143,
     SIP        = 12'h144,
-    SATP       = 12'h180
+    SATP       = 12'h180,
+
+    // others
+    MNSTATUS = 12'h744
   } csr_e;
 
   typedef enum {
@@ -368,6 +372,7 @@ package hawks;
     logic [4:0]  csr_imm;
     logic [11:0] csr;
     logic        reg_write;
+    logic        rvc;
 
     op_src_e op_s1;
     op_src_e op_s2;
@@ -600,7 +605,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(450000000)
+    .COUNTER(3000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -843,7 +848,7 @@ module soc (
   rom rom1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(slave_ports[0].slave)
+    .mif(slave_ports[2].slave)
   );
 
   scoreboard SB (
@@ -855,7 +860,7 @@ module soc (
   sram sram1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(slave_ports[2].slave)
+    .mif(slave_ports[0].slave)
   );
 
   reg_t timeval;
@@ -991,7 +996,7 @@ module soc (
             `LOGW("WFI");
             if (interrupted) begin
               stage <= STG_FETCH;
-              pc <= (ttaken ? ttarget : pc + 4);
+              pc <= (ttaken ? ttarget : pc + (id_out.rvc ? 2 : 4));
             end
           end else begin
             if (exc_stage != STG_IDLE) begin
@@ -1004,7 +1009,7 @@ module soc (
               end else if (btaken) begin
                 pc <= btarget;
               end else begin
-                pc <= pc + 4;
+                pc <= pc + (id_out.rvc ? 2 : 4);
               end
               stage <= STG_FETCH;
             end
@@ -1131,17 +1136,20 @@ module ifu (
   typedef enum {
     IDLE,
     MAPPING,
-    FETCH
+    FETCH1,
+    FETCH2
   } state_e;
   state_e state;
 
   mcause_e ecause;
+  logic complete;
 
   always_comb begin
-    ready_o = 0;
-    ecause  = EXC_NONE;
+    ready_o  = 0;
+    ecause   = EXC_NONE;
+    complete = 0;
 
-    if (valid && pc_i[1:0] != 0) begin
+    if (valid && pc_i[0] != 0) begin
       `LOGI($sformatf("pc misaligned:0x%0h", pc_i));
       ecause  = EXC_INSTR_ADDR_MISALIGNED;
       ready_o = 1;
@@ -1155,11 +1163,15 @@ module ifu (
       end
     end
 
-    if (valid && state == FETCH && mif.ready) begin
-      ready_o = 1;
-      if (mif.error) begin
-        `LOGE($sformatf("load instr error: 0x%0h pa:0x%0h", pc_i, mapif.pa));
-        ecause = EXC_INSTR_ACCESS_FAULT;
+    if (valid && mif.ready) begin
+      complete = mif.rd[1:0] == 2'b11 && mif.dtype == U32;
+      complete = complete | mif.rd[1:0] != 2'b11;
+      if (state == FETCH2 || (state == FETCH1 && complete)) begin
+        ready_o = 1;
+        if (mif.error) begin
+          `LOGE($sformatf("load instr error: va:0x%0h pa:0x%0h", pc_i, mapif.pa));
+          ecause = EXC_INSTR_ACCESS_FAULT;
+        end
       end
     end
   end
@@ -1192,22 +1204,42 @@ module ifu (
               mapif.valid <= 0;
               if (!mapif.error) begin
                 `LOGI($sformatf("pa:0x%0h va:0x%0h", mapif.pa, mapif.va));
-                mif.addr  <= mapif.pa;
-                mif.dtype <= U32;
+                mif.addr <= mapif.pa;
+                if (mapif.pa[11:0] == 12'hffe) begin
+                  mif.dtype <= U16;
+                end else begin
+                  mif.dtype <= U32;
+                end
                 mif.we    <= 0;
                 mif.valid <= 1;
-                state     <= FETCH;
+                state     <= FETCH1;
               end else begin
                 state <= IDLE;
               end
             end
           end
-          FETCH: begin
+          FETCH1: begin
             if (mif.ready) begin
               `LOGI($sformatf("pc=0x%0h, instr=0x%h", pc_i, mif.rd[31:0]));
-              mif.valid <= 0;
-              instr_o <= mif.rd[31:0];
-              state <= IDLE;
+              if (mif.rd[1:0] == 2'b11 && mif.dtype != U32) begin
+                instr_o[15:0] <= mif.rd[15:0];
+                mif.addr      <= mif.addr + 2;
+                mif.dtype     <= U16;
+                mif.valid     <= 1;
+                state         <= FETCH2;
+              end else begin
+                mif.valid <= 0;
+                instr_o <= mif.rd[31:0];
+                state <= IDLE;
+              end
+            end
+          end
+          FETCH2: begin
+            if (mif.ready) begin
+              `LOGI($sformatf("pc=0x%0h, instr=0x%h", pc_i, mif.rd[31:0]));
+              mif.valid      <= 0;
+              instr_o[31:16] <= mif.rd[15:0];
+              state          <= IDLE;
             end
           end
           default: ;
@@ -1274,552 +1306,1097 @@ module idu (
   logic [6:0] f7;
   logic [9:0] fc;
   imm_type_e imm_type;
+  logic [4:0] code;
 
   always_comb begin : decode
     ecause = EXC_NONE;
     if (valid) begin
-      id_o        = '0;
-      wb_src_o    = WB_SRC_NONE;
-      id_o.opcode = opcode_e'(instr_i[6:0]);
-      id_o.rs1    = instr_i[19:15];
-      id_o.rs2    = instr_i[24:20];
-      id_o.rd     = instr_i[11:7];
-      f3          = instr_i[14:12];
-      f7          = instr_i[31:25];
-      fc          = {f7, f3};
-      rif.r1      = instr_i[19:15];
-      rif.r2      = instr_i[24:20];
+      if (instr_i[1:0] == 2'b11) begin
+        id_o        = '0;
+        wb_src_o    = WB_SRC_NONE;
+        id_o.opcode = opcode_e'(instr_i[6:0]);
+        id_o.rs1    = instr_i[19:15];
+        id_o.rs2    = instr_i[24:20];
+        id_o.rd     = instr_i[11:7];
+        f3          = instr_i[14:12];
+        f7          = instr_i[31:25];
+        fc          = {f7, f3};
+        rif.r1      = instr_i[19:15];
+        rif.r2      = instr_i[24:20];
 
-      unique case (id_o.opcode)
-        OPCODE_OP: begin
-          `LOGI("OP");
-          // 002081b3: add x3, x1, x2
-          // add rd, rs1, rs2
-          // ALU: rs1 <op> rs2
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_ALU;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_REG;
-          unique case (fc)
-            {7'b0000000, 3'b000} : id_o.alu_op = ALU_ADD;
-            {7'b0100000, 3'b000} : id_o.alu_op = ALU_SUB;
-            {7'b0000000, 3'b111} : id_o.alu_op = ALU_AND;
-            {7'b0000000, 3'b110} : id_o.alu_op = ALU_OR;
-            {7'b0000000, 3'b100} : id_o.alu_op = ALU_XOR;
-            {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLL;
-            {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRL;
-            {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRA;
-            {7'b0000000, 3'b010} : id_o.alu_op = ALU_SLT;
-            {7'b0000000, 3'b011} : id_o.alu_op = ALU_SLTU;
-            {7'b0000001, 3'b000} : id_o.mult_op = MULT_MUL;
-            {7'b0000001, 3'b001} : id_o.mult_op = MULT_MULH;
-            {7'b0000001, 3'b010} : id_o.mult_op = MULT_MULHSU;
-            {7'b0000001, 3'b011} : id_o.mult_op = MULT_MULHU;
-            {7'b0000001, 3'b100} : id_o.div_op = DIV_DIV;
-            {7'b0000001, 3'b101} : id_o.div_op = DIV_DIVU;
-            {7'b0000001, 3'b110} : id_o.div_op = DIV_REM;
-            {7'b0000001, 3'b111} : id_o.div_op = DIV_REMU;
-            default: ;
-          endcase
-        end
-        OPCODE_OP_32: begin
-          // R-type: rd = rs1 op rs2 (32-bit + sign extend)
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_ALU;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_REG;
-          unique case (fc)
-            {7'b0000000, 3'b000} : id_o.alu_op = ALU_ADDW;
-            {7'b0100000, 3'b000} : id_o.alu_op = ALU_SUBW;
-            {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLLW;
-            {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRLW;
-            {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRAW;
-            {7'b0000001, 3'b000} : id_o.mult_op = MULT_MULW;
-            {7'b0000001, 3'b100} : id_o.div_op = DIV_DIVW;
-            {7'b0000001, 3'b101} : id_o.div_op = DIV_DIVUW;
-            {7'b0000001, 3'b110} : id_o.div_op = DIV_REMW;
-            {7'b0000001, 3'b111} : id_o.div_op = DIV_REMUW;
-            default: ;
-          endcase
-        end
-        OPCODE_OP_IMM: begin
-          `LOGI("OP_IMM");
-          // 00500093: addi x1, x0, 5
-          // addi rd, rs1, imm
-          // ALU: rs1 <op> imm;
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_ALU;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_IMM;
-          imm_type = IMM_I;
-          unique case (f3)
-            3'b000:  id_o.alu_op = ALU_ADD;
-            3'b001:  id_o.alu_op = ALU_SLL;
-            3'b010:  id_o.alu_op = ALU_SLT;
-            3'b011:  id_o.alu_op = ALU_SLTU;
-            3'b100:  id_o.alu_op = ALU_XOR;
-            3'b110:  id_o.alu_op = ALU_OR;
-            3'b101:  id_o.alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
-            3'b111:  id_o.alu_op = ALU_AND;
-            default: ;
-          endcase
-        end
-        OPCODE_OP_IMM_32: begin
-          `LOGI("OP_IMM32");
-          // 00500093: addiw x1, x0, 5
-          // addi rd, rs1, imm
-          // ALU: rs1 <op> imm;
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_ALU;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_IMM;
-          imm_type = IMM_I;
-          unique case (f3)
-            3'b000:  id_o.alu_op = ALU_ADDW;
-            default: ;
-          endcase
-          unique case (fc)
-            {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLLW;
-            {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRLW;
-            {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRAW;
-            default: ;
-          endcase
-        end
-        OPCODE_LOAD: begin
-          `LOGI("LOAD");
-          // 00003283: ld x5, 0(x0)
-          // ld rd, offset(rs1)
-          // ALU: addr= rs1 + offset
-          // rd = mem[addr]
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_MEM;
-          id_o.alu_op = ALU_ADD;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_IMM;
-          imm_type = IMM_I;
-          unique case (f3)
-            3'b000:  id_o.ld_op = LD_LB;
-            3'b001:  id_o.ld_op = LD_LH;
-            3'b010:  id_o.ld_op = LD_LW;
-            3'b011:  id_o.ld_op = LD_LD;
-            3'b100:  id_o.ld_op = LD_LBU;
-            3'b101:  id_o.ld_op = LD_LHU;
-            3'b110:  id_o.ld_op = LD_LWU;
-            default: ;
-          endcase
-        end
-        OPCODE_STORE: begin
-          `LOGI("STORE");
-          // 00403023: sd x4, 0(x0)
-          // ALU: addr = rs1 + imm;
-          // mem[addr] = rs2
-          id_o.reg_write = 0;
-          id_o.alu_op = ALU_ADD;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_IMM;
-          imm_type = IMM_S;
-          unique case (f3)
-            3'b000:  id_o.sd_op = SD_SB;
-            3'b001:  id_o.sd_op = SD_SH;
-            3'b010:  id_o.sd_op = SD_SW;
-            3'b011:  id_o.sd_op = SD_SD;
-            default: ;
-          endcase
-        end
-        OPCODE_BRANCH: begin
-          `LOGI("BRANCH");
-          // 00628663: beq  x5, x6, +12
-          // beq rs1, rs2, imm(label)
-          // take_branch ? PC=PC+imm : PC=PC+4;
-          imm_type   = IMM_B;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_REG;
-          unique case (f3)
-            3'b000:  id_o.alu_op = ALU_BEQ;
-            3'b001:  id_o.alu_op = ALU_BNE;
-            3'b100:  id_o.alu_op = ALU_BLT;
-            3'b101:  id_o.alu_op = ALU_BGE;
-            3'b110:  id_o.alu_op = ALU_BLTU;
-            3'b111:  id_o.alu_op = ALU_BGEU;
-            default: ;
-          endcase
-        end
-        OPCODE_JAL: begin
-          `LOGI("JAL");
-          // 008000ef: jal rd, imm
-          // rd = PC+4; PC=PC+imm;
-          imm_type = IMM_J;
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_ALU;
-          id_o.alu_op = ALU_ADD;
-          id_o.op_s1 = OP_SRC_PC;
-          id_o.op_s2 = OP_SRC_IMM;
-        end
-        OPCODE_JALR: begin
-          `LOGI("JALR");
-          // 00008067: jalr rd, imm(rs1)
-          // rd = PC+4; PC = (rs1 + imm) & ~1 ;
-          imm_type = IMM_I;
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_ALU;
-          id_o.alu_op = ALU_ADD;
-          id_o.op_s1 = OP_SRC_REG;
-          id_o.op_s2 = OP_SRC_IMM;
-        end
-        OPCODE_AUIPC: begin
-          `LOGI("AUIPC");
-          // auipc rd, imm
-          // rd = PC + (imm << 12)
-          imm_type = IMM_U;
-          id_o.reg_write = 1;
-          wb_src_o = WB_SRC_ALU;
-          id_o.alu_op = ALU_ADD;
-          id_o.op_s1 = OP_SRC_PC;
-          id_o.op_s2 = OP_SRC_IMM;
-        end
-        OPCODE_LUI: begin
-          `LOGI("LUI");
-          // lui rd, imm
-          // rd = (imm << 12)
-          // ALU: x0 + (imm << 12);
-          imm_type       = IMM_U;
-          id_o.reg_write = 1;
-          wb_src_o       = WB_SRC_ALU;
-          id_o.alu_op    = ALU_ADD;
-          id_o.rs1       = 0;
-          rif.r1         = 0;
-          id_o.op_s1     = OP_SRC_REG;
-          id_o.op_s2     = OP_SRC_IMM;
-        end
+        unique case (id_o.opcode)
+          OPCODE_OP: begin
+            `LOGI("OP");
+            // 002081b3: add x3, x1, x2
+            // add rd, rs1, rs2
+            // ALU: rs1 <op> rs2
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_ALU;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            unique case (fc)
+              {7'b0000000, 3'b000} : id_o.alu_op = ALU_ADD;
+              {7'b0100000, 3'b000} : id_o.alu_op = ALU_SUB;
+              {7'b0000000, 3'b111} : id_o.alu_op = ALU_AND;
+              {7'b0000000, 3'b110} : id_o.alu_op = ALU_OR;
+              {7'b0000000, 3'b100} : id_o.alu_op = ALU_XOR;
+              {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLL;
+              {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRL;
+              {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRA;
+              {7'b0000000, 3'b010} : id_o.alu_op = ALU_SLT;
+              {7'b0000000, 3'b011} : id_o.alu_op = ALU_SLTU;
+              {7'b0000001, 3'b000} : id_o.mult_op = MULT_MUL;
+              {7'b0000001, 3'b001} : id_o.mult_op = MULT_MULH;
+              {7'b0000001, 3'b010} : id_o.mult_op = MULT_MULHSU;
+              {7'b0000001, 3'b011} : id_o.mult_op = MULT_MULHU;
+              {7'b0000001, 3'b100} : id_o.div_op = DIV_DIV;
+              {7'b0000001, 3'b101} : id_o.div_op = DIV_DIVU;
+              {7'b0000001, 3'b110} : id_o.div_op = DIV_REM;
+              {7'b0000001, 3'b111} : id_o.div_op = DIV_REMU;
+              default: ;
+            endcase
+          end
+          OPCODE_OP_32: begin
+            // R-type: rd = rs1 op rs2 (32-bit + sign extend)
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_ALU;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            unique case (fc)
+              {7'b0000000, 3'b000} : id_o.alu_op = ALU_ADDW;
+              {7'b0100000, 3'b000} : id_o.alu_op = ALU_SUBW;
+              {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLLW;
+              {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRLW;
+              {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRAW;
+              {7'b0000001, 3'b000} : id_o.mult_op = MULT_MULW;
+              {7'b0000001, 3'b100} : id_o.div_op = DIV_DIVW;
+              {7'b0000001, 3'b101} : id_o.div_op = DIV_DIVUW;
+              {7'b0000001, 3'b110} : id_o.div_op = DIV_REMW;
+              {7'b0000001, 3'b111} : id_o.div_op = DIV_REMUW;
+              default: ;
+            endcase
+          end
+          OPCODE_OP_IMM: begin
+            `LOGI("OP_IMM");
+            // 00500093: addi x1, x0, 5
+            // addi rd, rs1, imm
+            // ALU: rs1 <op> imm;
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_ALU;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_IMM;
+            imm_type = IMM_I;
+            unique case (f3)
+              3'b000:  id_o.alu_op = ALU_ADD;
+              3'b001:  id_o.alu_op = ALU_SLL;
+              3'b010:  id_o.alu_op = ALU_SLT;
+              3'b011:  id_o.alu_op = ALU_SLTU;
+              3'b100:  id_o.alu_op = ALU_XOR;
+              3'b110:  id_o.alu_op = ALU_OR;
+              3'b101:  id_o.alu_op = (f7[5]) ? ALU_SRA : ALU_SRL;
+              3'b111:  id_o.alu_op = ALU_AND;
+              default: ;
+            endcase
+          end
+          OPCODE_OP_IMM_32: begin
+            `LOGI("OP_IMM32");
+            // 00500093: addiw x1, x0, 5
+            // addi rd, rs1, imm
+            // ALU: rs1 <op> imm;
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_ALU;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_IMM;
+            imm_type = IMM_I;
+            unique case (f3)
+              3'b000:  id_o.alu_op = ALU_ADDW;
+              default: ;
+            endcase
+            unique case (fc)
+              {7'b0000000, 3'b001} : id_o.alu_op = ALU_SLLW;
+              {7'b0000000, 3'b101} : id_o.alu_op = ALU_SRLW;
+              {7'b0100000, 3'b101} : id_o.alu_op = ALU_SRAW;
+              default: ;
+            endcase
+          end
+          OPCODE_LOAD: begin
+            `LOGI("LOAD");
+            // 00003283: ld x5, 0(x0)
+            // ld rd, offset(rs1)
+            // ALU: addr= rs1 + offset
+            // rd = mem[addr]
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_MEM;
+            id_o.alu_op = ALU_ADD;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_IMM;
+            imm_type = IMM_I;
+            unique case (f3)
+              3'b000:  id_o.ld_op = LD_LB;
+              3'b001:  id_o.ld_op = LD_LH;
+              3'b010:  id_o.ld_op = LD_LW;
+              3'b011:  id_o.ld_op = LD_LD;
+              3'b100:  id_o.ld_op = LD_LBU;
+              3'b101:  id_o.ld_op = LD_LHU;
+              3'b110:  id_o.ld_op = LD_LWU;
+              default: ;
+            endcase
+          end
+          OPCODE_STORE: begin
+            `LOGI("STORE");
+            // 00403023: sd x4, 0(x0)
+            // ALU: addr = rs1 + imm;
+            // mem[addr] = rs2
+            id_o.reg_write = 0;
+            id_o.alu_op = ALU_ADD;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_IMM;
+            imm_type = IMM_S;
+            unique case (f3)
+              3'b000:  id_o.sd_op = SD_SB;
+              3'b001:  id_o.sd_op = SD_SH;
+              3'b010:  id_o.sd_op = SD_SW;
+              3'b011:  id_o.sd_op = SD_SD;
+              default: ;
+            endcase
+          end
+          OPCODE_BRANCH: begin
+            `LOGI("BRANCH");
+            // 00628663: beq  x5, x6, +12
+            // beq rs1, rs2, imm(label)
+            // take_branch ? PC=PC+imm : PC=PC+4;
+            imm_type   = IMM_B;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            unique case (f3)
+              3'b000:  id_o.alu_op = ALU_BEQ;
+              3'b001:  id_o.alu_op = ALU_BNE;
+              3'b100:  id_o.alu_op = ALU_BLT;
+              3'b101:  id_o.alu_op = ALU_BGE;
+              3'b110:  id_o.alu_op = ALU_BLTU;
+              3'b111:  id_o.alu_op = ALU_BGEU;
+              default: ;
+            endcase
+          end
+          OPCODE_JAL: begin
+            `LOGI("JAL");
+            // 008000ef: jal rd, imm
+            // rd = PC+4; PC=PC+imm;
+            imm_type = IMM_J;
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_ALU;
+            id_o.alu_op = ALU_ADD;
+            id_o.op_s1 = OP_SRC_PC;
+            id_o.op_s2 = OP_SRC_IMM;
+          end
+          OPCODE_JALR: begin
+            `LOGI("JALR");
+            // 00008067: jalr rd, imm(rs1)
+            // rd = PC+4; PC = (rs1 + imm) & ~1 ;
+            imm_type = IMM_I;
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_ALU;
+            id_o.alu_op = ALU_ADD;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_IMM;
+          end
+          OPCODE_AUIPC: begin
+            `LOGI("AUIPC");
+            // auipc rd, imm
+            // rd = PC + (imm << 12)
+            imm_type = IMM_U;
+            id_o.reg_write = 1;
+            wb_src_o = WB_SRC_ALU;
+            id_o.alu_op = ALU_ADD;
+            id_o.op_s1 = OP_SRC_PC;
+            id_o.op_s2 = OP_SRC_IMM;
+          end
+          OPCODE_LUI: begin
+            `LOGI("LUI");
+            // lui rd, imm
+            // rd = (imm << 12)
+            // ALU: x0 + (imm << 12);
+            imm_type       = IMM_U;
+            id_o.reg_write = 1;
+            wb_src_o       = WB_SRC_ALU;
+            id_o.alu_op    = ALU_ADD;
+            id_o.rs1       = 0;
+            rif.r1         = 0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+          end
 
-        OPCODE_SYSTEM: begin
-          `LOGI("SYSTEM");
-          id_o.op_s1 = OP_SRC_REG;
-          unique case (f3)
-            3'b000: begin
-              unique case (instr_i[31:20])
-                12'h000: begin
-                  `LOGI($sformatf("ECALL %0d", priv_i));
-                  id_o.sys_op = SYS_ECALL;
-                  ecause = mcause_of_ecall(priv_i);
-                end
-                12'h001: begin
-                  `LOGI("EBREAK");
-                  id_o.sys_op = SYS_EBREAK;
-                  ecause = EXC_BREAKPOINT;
-                end
-                12'h002: id_o.sys_op = SYS_URET;
-                12'h102: begin
-                  id_o.sys_op = SYS_SRET;
-                  if (priv_i < M_SUPER) ecause = EXC_ILLEGAL_INSTRUCTION;
-                  if (mstatus_i.TSR) ecause = EXC_ILLEGAL_INSTRUCTION;
-                end
-                12'h105: begin
-                  id_o.sys_op = SYS_WFI;
-                  if (priv_i == M_USER && mstatus_i.TW == 1) begin
-                    ecause = EXC_ILLEGAL_INSTRUCTION;
+          OPCODE_SYSTEM: begin
+            `LOGI("SYSTEM");
+            id_o.op_s1 = OP_SRC_REG;
+            unique case (f3)
+              3'b000: begin
+                unique case (instr_i[31:20])
+                  12'h000: begin
+                    `LOGI($sformatf("ECALL %0d", priv_i));
+                    id_o.sys_op = SYS_ECALL;
+                    ecause = mcause_of_ecall(priv_i);
                   end
+                  12'h001: begin
+                    `LOGI("EBREAK");
+                    id_o.sys_op = SYS_EBREAK;
+                    ecause = EXC_BREAKPOINT;
+                  end
+                  12'h002: id_o.sys_op = SYS_URET;
+                  12'h102: begin
+                    id_o.sys_op = SYS_SRET;
+                    if (priv_i < M_SUPER) ecause = EXC_ILLEGAL_INSTRUCTION;
+                    if (mstatus_i.TSR) ecause = EXC_ILLEGAL_INSTRUCTION;
+                  end
+                  12'h105: begin
+                    id_o.sys_op = SYS_WFI;
+                    if (priv_i == M_USER && mstatus_i.TW == 1) begin
+                      ecause = EXC_ILLEGAL_INSTRUCTION;
+                    end
+                  end
+                  12'h302: begin
+                    id_o.sys_op = SYS_MRET;
+                    if (priv_i < M_MACHINE) ecause = EXC_ILLEGAL_INSTRUCTION;
+                  end
+                  default: ;
+                endcase
+                if (f7 == 7'b0001001) begin
+                  id_o.sys_op = SYS_FENCE;
                 end
-                12'h302: begin
-                  id_o.sys_op = SYS_MRET;
-                  if (priv_i < M_MACHINE) ecause = EXC_ILLEGAL_INSTRUCTION;
-                end
-                default: ;
-              endcase
-              if (f7 == 7'b0001001) begin
-                id_o.sys_op = SYS_FENCE;
+              end
+              3'b001: begin
+                // csrrw rd, csr, rs1
+                // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
+                id_o.reg_write = 1;
+                wb_src_o       = WB_SRC_CSR;
+                id_o.sys_op    = SYS_CSRRW;
+                id_o.csr       = instr_i[31:20];
+              end
+              3'b010: begin
+                id_o.reg_write = 1;
+                wb_src_o       = WB_SRC_CSR;
+                id_o.sys_op    = SYS_CSRRS;
+                id_o.csr       = instr_i[31:20];
+              end
+              3'b011: begin  // CSRRC
+                id_o.reg_write = 1;
+                wb_src_o       = WB_SRC_CSR;
+                id_o.sys_op    = SYS_CSRRC;
+                id_o.csr       = instr_i[31:20];
+              end
+
+              3'b101: begin  // CSRRWI
+                id_o.reg_write = 1;
+                id_o.op_s1     = OP_SRC_IMM;
+                id_o.sys_op    = SYS_CSRRWI;
+                wb_src_o       = WB_SRC_CSR;
+                id_o.csr       = instr_i[31:20];
+                id_o.csr_imm   = id_o.rs1;
+              end
+
+              3'b110: begin  // CSRRSI
+                id_o.reg_write = 1;
+                id_o.op_s1     = OP_SRC_IMM;
+                id_o.sys_op    = SYS_CSRRSI;
+                wb_src_o       = WB_SRC_CSR;
+                id_o.csr       = instr_i[31:20];
+                id_o.csr_imm   = id_o.rs1;
+              end
+
+              3'b111: begin  // CSRRCI
+                id_o.reg_write = 1;
+                id_o.op_s1     = OP_SRC_IMM;
+                id_o.sys_op    = SYS_CSRRCI;
+                wb_src_o       = WB_SRC_CSR;
+                id_o.csr       = instr_i[31:20];
+                id_o.csr_imm   = id_o.rs1;
+              end
+              default: ;
+            endcase
+          end
+          OPCODE_AMO: begin
+            `LOGI("AMO");
+            id_o.reg_write = 1;
+            wb_src_o       = WB_SRC_AMO;
+            id_o.op_s1     = OP_SRC_AMO;
+            id_o.op_s2     = OP_SRC_REG;
+            unique case (fc)
+              {
+                7'b0001000, 3'b010
+              }, {
+                7'b0001011, 3'b010
+              } : begin
+                wb_src_o    = WB_SRC_MEM;
+                id_o.amo_op = AMO_LRW;
+                id_o.ld_op  = LD_LW;
+              end
+              {
+                7'b0001100, 3'b010
+              }, {
+                7'b0001101, 3'b010
+              } : begin
+                wb_src_o    = WB_SRC_MEM;
+                id_o.amo_op = AMO_SCW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b0001000, 3'b011
+              }, {
+                7'b0001011, 3'b011
+              } : begin
+                wb_src_o    = WB_SRC_MEM;
+                id_o.amo_op = AMO_LR;
+                id_o.ld_op  = LD_LD;
+              end
+              {
+                7'b0001100, 3'b011
+              }, {
+                7'b0001101, 3'b011
+              } : begin
+                wb_src_o    = WB_SRC_MEM;
+                id_o.amo_op = AMO_SC;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b0000100, 3'b010
+              }, {
+                7'b0000111, 3'b010
+              } : begin
+                id_o.amo_op = AMO_SWAPW;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b0000000, 3'b010
+              }, {
+                7'b0000011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_ADDW;
+                id_o.alu_op = ALU_ADDW;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b0010000, 3'b010
+              }, {
+                7'b0010011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_XORW;
+                id_o.alu_op = ALU_XOR;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b0100000, 3'b010
+              }, {
+                7'b0100011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_ORW;
+                id_o.alu_op = ALU_OR;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b0110000, 3'b010
+              }, {
+                7'b0110011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_ANDW;
+                id_o.alu_op = ALU_AND;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b1000000, 3'b010
+              }, {
+                7'b1000011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_MINW;
+                id_o.alu_op = ALU_SLT;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b1010000, 3'b010
+              }, {
+                7'b1010011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_MAXW;
+                id_o.alu_op = ALU_SLT;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b1100000, 3'b010
+              }, {
+                7'b1100011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_MINUW;
+                id_o.alu_op = ALU_SLTU;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b1110000, 3'b010
+              }, {
+                7'b1110011, 3'b010
+              } : begin
+                id_o.amo_op = AMO_MAXUW;
+                id_o.alu_op = ALU_SLTU;
+                id_o.ld_op  = LD_LW;
+                id_o.sd_op  = SD_SW;
+              end
+              {
+                7'b0000100, 3'b011
+              }, {
+                7'b0000111, 3'b011
+              } : begin
+                id_o.amo_op = AMO_SWAP;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b0000000, 3'b011
+              }, {
+                7'b0000011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_ADD;
+                id_o.alu_op = ALU_ADD;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b0010000, 3'b011
+              }, {
+                7'b0010011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_XOR;
+                id_o.alu_op = ALU_XOR;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b0100000, 3'b011
+              }, {
+                7'b0100011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_OR;
+                id_o.alu_op = ALU_OR;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b0110000, 3'b011
+              }, {
+                7'b0110011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_AND;
+                id_o.alu_op = ALU_AND;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b1000000, 3'b011
+              }, {
+                7'b1000011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_MIN;
+                id_o.alu_op = ALU_SLT;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b1010000, 3'b011
+              }, {
+                7'b1010011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_MAX;
+                id_o.alu_op = ALU_SLT;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b1100000, 3'b011
+              }, {
+                7'b1100011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_MINU;
+                id_o.alu_op = ALU_SLTU;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              {
+                7'b1110000, 3'b011
+              }, {
+                7'b1110011, 3'b011
+              } : begin
+                id_o.amo_op = AMO_MAXU;
+                id_o.alu_op = ALU_SLTU;
+                id_o.ld_op  = LD_LD;
+                id_o.sd_op  = SD_SD;
+              end
+              default: begin
+                id_o.amo_op = AMO_NONE;
+                `LOGE($sformatf("unknown AMO f7:%b f3:%b", f7, f3));
+              end
+            endcase
+          end
+          OPCODE_FENCE: begin
+          end
+          default: ecause = EXC_ILLEGAL_INSTRUCTION;
+        endcase
+
+        unique case (imm_type)
+          IMM_I:   id_o.imm = {{52{instr_i[31]}}, instr_i[31:20]};
+          IMM_S:   id_o.imm = {{52{instr_i[31]}}, instr_i[31:25], instr_i[11:7]};
+          IMM_B:   id_o.imm = {{51{instr_i[31]}}, instr_i[31], instr_i[7], instr_i[30:25], instr_i[11:8], 1'b0};
+          IMM_U:   id_o.imm = {{32{instr_i[31]}}, instr_i[31:12], 12'b0};
+          IMM_J:   id_o.imm = {{43{instr_i[31]}}, instr_i[31], instr_i[19:12], instr_i[20], instr_i[30:21], 1'b0};
+          default: id_o.imm = '0;
+        endcase
+      end else begin
+        // C extension
+        id_o = '0;
+        id_o.rvc = 1;
+        wb_src_o = WB_SRC_NONE;
+        code = {instr_i[1:0], instr_i[15:13]};
+        unique case (code)
+          //----------------
+          // Quadrant 0
+          //----------------
+
+          // C.ADDI4SPN : x[rd] = x[sp] + imm
+          5'b00000: begin
+            if (instr_i[15:0] == 16'h00) begin
+              ecause = EXC_ILLEGAL_INSTRUCTION;
+            end else begin
+              `LOGI("C.ADDI4SPN");
+              id_o.opcode    = OPCODE_OP_IMM;
+              id_o.imm       = {54'b0, instr_i[10:7], instr_i[12:11], instr_i[5], instr_i[6], 2'b00};
+              id_o.rd        = {2'b01, instr_i[4:2]};
+              id_o.rs1       = 5'd2;
+              rif.r1         = 5'd2;
+              id_o.alu_op    = ALU_ADD;
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_IMM;
+              wb_src_o       = WB_SRC_ALU;
+            end
+          end
+
+          // C.LW
+          5'b00010: begin
+            `LOGI("C.LW");
+            id_o.opcode    = OPCODE_LOAD;
+            id_o.imm       = {57'b0, instr_i[5], instr_i[12], instr_i[11], instr_i[10], instr_i[6], 2'b00};
+            id_o.rd        = {2'b01, instr_i[4:2]};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            rif.r1         = {2'b01, instr_i[9:7]};
+            id_o.alu_op    = ALU_ADD;
+            id_o.ld_op     = LD_LW;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_MEM;
+          end
+
+          // C.LD
+          5'b00011: begin
+            `LOGI("C.LD");
+            id_o.opcode    = OPCODE_LOAD;
+            id_o.imm       = {56'b0, instr_i[6], instr_i[5], instr_i[12], instr_i[11], instr_i[10], 3'b000};
+            id_o.rd        = {2'b01, instr_i[4:2]};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            rif.r1         = {2'b01, instr_i[9:7]};
+            id_o.alu_op    = ALU_ADD;
+            id_o.ld_op     = LD_LD;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_MEM;
+          end
+
+          // C.SW
+          5'b00110: begin
+            `LOGI("C.SW");
+            id_o.opcode    = OPCODE_STORE;
+            id_o.imm       = {57'b0, instr_i[5], instr_i[12], instr_i[11], instr_i[10], instr_i[6], 2'b00};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            id_o.rs2       = {2'b01, instr_i[4:2]};
+            rif.r1         = {2'b01, instr_i[9:7]};
+            rif.r2         = {2'b01, instr_i[4:2]};
+            id_o.alu_op    = ALU_ADD;
+            id_o.sd_op     = SD_SW;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_NONE;
+          end
+
+          // C.SD
+          5'b00111: begin
+            `LOGI("C.SD");
+            id_o.opcode    = OPCODE_STORE;
+            id_o.imm       = {56'b0, instr_i[6], instr_i[5], instr_i[12], instr_i[11], instr_i[10], 3'b000};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            id_o.rs2       = {2'b01, instr_i[4:2]};
+            rif.r1         = {2'b01, instr_i[9:7]};
+            rif.r2         = {2'b01, instr_i[4:2]};
+            id_o.alu_op    = ALU_ADD;
+            id_o.sd_op     = SD_SD;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_NONE;
+          end
+
+          // TODO C.FLD
+          5'b00001: begin
+            `LOGI("C.FLD");
+            id_o.opcode    = OPCODE_LOAD;
+            id_o.imm       = {56'b0, instr_i[6], instr_i[5], instr_i[12], instr_i[11], instr_i[10], 3'b000};
+            id_o.rd        = {2'b01, instr_i[4:2]};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            rif.r1         = {2'b01, instr_i[9:7]};
+            id_o.alu_op    = ALU_ADD;
+            id_o.reg_write = 1'b1;
+            id_o.ld_op     = LD_LD;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_MEM;
+          end
+
+          // C.FSD TODO
+          5'b00101: begin
+            `LOGI("C.FSD");
+            id_o.opcode    = OPCODE_STORE;
+            id_o.imm       = {56'b0, instr_i[6], instr_i[5], instr_i[12], instr_i[11], instr_i[10], 3'b000};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            id_o.rs2       = {2'b01, instr_i[4:2]};
+            rif.r1         = {2'b01, instr_i[9:7]};
+            rif.r2         = {2'b01, instr_i[4:2]};
+            id_o.alu_op    = ALU_ADD;
+            id_o.sd_op     = SD_SD;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_NONE;
+          end
+
+          // ============================================================
+          // Quadrant 1
+          // ============================================================
+
+          // C.ADDI / C.NOP
+          5'b01000: begin
+            id_o.opcode    = OPCODE_OP_IMM;
+            id_o.imm       = {{59{instr_i[12]}}, instr_i[6:2]};
+            id_o.rd        = instr_i[11:7];
+            id_o.rs1       = instr_i[11:7];
+            rif.r1         = instr_i[11:7];
+            id_o.alu_op    = ALU_ADD;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_ALU;
+            if (instr_i[11:7] == 5'b0) begin
+              `LOGI("C.NOP");
+            end else begin
+              `LOGI("C.ADDI");
+            end
+          end
+
+          // C.ADDIW
+          5'b01001: begin
+            if (instr_i[11:7] != 5'b0) begin
+              `LOGI("C.ADDIW");
+              id_o.opcode    = OPCODE_OP_IMM_32;
+              id_o.imm       = {{59{instr_i[12]}}, instr_i[6:2]};
+              id_o.rd        = instr_i[11:7];
+              id_o.rs1       = instr_i[11:7];
+              rif.r1         = instr_i[11:7];
+              id_o.alu_op    = ALU_ADDW;
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_IMM;
+              wb_src_o       = WB_SRC_ALU;
+            end else begin
+              ecause = EXC_ILLEGAL_INSTRUCTION;
+            end
+          end
+
+          // C.LI
+          5'b01010: begin
+            `LOGI("C.LI");
+            id_o.opcode    = OPCODE_OP_IMM;
+            id_o.imm       = {{59{instr_i[12]}}, instr_i[6:2]};
+            id_o.rd        = instr_i[11:7];
+            id_o.rs1       = 5'd0;
+            rif.r1         = 5'd0;
+            id_o.alu_op    = ALU_ADD;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_ALU;
+          end
+
+          // C.ADDI16SP
+          5'b01011: begin
+            if (instr_i[11:7] == 5'h02) begin
+              id_o.opcode    = OPCODE_OP_IMM;
+              id_o.imm       = {{55{instr_i[12]}}, instr_i[4], instr_i[3], instr_i[5], instr_i[2], instr_i[6], 4'b0};
+              id_o.rd        = instr_i[11:7];
+              id_o.rs1       = instr_i[11:7];
+              rif.r1         = instr_i[11:7];
+              id_o.alu_op    = ALU_ADD;
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_IMM;
+              wb_src_o       = WB_SRC_ALU;
+              if (id_o.imm == 64'b0) begin
+                ecause = EXC_ILLEGAL_INSTRUCTION;
+              end else begin
+                `LOGI("C.ADDI16SP");
+              end
+            end else begin
+              `LOGI("C.LUI");
+              id_o.opcode    = OPCODE_LUI;
+              id_o.imm       = {{47{instr_i[12]}}, instr_i[6:2], 12'b0};
+              id_o.rd        = instr_i[11:7];
+              id_o.rs1       = 5'd0;
+              rif.r1         = 5'd0;
+              id_o.alu_op    = ALU_ADD;
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_IMM;
+              wb_src_o       = WB_SRC_ALU;
+            end
+          end
+
+          // C.SRLI / C.SRAI / C.ANDI / CA
+          5'b01100: begin
+            if (instr_i[11:10] == 2'b00) begin
+              `LOGI("C.SRLI");
+              id_o.opcode    = OPCODE_OP_IMM;
+              id_o.imm       = {58'b0, instr_i[12], instr_i[6:2]};
+              id_o.rd        = {2'b01, instr_i[9:7]};
+              id_o.rs1       = {2'b01, instr_i[9:7]};
+              rif.r1         = {2'b01, instr_i[9:7]};
+              id_o.alu_op    = ALU_SRL;
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_IMM;
+              wb_src_o       = WB_SRC_ALU;
+            end else if (instr_i[11:10] == 2'b01) begin
+              `LOGI("C.SRAI");
+              id_o.opcode    = OPCODE_OP_IMM;
+              id_o.imm       = {58'b0, instr_i[12], instr_i[6:2]};
+              id_o.rd        = {2'b01, instr_i[9:7]};
+              id_o.rs1       = {2'b01, instr_i[9:7]};
+              rif.r1         = {2'b01, instr_i[9:7]};
+              id_o.alu_op    = ALU_SRA;
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_IMM;
+              wb_src_o       = WB_SRC_ALU;
+            end else if (instr_i[11:10] == 2'b10) begin
+              `LOGI("C.ANDI");
+              id_o.opcode    = OPCODE_OP_IMM;
+              id_o.imm       = {{59{instr_i[12]}}, instr_i[6:2]};
+              id_o.rd        = {2'b01, instr_i[9:7]};
+              id_o.rs1       = {2'b01, instr_i[9:7]};
+              rif.r1         = {2'b01, instr_i[9:7]};
+              id_o.alu_op    = ALU_AND;
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_IMM;
+              wb_src_o       = WB_SRC_ALU;
+            end else begin
+              id_o.opcode    = OPCODE_OP;
+              id_o.rd        = {2'b01, instr_i[9:7]};
+              id_o.rs1       = {2'b01, instr_i[9:7]};
+              id_o.rs2       = {2'b01, instr_i[4:2]};
+              rif.r1         = {2'b01, instr_i[9:7]};
+              rif.r2         = {2'b01, instr_i[4:2]};
+              id_o.reg_write = 1'b1;
+              id_o.op_s1     = OP_SRC_REG;
+              id_o.op_s2     = OP_SRC_REG;
+              wb_src_o       = WB_SRC_ALU;
+              if (instr_i[12] == 0) begin
+                case (instr_i[6:5])
+                  2'b00: id_o.alu_op = ALU_SUB;
+                  2'b01: id_o.alu_op = ALU_XOR;
+                  2'b10: id_o.alu_op = ALU_OR;
+                  2'b11: id_o.alu_op = ALU_AND;
+                endcase
+              end else begin
+                id_o.opcode = OPCODE_OP_32;
+                case (instr_i[6:5])
+                  2'b00:   id_o.alu_op = ALU_SUBW;
+                  2'b01:   id_o.alu_op = ALU_ADDW;
+                  default: ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
               end
             end
-            3'b001: begin
-              // csrrw rd, csr, rs1
-              // x[rd] = CSRs[csr]; CSRs[csr] = x[rs1]
-              id_o.reg_write = 1;
-              wb_src_o       = WB_SRC_CSR;
-              id_o.sys_op    = SYS_CSRRW;
-              id_o.csr       = instr_i[31:20];
-            end
-            3'b010: begin
-              id_o.reg_write = 1;
-              wb_src_o       = WB_SRC_CSR;
-              id_o.sys_op    = SYS_CSRRS;
-              id_o.csr       = instr_i[31:20];
-            end
-            3'b011: begin  // CSRRC
-              id_o.reg_write = 1;
-              wb_src_o       = WB_SRC_CSR;
-              id_o.sys_op    = SYS_CSRRC;
-              id_o.csr       = instr_i[31:20];
-            end
+          end
 
-            3'b101: begin  // CSRRWI
-              id_o.reg_write = 1;
-              id_o.op_s1     = OP_SRC_IMM;
-              id_o.sys_op    = SYS_CSRRWI;
-              wb_src_o       = WB_SRC_CSR;
-              id_o.csr       = instr_i[31:20];
-              id_o.csr_imm   = id_o.rs1;
-            end
+          // C.J
+          5'b01101: begin
+            `LOGI("C.J");
+            id_o.opcode = OPCODE_JAL;
+            id_o.imm = {
+              {53{instr_i[12]}},
+              instr_i[8],
+              instr_i[10:9],
+              instr_i[6],
+              instr_i[7],
+              instr_i[2],
+              instr_i[11],
+              instr_i[5:3],
+              1'b0
+            };
+            id_o.rd = 5'd0;
+            id_o.alu_op = ALU_ADD;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1 = OP_SRC_PC;
+            id_o.op_s2 = OP_SRC_IMM;
+            wb_src_o = WB_SRC_ALU;
+          end
 
-            3'b110: begin  // CSRRSI
-              id_o.reg_write = 1;
-              id_o.op_s1     = OP_SRC_IMM;
-              id_o.sys_op    = SYS_CSRRSI;
-              wb_src_o       = WB_SRC_CSR;
-              id_o.csr       = instr_i[31:20];
-              id_o.csr_imm   = id_o.rs1;
-            end
+          // C.BEQZ = beq rs1, x0, imm
+          5'b01110: begin
+            `LOGI("C.BEQZ");
+            id_o.opcode    = OPCODE_BRANCH;
+            id_o.imm       = {{56{instr_i[12]}}, instr_i[6:5], instr_i[2], instr_i[11:10], instr_i[4:3], 1'b0};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            id_o.rs1       = 5'd0;
+            rif.r1         = {2'b01, instr_i[9:7]};
+            rif.r2         = 5'd0;
+            id_o.alu_op    = ALU_BEQ;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_REG;
+            wb_src_o       = WB_SRC_ALU;
+          end
 
-            3'b111: begin  // CSRRCI
-              id_o.reg_write = 1;
-              id_o.op_s1     = OP_SRC_IMM;
-              id_o.sys_op    = SYS_CSRRCI;
-              wb_src_o       = WB_SRC_CSR;
-              id_o.csr       = instr_i[31:20];
-              id_o.csr_imm   = id_o.rs1;
-            end
-            default: ;
-          endcase
-        end
-        OPCODE_AMO: begin
-          `LOGI("AMO");
-          id_o.reg_write = 1;
-          wb_src_o       = WB_SRC_AMO;
-          id_o.op_s1     = OP_SRC_AMO;
-          id_o.op_s2     = OP_SRC_REG;
-          unique case (fc)
-            {
-              7'b0001000, 3'b010
-            }, {
-              7'b0001011, 3'b010
-            } : begin
-              wb_src_o    = WB_SRC_MEM;
-              id_o.amo_op = AMO_LRW;
-              id_o.ld_op  = LD_LW;
-            end
-            {
-              7'b0001100, 3'b010
-            }, {
-              7'b0001101, 3'b010
-            } : begin
-              wb_src_o    = WB_SRC_MEM;
-              id_o.amo_op = AMO_SCW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b0001000, 3'b011
-            }, {
-              7'b0001011, 3'b011
-            } : begin
-              wb_src_o    = WB_SRC_MEM;
-              id_o.amo_op = AMO_LR;
-              id_o.ld_op  = LD_LD;
-            end
-            {
-              7'b0001100, 3'b011
-            }, {
-              7'b0001101, 3'b011
-            } : begin
-              wb_src_o    = WB_SRC_MEM;
-              id_o.amo_op = AMO_SC;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b0000100, 3'b010
-            }, {
-              7'b0000111, 3'b010
-            } : begin
-              id_o.amo_op = AMO_SWAPW;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b0000000, 3'b010
-            }, {
-              7'b0000011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_ADDW;
-              id_o.alu_op = ALU_ADDW;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b0010000, 3'b010
-            }, {
-              7'b0010011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_XORW;
-              id_o.alu_op = ALU_XOR;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b0100000, 3'b010
-            }, {
-              7'b0100011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_ORW;
-              id_o.alu_op = ALU_OR;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b0110000, 3'b010
-            }, {
-              7'b0110011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_ANDW;
-              id_o.alu_op = ALU_AND;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b1000000, 3'b010
-            }, {
-              7'b1000011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_MINW;
-              id_o.alu_op = ALU_SLT;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b1010000, 3'b010
-            }, {
-              7'b1010011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_MAXW;
-              id_o.alu_op = ALU_SLT;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b1100000, 3'b010
-            }, {
-              7'b1100011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_MINUW;
-              id_o.alu_op = ALU_SLTU;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b1110000, 3'b010
-            }, {
-              7'b1110011, 3'b010
-            } : begin
-              id_o.amo_op = AMO_MAXUW;
-              id_o.alu_op = ALU_SLTU;
-              id_o.ld_op  = LD_LW;
-              id_o.sd_op  = SD_SW;
-            end
-            {
-              7'b0000100, 3'b011
-            }, {
-              7'b0000111, 3'b011
-            } : begin
-              id_o.amo_op = AMO_SWAP;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b0000000, 3'b011
-            }, {
-              7'b0000011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_ADD;
-              id_o.alu_op = ALU_ADD;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b0010000, 3'b011
-            }, {
-              7'b0010011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_XOR;
-              id_o.alu_op = ALU_XOR;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b0100000, 3'b011
-            }, {
-              7'b0100011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_OR;
-              id_o.alu_op = ALU_OR;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b0110000, 3'b011
-            }, {
-              7'b0110011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_AND;
-              id_o.alu_op = ALU_AND;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b1000000, 3'b011
-            }, {
-              7'b1000011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_MIN;
-              id_o.alu_op = ALU_SLT;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b1010000, 3'b011
-            }, {
-              7'b1010011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_MAX;
-              id_o.alu_op = ALU_SLT;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b1100000, 3'b011
-            }, {
-              7'b1100011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_MINU;
-              id_o.alu_op = ALU_SLTU;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            {
-              7'b1110000, 3'b011
-            }, {
-              7'b1110011, 3'b011
-            } : begin
-              id_o.amo_op = AMO_MAXU;
-              id_o.alu_op = ALU_SLTU;
-              id_o.ld_op  = LD_LD;
-              id_o.sd_op  = SD_SD;
-            end
-            default: begin
-              id_o.amo_op = AMO_NONE;
-              `LOGE($sformatf("unknown AMO f7:%b f3:%b", f7, f3));
-            end
-          endcase
-        end
-        OPCODE_FENCE: begin
-        end
-        default: ecause = EXC_ILLEGAL_INSTRUCTION;
-      endcase
+          // C.BNEZ bne rs1, x0, imm
+          5'b01111: begin
+            `LOGI("C.BNEZ");
+            id_o.opcode    = OPCODE_BRANCH;
+            id_o.imm       = {{56{instr_i[12]}}, instr_i[6:5], instr_i[2], instr_i[11:10], instr_i[4:3], 1'b0};
+            id_o.rs1       = {2'b01, instr_i[9:7]};
+            rif.r1         = {2'b01, instr_i[9:7]};
+            id_o.rs2       = 5'd0;
+            rif.r2         = 5'd0;
+            id_o.alu_op    = ALU_BNE;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_REG;
+            wb_src_o       = WB_SRC_ALU;
+          end
 
-      unique case (imm_type)
-        IMM_I:   id_o.imm = {{52{instr_i[31]}}, instr_i[31:20]};
-        IMM_S:   id_o.imm = {{52{instr_i[31]}}, instr_i[31:25], instr_i[11:7]};
-        IMM_B:   id_o.imm = {{51{instr_i[31]}}, instr_i[31], instr_i[7], instr_i[30:25], instr_i[11:8], 1'b0};
-        IMM_U:   id_o.imm = {{32{instr_i[31]}}, instr_i[31:12], 12'b0};
-        IMM_J:   id_o.imm = {{43{instr_i[31]}}, instr_i[31], instr_i[19:12], instr_i[20], instr_i[30:21], 1'b0};
-        default: id_o.imm = '0;
-      endcase
+          // ============================================================
+          // Quadrant 2
+          // ============================================================
+
+          // C.SLLI
+          5'b10000: begin
+            `LOGI("C.SLLI");
+            id_o.opcode    = OPCODE_OP_IMM;
+            id_o.imm       = {58'b0, instr_i[12], instr_i[6:2]};
+            id_o.rd        = instr_i[11:7];
+            id_o.rs1       = instr_i[11:7];
+            rif.r1         = instr_i[11:7];
+            id_o.alu_op    = ALU_SLL;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_ALU;
+          end
+
+          // TODO C.FLDSP
+          5'b10001: begin
+            `LOGI("C.FLDSP");
+            id_o.opcode    = OPCODE_LOAD;
+            id_o.imm       = {55'b0, instr_i[4:2], instr_i[12], instr_i[6:5], 3'b000};
+            id_o.rd        = instr_i[11:7];
+            id_o.rs1       = 5'd2;
+            rif.r1         = 5'd2;
+            id_o.alu_op    = ALU_ADD;
+            id_o.ld_op     = LD_LD;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_MEM;
+          end
+
+          // C.LWSP = lw rd, offset(x2)
+          5'b10010: begin
+            id_o.opcode    = OPCODE_LOAD;
+            id_o.imm       = {56'b0, instr_i[3:2], instr_i[12], instr_i[6:4], 2'b00};
+            id_o.rd        = instr_i[11:7];
+            id_o.rs1       = 5'd2;
+            rif.r1         = 5'd2;
+            id_o.alu_op    = ALU_ADD;
+            id_o.ld_op     = LD_LW;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_MEM;
+            if (id_o.rd == 5'd0) begin
+              ecause = EXC_ILLEGAL_INSTRUCTION;
+            end else begin
+              `LOGI("C.LWSP");
+            end
+          end
+
+          // C.LDSP
+          5'b10011: begin
+            id_o.opcode    = OPCODE_LOAD;
+            id_o.imm       = {55'b0, instr_i[4:2], instr_i[12], instr_i[6:5], 3'b000};
+            id_o.rd        = instr_i[11:7];
+            id_o.rs1       = 5'd2;
+            rif.r1         = 5'd2;
+            id_o.alu_op    = ALU_ADD;
+            id_o.ld_op     = LD_LD;
+            id_o.reg_write = 1'b1;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_MEM;
+            if (id_o.rd == 5'd0) begin
+              ecause = EXC_ILLEGAL_INSTRUCTION;
+            end else begin
+              `LOGI("C.LDSP");
+            end
+          end
+
+          // C.JR / C.JALR / C.EBREAK / C.MV
+          5'b10100: begin
+            if (instr_i[12] == 1'b0) begin
+              if (instr_i[6:2] == 5'b0) begin
+                // C.JR = jalr x0, 0(rs1)
+                id_o.opcode    = OPCODE_JALR;
+                id_o.rs1       = instr_i[11:7];
+                rif.r1         = instr_i[11:7];
+                id_o.alu_op    = ALU_ADD;
+                id_o.reg_write = 1'b0;
+                id_o.imm       = '0;
+                id_o.op_s1     = OP_SRC_REG;
+                id_o.op_s2     = OP_SRC_IMM;
+                wb_src_o       = WB_SRC_ALU;
+                if (id_o.rs1 == 5'd0) begin
+                  ecause = EXC_ILLEGAL_INSTRUCTION;
+                end else begin
+                  `LOGI("C.JR");
+                end
+              end else begin
+                // C.MV = add rd, rs2, x0
+                `LOGI("C.MV");
+                id_o.opcode    = OPCODE_OP;
+                id_o.rd        = instr_i[11:7];
+                id_o.rs2       = instr_i[6:2];
+                rif.r2         = instr_i[6:2];
+                rif.r1         = '0;
+                id_o.alu_op    = ALU_ADD;
+                id_o.reg_write = 1'b1;
+                id_o.op_s1     = OP_SRC_REG;
+                id_o.op_s2     = OP_SRC_REG;
+                wb_src_o       = WB_SRC_ALU;
+              end
+            end else begin
+              if (instr_i[6:2] == 5'b0) begin
+                if (instr_i[11:7] == 5'b0) begin
+                  `LOGI("C.EBREAK");
+                  id_o.opcode = OPCODE_SYSTEM;
+                  id_o.sys_op = SYS_EBREAK;
+                  ecause      = EXC_BREAKPOINT;
+                end else begin
+                  // C.JALR = jalr x1, 0(rs1)
+                  `LOGI("C.JAlR");
+                  id_o.opcode    = OPCODE_JALR;
+                  id_o.rd        = 5'd1;
+                  id_o.rs1       = instr_i[11:7];
+                  rif.r1         = instr_i[11:7];
+                  id_o.alu_op    = ALU_ADD;
+                  id_o.imm       = '0;
+                  id_o.reg_write = 1'b1;
+                  id_o.op_s1     = OP_SRC_REG;
+                  id_o.op_s2     = OP_SRC_IMM;
+                  wb_src_o       = WB_SRC_ALU;
+                end
+              end else begin
+                // C.ADD = add rd, rd, rs2
+                id_o.opcode    = OPCODE_OP;
+                id_o.rd        = instr_i[11:7];
+                id_o.rs1       = instr_i[11:7];
+                id_o.rs2       = instr_i[6:2];
+                rif.r1         = instr_i[11:7];
+                rif.r2         = instr_i[6:2];
+                id_o.alu_op    = ALU_ADD;
+                id_o.reg_write = 1'b1;
+                id_o.op_s1     = OP_SRC_REG;
+                id_o.op_s2     = OP_SRC_REG;
+                wb_src_o       = WB_SRC_ALU;
+              end
+            end
+          end
+
+          // C.SWSP = sw rs2, uimm(x2)
+          5'b10110: begin
+            `LOGI("C.SWSP");
+            id_o.opcode    = OPCODE_STORE;
+            id_o.imm       = {56'b0, instr_i[8:7], instr_i[12:9], 2'b00};
+            id_o.rs1       = 5'd2;
+            id_o.rs2       = instr_i[6:2];
+            rif.r1         = 5'd2;
+            rif.r2         = instr_i[6:2];
+            id_o.alu_op    = ALU_ADD;
+            id_o.sd_op     = SD_SW;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_NONE;
+          end
+
+          // C.SDSP = sd rs2, uimm(x2)
+          5'b10111: begin
+            `LOGI("C.SDSP");
+            id_o.opcode    = OPCODE_STORE;
+            id_o.imm       = {55'b0, instr_i[9:7], instr_i[12:10], 3'b000};
+            id_o.rs1       = 5'd2;
+            id_o.rs2       = instr_i[6:2];
+            rif.r1         = 5'd2;
+            rif.r2         = instr_i[6:2];
+            id_o.alu_op    = ALU_ADD;
+            id_o.sd_op     = SD_SD;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_NONE;
+          end
+          // C.FSWSP / C.FSDSP
+          5'b10101: begin
+            // TODO C.FSDSP = fsd  fs2, uimm(x2)
+            `LOGI("C.FSDSP");
+            id_o.opcode    = OPCODE_STORE;
+            id_o.imm       = {55'b0, instr_i[9:7], instr_i[12:10], 3'b000};
+            id_o.rs1       = 5'd2;
+            id_o.rs2       = instr_i[11:7];
+            rif.r1         = 5'd2;
+            rif.r2         = instr_i[11:7];
+            id_o.alu_op    = ALU_ADD;
+            id_o.sd_op     = SD_SD;
+            id_o.reg_write = 1'b0;
+            id_o.op_s1     = OP_SRC_REG;
+            id_o.op_s2     = OP_SRC_IMM;
+            wb_src_o       = WB_SRC_NONE;
+          end
+
+          default: begin
+            ecause = EXC_ILLEGAL_INSTRUCTION;
+          end
+        endcase
+      end
     end
   end
 endmodule
@@ -1869,7 +2446,11 @@ module exu (
         wb = div_result;
       end
       if (id_i.opcode inside {OPCODE_JAL, OPCODE_JALR}) begin
-        wb = pc_i + 4;
+        if (id_i.rvc) begin
+          wb = pc_i + 2;
+        end else begin
+          wb = pc_i + 4;
+        end
       end
       if (id_i.amo_op != AMO_NONE) begin
         wb_amo = op_amo_i;
@@ -2518,8 +3099,8 @@ module sram (
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t MAX = 128 * 1024 * 1024;
-  // localparam addr_t MAX = 8 * 1024;
+  // localparam addr_t MAX = 128 * 1024 * 1024;
+  localparam addr_t MAX = 12 * 1024;
   typedef logic [$clog2(MAX)-1:0] idx_t;
   wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
   logic [7:0] m[MAX];
@@ -2594,16 +3175,17 @@ module rom (
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t SIZE = 4 * 1024 * 1024;
+  // localparam addr_t SIZE = 4 * 1024 * 1024;
+  localparam addr_t SIZE = 12 * 1024;
   // localparam string HEX = "isa/wfi.hex";
   localparam BITS = $clog2(SIZE);
-  wire [BITS-1:0] idx = mif.addr[BITS+1:2];
-  logic [31:0] mem[SIZE];
+  wire [BITS-1:0] idx = mif.addr[BITS-1:0];
+  logic [7:0] mem[SIZE];
 
   initial begin
     string elf;
     int fd;
-    // $value$plusargs("elf=%s", elf);
+    $value$plusargs("elf=%s", elf);
     if (elf != "") begin
       elf = {elf, ".hex"};
       fd  = $fopen(elf, "r");
@@ -2618,16 +3200,17 @@ module rom (
 
   // bypass RAW
   always_comb begin
-    mif.ready = 1'b0;
-    mif.error = 0;
-    mif.rd = 0;
-    if (mif.valid) begin
-      if (mif.we) begin
-        mif.error = 1;
-      end else begin
-        mif.rd = {32'b0, mem[idx]};
+    mif.ready = mif.valid;
+    if (mif.we && mif.valid) begin
+      mif.error = 1;
+    end else begin
+      if (mif.valid) begin
+        unique case (mif.dtype)
+          U16: mif.rd = `HU2R(mem, idx);
+          U32: mif.rd = `WU2R(mem, idx);
+          default: ;
+        endcase
       end
-      mif.ready = 1'b1;
     end
   end
 
@@ -3058,6 +3641,9 @@ module csr (
       MARCHID:    rd = marchid;
       MIMPID:     rd = mimpid;
       TIME:       rd = mtime;
+      MNSTATUS:   rd = '0;
+      PMPCFG0:    rd = '0;
+      PMPADDR0:   rd = '0;
       default: begin
         rd = '0;
         unexist = 1;
@@ -3114,6 +3700,7 @@ module csr (
           end
         end
         if (unexist == 1) begin
+          `LOGE($sformatf("unknown CSR[0x%3h]", which_i));
           illegal = 1;
         end
       end

@@ -52,7 +52,7 @@ mini: obj_dir/Vmini
 hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="isa/sbi"
+	@$< +verilator+quiet +elf="riscv-tests/rv64uc-p-rvc"
 
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
