@@ -1,7 +1,8 @@
 obj_dir
 **/*.hex
-**/*.hex.data
 **/*.elf
 *.vcd
 
 riscv-tests/*.dump
+riscv-tests/*.data
+riscv-tests/*.hex

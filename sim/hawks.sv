@@ -11,7 +11,7 @@
 `timescale 1ns / 100ps
 
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -84,7 +84,6 @@ package hawks;
       '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
       '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
   };
-
 
   typedef enum {
     S8,
@@ -605,7 +604,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(3000)
+    .COUNTER(80000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -844,11 +843,15 @@ module soc (
     .mif(master_ports[2].master)
   );
 
-
-  rom rom1 (
+  // rom rom1 (
+  //   .clk(clk),
+  //   .rst_n(rst_n),
+  //   .mif(slave_ports[2].slave)
+  // );
+  sram sram1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(slave_ports[2].slave)
+    .mif(slave_ports[0].slave)
   );
 
   scoreboard SB (
@@ -857,10 +860,12 @@ module soc (
     .mif(slave_ports[1].slave)
   );
 
-  sram sram1 (
+  sram #(
+    .DATAONLY(1)
+  ) sram2 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(slave_ports[0].slave)
+    .mif(slave_ports[2].slave)
   );
 
   reg_t timeval;
@@ -1983,9 +1988,9 @@ module idu (
             wb_src_o       = WB_SRC_NONE;
           end
 
-          // ============================================================
+          //-------------------------
           // Quadrant 1
-          // ============================================================
+          //-------------------------
 
           // C.ADDI / C.NOP
           5'b01000: begin
@@ -2124,16 +2129,34 @@ module idu (
               wb_src_o       = WB_SRC_ALU;
               if (instr_i[12] == 0) begin
                 case (instr_i[6:5])
-                  2'b00: id_o.alu_op = ALU_SUB;
-                  2'b01: id_o.alu_op = ALU_XOR;
-                  2'b10: id_o.alu_op = ALU_OR;
-                  2'b11: id_o.alu_op = ALU_AND;
+                  2'b00: begin
+                    `LOGI("C.SUB");
+                    id_o.alu_op = ALU_SUB;
+                  end
+                  2'b01: begin
+                    `LOGI("C.XOR");
+                    id_o.alu_op = ALU_XOR;
+                  end
+                  2'b10: begin
+                    `LOGI("C.OR");
+                    id_o.alu_op = ALU_OR;
+                  end
+                  2'b11: begin
+                    `LOGI("C.AND");
+                    id_o.alu_op = ALU_AND;
+                  end
                 endcase
               end else begin
                 id_o.opcode = OPCODE_OP_32;
                 case (instr_i[6:5])
-                  2'b00:   id_o.alu_op = ALU_SUBW;
-                  2'b01:   id_o.alu_op = ALU_ADDW;
+                  2'b00: begin
+                    `LOGI("C.SUBW");
+                    id_o.alu_op = ALU_SUBW;
+                  end
+                  2'b01: begin
+                    `LOGI("C.ADDW");
+                    id_o.alu_op = ALU_ADDW;
+                  end
                   default: ecause = EXC_ILLEGAL_INSTRUCTION;
                 endcase
               end
@@ -2195,10 +2218,9 @@ module idu (
             wb_src_o       = WB_SRC_ALU;
           end
 
-          // ============================================================
+          //-------------------------
           // Quadrant 2
-          // ============================================================
-
+          //-------------------------
           // C.SLLI
           5'b10000: begin
             `LOGI("C.SLLI");
@@ -2326,6 +2348,7 @@ module idu (
                 end
               end else begin
                 // C.ADD = add rd, rd, rs2
+                `LOGI("C.ADD");
                 id_o.opcode    = OPCODE_OP;
                 id_o.rd        = instr_i[11:7];
                 id_o.rs1       = instr_i[11:7];
@@ -3094,13 +3117,15 @@ endmodule
 //------------------------------------
 // sram
 //------------------------------------
-module sram (
+module sram #(
+  parameter logic DATAONLY = 0
+) (
   input logic clk,
   input logic rst_n,
   memif.slave mif
 );
   // localparam addr_t MAX = 128 * 1024 * 1024;
-  localparam addr_t MAX = 12 * 1024;
+  localparam addr_t MAX = 32 * 1024;
   typedef logic [$clog2(MAX)-1:0] idx_t;
   wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
   logic [7:0] m[MAX];
@@ -3110,8 +3135,12 @@ module sram (
     int fd;
     $value$plusargs("elf=%s", elf);
     if (elf != "") begin
-      elf = {elf, ".hex"};
-      fd  = $fopen(elf, "r");
+      if (DATAONLY) begin
+        elf = {elf, ".data"};
+      end else begin
+        elf = {elf, ".hex"};
+      end
+      fd = $fopen(elf, "r");
       if (fd != 0) begin
         $fclose(fd);
         $readmemh(elf, m);
