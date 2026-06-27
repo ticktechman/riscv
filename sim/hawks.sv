@@ -82,6 +82,7 @@ package hawks;
     longint unsigned END;
   } mmap_t;
 
+  // for opensbi + linux + busybox
   // parameter mmap_t mapping[SLAVE_CNT] = '{
   //     '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
   //     '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
@@ -91,6 +92,8 @@ package hawks;
   //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
   //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
   // };
+
+  // for normal dev and test
   parameter mmap_t mapping[SLAVE_CNT] = '{
       '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
       '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
@@ -572,6 +575,15 @@ package hawks;
     logic        A;       // 已访问位 (Accessed)
   } tlb_entry_t;
 
+  function automatic logic check_file_exist(string name);
+    int fd = $fopen(name, "r");
+    if (fd != 0) begin
+      $fclose(fd);
+      return 1;
+    end else begin
+      return 0;
+    end
+  endfunction
 
 endpackage
 
@@ -698,25 +710,24 @@ module soc (
 
   import "DPI-C" function int elf_parse_mapping(
     input  string elf_path,
-    output mmap_t mapping [SLAVE_CNT]
+    output mmap_t mapping [3]
   );
 
   mmap_t maps[SLAVE_CNT] = '{default: 0};
+  mmap_t elfmaps[3] = '{default: 0};
   int fd, ret;
   initial begin : mmaps
     string elf;
     maps = mapping;
     $value$plusargs("elf=%s", elf);
-    if (elf != "") begin
-      fd = $fopen(elf, "r");
-      if (fd != 0) begin
-        $fclose(fd);
-        ret = elf_parse_mapping(elf, maps);
-        `LOGI($sformatf("sections for %s", elf));
-        for (int i = 0; i < SLAVE_CNT; i++) begin
-          `LOGI($sformatf("maps[%0d] base:%0h end:%0h", i, maps[i].BASE, maps[i].END));
-        end
-      end else begin
+    if (elf != "" && check_file_exist(elf) == 1) begin
+      ret = elf_parse_mapping(elf, elfmaps);
+      `LOGI($sformatf("sections for %s", elf));
+      for (int i = 0; i < 3; i++) begin
+        maps[i] = elfmaps[i];
+      end
+      foreach (maps[i]) begin
+        `LOGI($sformatf("maps[%0d] 0x%0h ~ 0x%0h", i, maps[i].BASE, maps[i].END));
       end
     end
   end
