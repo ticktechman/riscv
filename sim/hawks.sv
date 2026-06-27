@@ -11,7 +11,7 @@
 `timescale 1ns / 100ps
 
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -20,6 +20,8 @@ package hawks;
   localparam int unsigned MASTER_CNT = 3;
   localparam int unsigned SLAVE_CNT = 7;
   localparam int unsigned REGMAX = 32;
+  localparam int unsigned KB = 1024;
+  localparam int unsigned MB = 1024 * KB;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
 `ifdef DEBUG_LOG
@@ -55,6 +57,22 @@ package hawks;
 
   `define overlap(s1, t1, s2, t2) ((s1>=s2 && s1<=s2+databytes(t2)) || (s2>=s1 && s2<s1+databytes(t1)))
 
+  `define elf_load(surfix, data) \
+    begin \
+      string elf; \
+      int fd; \
+      $value$plusargs("elf=%s", elf); \
+      if (elf != "") begin \
+        elf = {elf, surfix}; \
+        fd  = $fopen(elf, "r"); \
+        if (fd != 0) begin \
+          $fclose(fd); \
+          $readmemh(elf, data); \
+          `LOGI($sformatf("load %s", elf)); \
+        end \
+      end \
+    end\
+
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
   typedef logic [31:0] instr_t;
@@ -64,25 +82,24 @@ package hawks;
     longint unsigned END;
   } mmap_t;
 
-  // clint (0x02000000~0x0200ffff)
-  parameter mmap_t mapping[SLAVE_CNT] = '{
-      '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
-      '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
-      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8fff_ffff)},  // sram
-      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
-      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
-      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
-      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
-  };
   // parameter mmap_t mapping[SLAVE_CNT] = '{
-  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
-  //     '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-  //     '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
-  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
-  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
-  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
-  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+  //     '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
+  //     '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
+  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8fff_ffff)},  // sram
+  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
+  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
+  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
+  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
   // };
+  parameter mmap_t mapping[SLAVE_CNT] = '{
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
+      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
+      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+  };
 
   typedef enum {
     S8,
@@ -555,6 +572,7 @@ package hawks;
     logic        A;       // 已访问位 (Accessed)
   } tlb_entry_t;
 
+
 endpackage
 
 import hawks::*;
@@ -603,7 +621,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(2000000000)
+    .COUNTER(3000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -772,7 +790,7 @@ module soc (
     .amo_op_i(id_out.amo_op),
     .amo_valid_i(stage == STG_AMO),
     .addr_i(mem_addr),
-    .amo_addr_i(rf.master.v1),  // rs1_val
+    .amo_addr_i(rf.master.v1),
     .wd_i(mem_wd),
     .amo_wd_i(amo_wd),
     .rd_o(wb_mem),
@@ -842,16 +860,18 @@ module soc (
     .mif(master_ports[2].master)
   );
 
-  rom rom1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .mif(slave_ports[0].slave)
-  );
-  // sram sram1 (
+  // rom rom1 (
   //   .clk(clk),
   //   .rst_n(rst_n),
   //   .mif(slave_ports[0].slave)
   // );
+  sram #(
+    .CAPS_IN_BYTES(12 * KB)
+  ) sram1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[0].slave)
+  );
 
   scoreboard SB (
     .clk(clk),
@@ -1006,9 +1026,6 @@ module soc (
           end else begin
             if (exc_stage != STG_IDLE) begin
               `LOGE($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
-              // if (exc[0].cause != 9) begin
-              //   $display("exc cause:%0d pc:%0h priv:%0d msatus:%h", exc[0].cause, pc, priv, mstatus);
-              // end
               exc_stage <= STG_IDLE;
             end
             if (stage_ready[4]) begin
@@ -3038,37 +3055,22 @@ endmodule
 // sram
 //------------------------------------
 module sram #(
-  parameter logic DATAONLY = 0
+  parameter logic DATAONLY = 0,
+  parameter int unsigned CAPS_IN_BYTES = 256 * MB
 ) (
   input logic clk,
   input logic rst_n,
   memif.slave mif
 );
-  localparam addr_t MAX = 256 * 1024 * 1024;
-  typedef logic [$clog2(MAX)-1:0] idx_t;
-  wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
-  logic [7:0] m[MAX];
+  typedef logic [$clog2(CAPS_IN_BYTES)-1:0] idx_t;
+  wire idx_t idx = mif.addr[$clog2(CAPS_IN_BYTES)-1:0];
+  logic [7:0] m[CAPS_IN_BYTES];
 
   initial begin
-    string elf;
-    int fd;
-    $value$plusargs("elf=%s", elf);
-    if (elf != "") begin
-      if (DATAONLY) begin
-        elf = {elf, ".data"};
-      end else begin
-        elf = {elf, ".hex"};
-      end
-      fd = $fopen(elf, "r");
-      if (fd != 0) begin
-        $fclose(fd);
-        $readmemh(elf, m);
-        `LOGI($sformatf("ram load %s", elf));
-      end
+    if (DATAONLY) begin
+      `elf_load(".data", m);
     end else begin
-      foreach (m[i]) begin
-        m[i] = '0;
-      end
+      `elf_load(".hex", m);
     end
   end
 
@@ -3123,27 +3125,13 @@ module rom (
   input logic rst_n,
   memif.slave mif
 );
-  // localparam addr_t SIZE = 4 * 1024 * 1024;
-  localparam addr_t SIZE = 12 * 1024;
-  // localparam string HEX = "isa/wfi.hex";
+  localparam addr_t SIZE = 12 * KB;
   localparam BITS = $clog2(SIZE);
   wire [BITS-1:0] idx = mif.addr[BITS-1:0];
   logic [7:0] mem[SIZE];
 
   initial begin
-    string elf;
-    int fd;
-    // $value$plusargs("elf=%s", elf);
-    if (elf != "") begin
-      elf = {elf, ".hex"};
-      fd  = $fopen(elf, "r");
-      if (fd != 0) begin
-        $fclose(fd);
-        $readmemh(elf, mem);
-        `LOGI($sformatf("rom load %s", elf));
-      end
-    end else begin
-    end
+    `elf_load(".hex", mem);
   end
 
   // bypass RAW
