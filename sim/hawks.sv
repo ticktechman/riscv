@@ -20,7 +20,6 @@ package hawks;
   localparam int unsigned MASTER_CNT = 3;
   localparam int unsigned SLAVE_CNT = 7;
   localparam int unsigned REGMAX = 32;
-  // localparam addr_t BOOT_ADDR = 64'h8000_2000;
   localparam addr_t BOOT_ADDR = 64'h8000_0000;
 
 `ifdef DEBUG_LOG
@@ -66,24 +65,24 @@ package hawks;
   } mmap_t;
 
   // clint (0x02000000~0x0200ffff)
-  // parameter mmap_t mapping[SLAVE_CNT] = '{
-  //     '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
-  //     '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
-  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h88ff_ffff)},  // sram
-  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
-  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
-  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
-  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
-  // };
   parameter mmap_t mapping[SLAVE_CNT] = '{
-      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
-      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
-      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
-      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
-      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
-      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+      '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
+      '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8fff_ffff)},  // sram
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
   };
+  // parameter mmap_t mapping[SLAVE_CNT] = '{
+  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
+  //     '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
+  //     '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
+  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
+  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
+  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
+  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+  // };
 
   typedef enum {
     S8,
@@ -604,7 +603,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(80000)
+    .COUNTER(2000000000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -843,16 +842,16 @@ module soc (
     .mif(master_ports[2].master)
   );
 
-  // rom rom1 (
-  //   .clk(clk),
-  //   .rst_n(rst_n),
-  //   .mif(slave_ports[2].slave)
-  // );
-  sram sram1 (
+  rom rom1 (
     .clk(clk),
     .rst_n(rst_n),
     .mif(slave_ports[0].slave)
   );
+  // sram sram1 (
+  //   .clk(clk),
+  //   .rst_n(rst_n),
+  //   .mif(slave_ports[0].slave)
+  // );
 
   scoreboard SB (
     .clk(clk),
@@ -861,7 +860,7 @@ module soc (
   );
 
   sram #(
-    .DATAONLY(1)
+    .DATAONLY(0)
   ) sram2 (
     .clk(clk),
     .rst_n(rst_n),
@@ -943,6 +942,7 @@ module soc (
         end
         STG_FETCH: begin
           if (stage_ready[0]) begin
+            // $display("%0h", pc);
             if (exc[1].fired) begin
               stage <= STG_WB;
               exc_stage <= stage;
@@ -1006,6 +1006,9 @@ module soc (
           end else begin
             if (exc_stage != STG_IDLE) begin
               `LOGE($sformatf("exc at stage: %0d cause:%0d", exc_stage, exc[0].cause));
+              // if (exc[0].cause != 9) begin
+              //   $display("exc cause:%0d pc:%0h priv:%0d msatus:%h", exc[0].cause, pc, priv, mstatus);
+              // end
               exc_stage <= STG_IDLE;
             end
             if (stage_ready[4]) begin
@@ -1310,6 +1313,7 @@ module idu (
   logic [2:0] f3;
   logic [6:0] f7;
   logic [9:0] fc;
+  logic [7:0] amo;
   imm_type_e imm_type;
   logic [4:0] code;
 
@@ -1326,6 +1330,7 @@ module idu (
         f3          = instr_i[14:12];
         f7          = instr_i[31:25];
         fc          = {f7, f3};
+        amo         = {f7[6:2], f3};
         rif.r1      = instr_i[19:15];
         rif.r2      = instr_i[24:20];
 
@@ -1625,216 +1630,128 @@ module idu (
             wb_src_o       = WB_SRC_AMO;
             id_o.op_s1     = OP_SRC_AMO;
             id_o.op_s2     = OP_SRC_REG;
-            unique case (fc)
-              {
-                7'b0001000, 3'b010
-              }, {
-                7'b0001011, 3'b010
-              } : begin
+            unique case (amo)
+              8'b00010010: begin
                 wb_src_o    = WB_SRC_MEM;
                 id_o.amo_op = AMO_LRW;
                 id_o.ld_op  = LD_LW;
               end
-              {
-                7'b0001100, 3'b010
-              }, {
-                7'b0001101, 3'b010
-              } : begin
+              8'b00011010: begin
                 wb_src_o    = WB_SRC_MEM;
                 id_o.amo_op = AMO_SCW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b0001000, 3'b011
-              }, {
-                7'b0001011, 3'b011
-              } : begin
+              8'b00010011: begin
                 wb_src_o    = WB_SRC_MEM;
                 id_o.amo_op = AMO_LR;
                 id_o.ld_op  = LD_LD;
               end
-              {
-                7'b0001100, 3'b011
-              }, {
-                7'b0001101, 3'b011
-              } : begin
+              8'b00011011: begin
                 wb_src_o    = WB_SRC_MEM;
                 id_o.amo_op = AMO_SC;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b0000100, 3'b010
-              }, {
-                7'b0000111, 3'b010
-              } : begin
+              8'b00001010: begin
                 id_o.amo_op = AMO_SWAPW;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b0000000, 3'b010
-              }, {
-                7'b0000011, 3'b010
-              } : begin
+              8'b00000010: begin
                 id_o.amo_op = AMO_ADDW;
                 id_o.alu_op = ALU_ADDW;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b0010000, 3'b010
-              }, {
-                7'b0010011, 3'b010
-              } : begin
+              8'b00100010: begin
                 id_o.amo_op = AMO_XORW;
                 id_o.alu_op = ALU_XOR;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b0100000, 3'b010
-              }, {
-                7'b0100011, 3'b010
-              } : begin
+              8'b01000010: begin
                 id_o.amo_op = AMO_ORW;
                 id_o.alu_op = ALU_OR;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b0110000, 3'b010
-              }, {
-                7'b0110011, 3'b010
-              } : begin
+              8'b01100010: begin
                 id_o.amo_op = AMO_ANDW;
                 id_o.alu_op = ALU_AND;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b1000000, 3'b010
-              }, {
-                7'b1000011, 3'b010
-              } : begin
+              8'b10000010: begin
                 id_o.amo_op = AMO_MINW;
                 id_o.alu_op = ALU_SLT;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b1010000, 3'b010
-              }, {
-                7'b1010011, 3'b010
-              } : begin
+              8'b10100010: begin
                 id_o.amo_op = AMO_MAXW;
                 id_o.alu_op = ALU_SLT;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b1100000, 3'b010
-              }, {
-                7'b1100011, 3'b010
-              } : begin
+              8'b11000010: begin
                 id_o.amo_op = AMO_MINUW;
                 id_o.alu_op = ALU_SLTU;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b1110000, 3'b010
-              }, {
-                7'b1110011, 3'b010
-              } : begin
+              8'b11100010: begin
                 id_o.amo_op = AMO_MAXUW;
                 id_o.alu_op = ALU_SLTU;
                 id_o.ld_op  = LD_LW;
                 id_o.sd_op  = SD_SW;
               end
-              {
-                7'b0000100, 3'b011
-              }, {
-                7'b0000111, 3'b011
-              } : begin
+              8'b00001011: begin
                 id_o.amo_op = AMO_SWAP;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b0000000, 3'b011
-              }, {
-                7'b0000011, 3'b011
-              } : begin
+              8'b00000011: begin
                 id_o.amo_op = AMO_ADD;
                 id_o.alu_op = ALU_ADD;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b0010000, 3'b011
-              }, {
-                7'b0010011, 3'b011
-              } : begin
+              8'b00100011: begin
                 id_o.amo_op = AMO_XOR;
                 id_o.alu_op = ALU_XOR;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b0100000, 3'b011
-              }, {
-                7'b0100011, 3'b011
-              } : begin
+              8'b01000011: begin
                 id_o.amo_op = AMO_OR;
                 id_o.alu_op = ALU_OR;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b0110000, 3'b011
-              }, {
-                7'b0110011, 3'b011
-              } : begin
+              8'b01100011: begin
                 id_o.amo_op = AMO_AND;
                 id_o.alu_op = ALU_AND;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b1000000, 3'b011
-              }, {
-                7'b1000011, 3'b011
-              } : begin
+              8'b10000011: begin
                 id_o.amo_op = AMO_MIN;
                 id_o.alu_op = ALU_SLT;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b1010000, 3'b011
-              }, {
-                7'b1010011, 3'b011
-              } : begin
+              8'b10100011: begin
                 id_o.amo_op = AMO_MAX;
                 id_o.alu_op = ALU_SLT;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b1100000, 3'b011
-              }, {
-                7'b1100011, 3'b011
-              } : begin
+              8'b11000011: begin
                 id_o.amo_op = AMO_MINU;
                 id_o.alu_op = ALU_SLTU;
                 id_o.ld_op  = LD_LD;
                 id_o.sd_op  = SD_SD;
               end
-              {
-                7'b1110000, 3'b011
-              }, {
-                7'b1110011, 3'b011
-              } : begin
+              8'b11100011: begin
                 id_o.amo_op = AMO_MAXU;
                 id_o.alu_op = ALU_SLTU;
                 id_o.ld_op  = LD_LD;
@@ -2991,6 +2908,9 @@ module lsu (
       if (state == MAPPING && mapif.ready == 1) begin
         if (mapif.error) begin
           ecause  = load ? EXC_LOAD_PAGE_FAULT : EXC_STORE_PAGE_FAULT;
+          // if (ecause == EXC_STORE_PAGE_FAULT) begin
+          //   // $display("exc va:%0h", mapif.va);
+          // end
           ready_o = 1;
         end
       end
@@ -3009,7 +2929,7 @@ module lsu (
       `LOGE($sformatf("exc, cause: 0x%0h", ecause));
       exc_o.fired = 1;
       exc_o.cause = ecause;
-      exc_o.eval  = 0;
+      exc_o.eval  = addr;
     end else begin
       exc_o.fired = 0;
     end
@@ -3124,8 +3044,7 @@ module sram #(
   input logic rst_n,
   memif.slave mif
 );
-  // localparam addr_t MAX = 128 * 1024 * 1024;
-  localparam addr_t MAX = 32 * 1024;
+  localparam addr_t MAX = 256 * 1024 * 1024;
   typedef logic [$clog2(MAX)-1:0] idx_t;
   wire idx_t idx = mif.addr[$clog2(MAX)-1:0];
   logic [7:0] m[MAX];
@@ -3214,7 +3133,7 @@ module rom (
   initial begin
     string elf;
     int fd;
-    $value$plusargs("elf=%s", elf);
+    // $value$plusargs("elf=%s", elf);
     if (elf != "") begin
       elf = {elf, ".hex"};
       fd  = $fopen(elf, "r");
@@ -3427,6 +3346,7 @@ module mmu (
         end else begin
           `LOGE($sformatf("dmap error: %b %b", dcheck, lcheck));
           `LOGTLB("dtlb", dtlb);
+          // $display("dmap: dcheck: %b, lcheck: %b", dcheck, lcheck);
           dmapif.ready <= 1;
           dmapif.error <= 1;
         end
@@ -3836,6 +3756,7 @@ module csr (
   logic strap;
   mstatus_t status;
   mcause_e cause;
+  reg_t eval;
   reg_t epc;
   priviledge_e priv_next;
 
@@ -3848,6 +3769,7 @@ module csr (
     status        = '0;
     cause         = EXC_NONE;
     epc           = '0;
+    eval          = '0;
     priv_next     = M_USER;
     trap_o        = 0;
     trap_target_o = '0;
@@ -3863,6 +3785,7 @@ module csr (
       if (strap) begin
         // strap
         cause         = exc_i.cause;
+        eval          = exc_i.eval;
         epc           = pc_i;
         priv_next     = M_SUPER;
         status        = mstatus;
@@ -3874,6 +3797,7 @@ module csr (
       end else begin
         // mtrap
         cause         = exc_i.cause;
+        eval          = exc_i.eval;
         epc           = pc_i;
         priv_next     = M_MACHINE;
         status        = mstatus;
@@ -3949,12 +3873,14 @@ module csr (
           sepc <= epc;
           scause <= cause;
           mstatus <= status;
+          stval <= eval;
         end else begin
           `LOGW("mtrap");
           priv <= priv_next;
           mepc <= epc;
           mcause <= cause;
           mstatus <= status;
+          mtval <= eval;
         end
       end else if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
         mstatus <= status;
