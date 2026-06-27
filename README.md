@@ -12,4 +12,4 @@ rv64ima soc running linux on xilinx A7 100T
 
 busybox:
 
-<img src="/Users/ticktech/usr/project/github/riscv/docs/images/hawks.png" alt="hawks" style="zoom:33%;" />
+<img src="docs/images/hawks.png" alt="hawks" style="zoom:33%;" />
