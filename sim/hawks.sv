@@ -3673,7 +3673,7 @@ module csr (
       PMPCFG0:    rd = '0;
       PMPADDR0:   rd = '0;
       default: begin
-        rd = '0;
+        rd      = '0;
         unexist = 1;
       end
     endcase
@@ -3684,9 +3684,9 @@ module csr (
   logic write;
   logic cy, tm, ir;
   always_comb begin
-    next = 0;
-    illegal = 0;
-    write = 1;
+    next        = 0;
+    illegal     = 0;
+    write       = 1;
     exc_o.fired = 0;
     if (valid) begin
       // `LOGI($sformatf("op:%0d op1:0x%0h, rd:0x%0h", op_i, op1_i, rd));
@@ -3823,6 +3823,9 @@ module csr (
               end
               MCOUNTEREN: mcounteren <= next[31:0];
               SCOUNTEREN: mcounteren <= next[31:0];
+              FCSR: fcsr <= next[31:0];
+              FRM: fcsr.frm <= next[2:0];
+              FFLAGS: fcsr.fflags <= next[4:0];
               default: ;
             endcase
           end
