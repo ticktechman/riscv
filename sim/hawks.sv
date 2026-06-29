@@ -301,6 +301,11 @@ package hawks;
   } amo_op_e;
 
   typedef enum logic [11:0] {
+    // FPU related
+    FFLAGS = 12'h000,
+    FRM    = 12'h001,
+    FCSR   = 12'h002,
+
     // csr register in unprivilege mode
     CYCLE   = 12'hC00,
     TIME    = 12'hC01,
@@ -575,6 +580,77 @@ package hawks;
     logic        A;       // 已访问位 (Accessed)
   } tlb_entry_t;
 
+
+  //------------------------------------
+  // rv64fd related data defination
+  //------------------------------------
+  typedef struct packed {
+    logic nv;  // Bit 4: 无效运算 (Invalid Operation) -> 如 0/0, Inf-Inf, 负数开根
+    logic dz;  // Bit 3: 除以零 (Divide by Zero)     -> 如 1.0 / 0.0
+    logic of;  // Bit 2: 溢出 (Overflow)             -> 结果超出当前精度最大表达范围
+    logic uf;  // Bit 1: 下溢 (Underflow)            -> 结果太小，变为次正规数或0
+    logic nx;  // Bit 0: 不精确 (Inexact)             -> 舍入带来精度丢失（最常见）
+  } fflags_t;
+
+  typedef enum logic [2:0] {
+    RNE = 3'b000,  // Round to Nearest, ties to Even (最近偶数，默认)
+    RTZ = 3'b001,  // Round towards Zero (向零舍入/截断)
+    RDN = 3'b010,  // Round Down, towards -Infinity (向下舍入)
+    RUP = 3'b011,  // Round Up, towards +Infinity (向上舍入)
+    RMM = 3'b100,  // Round to Nearest, ties to Max Magnitude (最近最大值)
+    DYN = 3'b111   // Dynamic Rounding Mode (使用 fcsr.frm 中的动态配置)
+  } frm_e;
+
+  typedef struct packed {
+    logic [23:0] reserved;  // Bits [31:8]: 预留，只读固定为 0
+    logic [2:0]  frm;       // Bits [7:5] : Dynamic Rounding Mode
+    fflags_t     fflags;    // Bits [4:0] : Accrued Exceptions
+  } fcsr_t;
+
+  typedef enum logic [6:0] {
+    FOP_NONE = 7'b00_00000,
+
+    // add / sub / fma
+    FOP_ADD   = 7'b00_00001,
+    FOP_SUB   = 7'b00_00010,
+    FOP_MADD  = 7'b00_00011,
+    FOP_MSUB  = 7'b00_00100,
+    FOP_NMADD = 7'b00_00101,
+    FOP_NMSUB = 7'b00_00110,
+
+    // mul
+    FOP_MUL = 7'b01_00000,
+
+    // div
+    FOP_DIV  = 7'b10_00000,
+    FOP_SQRT = 7'b10_00001,
+
+    // misc
+    FOP_CMP_EQ   = 7'b11_00000,
+    FOP_CMP_LT   = 7'b11_00001,
+    FOP_CMP_LE   = 7'b11_00010,
+    FOP_MIN      = 7'b11_00011,
+    FOP_MAX      = 7'b11_00100,
+    FOP_CLASS    = 7'b11_00101,
+    FOP_SGNJ     = 7'b11_00110,
+    FOP_SGNJN    = 7'b11_00111,
+    FOP_SGNJX    = 7'b11_01000,
+    FOP_CVT_W_F  = 7'b11_01001,
+    FOP_CVT_WU_F = 7'b11_01010,
+    FOP_CVT_L_F  = 7'b11_01011,
+    FOP_CVT_LU_F = 7'b11_01100,
+    FOP_CVT_F_W  = 7'b11_01101,
+    FOP_CVT_F_WU = 7'b11_01110,
+    FOP_CVT_F_L  = 7'b11_01111,
+    FOP_CVT_F_LU = 7'b11_10000,
+    FOP_CVT_S_D  = 7'b11_10001,
+    FOP_CVT_D_S  = 7'b11_10010,
+    FOP_MV_X_W   = 7'b11_10011,  // FMV.X.W
+    FOP_MV_W_X   = 7'b11_10100,  // FMV.W.X
+    FOP_MV_X_D   = 7'b11_10101,  // FMV.X.D
+    FOP_MV_D_X   = 7'b11_10110   // FMV.D.X
+  } fop_e;
+
   function automatic logic check_file_exist(string name);
     int fd = $fopen(name, "r");
     if (fd != 0) begin
@@ -603,10 +679,10 @@ interface memif;
 endinterface
 
 interface regif;
-  logic [4:0] r1, r2;
-  reg_t v1, v2;
-  modport master(output r1, r2, input v1, v2);
-  modport slave(input r1, r2, output v1, v2);
+  logic [4:0] r1, r2, r3;
+  reg_t v1, v2, v3;
+  modport master(output r1, r2, r3, input v1, v2, v3);
+  modport slave(input r1, r2, r3, output v1, v2, v3);
 endinterface
 
 interface mmapingif;
@@ -720,7 +796,7 @@ module soc (
     string elf;
     maps = mapping;
     $value$plusargs("elf=%s", elf);
-    if (elf != "" && check_file_exist(elf) == 1) begin
+    if (check_file_exist(elf) == 1) begin
       ret = elf_parse_mapping(elf, elfmaps);
       `LOGI($sformatf("sections for %s", elf));
       for (int i = 0; i < 3; i++) begin
@@ -3548,6 +3624,7 @@ module csr (
   mcounteren_t mcounteren, scounteren;
   priviledge_e priv;
   mcause_e ecause;
+  fcsr_t fcsr;
 
   // assign reg for mmu
   always_comb begin
@@ -3589,6 +3666,9 @@ module csr (
       MARCHID:    rd = marchid;
       MIMPID:     rd = mimpid;
       TIME:       rd = mtime;
+      FFLAGS:     rd = {59'b0, fcsr.fflags};
+      FRM:        rd = {61'b0, fcsr.frm};
+      FCSR:       rd = {32'b0, fcsr};
       MNSTATUS:   rd = '0;
       PMPCFG0:    rd = '0;
       PMPADDR0:   rd = '0;
@@ -4522,6 +4602,39 @@ module scoreboard (
           $write("%sFAIL:%0d%s", `COLOR_RED, mif.wd, `COLOR_NONE);
         end
         $finish(0);
+      end
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// fpu related modules
+//------------------------------------
+module fpr (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic [4:0] rd_i,
+  input logic fpr_src_i,
+  input reg_t wb_fpu_i,
+  input reg_t wb_mem_i,
+  regif.slave rif
+);
+  reg_t f[REGMAX];
+
+  always_comb begin
+    rif.v1 = f[rif.r1];
+    rif.v2 = f[rif.r2];
+    rif.v3 = f[rif.r3];
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      foreach (f[i]) f[i] <= '0;
+    end else begin
+      if (valid) begin
+        f[rd_i] <= fpr_src_i ? wb_fpu_i : wb_mem_i;
       end
     end
   end
