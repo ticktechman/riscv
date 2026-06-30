@@ -52,6 +52,7 @@ package hawks;
   `define BU2R(r, a) {{56'b0}, r[a]}
   `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
   `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
+  `define FW2R(r, a) {{32'b1}, r[a+3], r[a+2], r[a+1], r[a]}
   `define WU2I(r, a) {r[a+3], r[a+2], r[a+1], r[a]}
   `define write_data(r, off, data, sz) for (idx_t i = 0; i < sz; i++) r[off+i] <= data[8*i+:8]
 
@@ -111,15 +112,17 @@ package hawks;
     U16,
     S32,
     U32,
-    US64
+    F32,
+    US64,
+    F64
   } datatype_e;
 
   function automatic addr_t databytes(datatype_e dtype);
     unique case (dtype)
-      S8, U8:   return 64'd1;
+      S8, U8: return 64'd1;
       S16, U16: return 64'd2;
-      S32, U32: return 64'd4;
-      default:  return 64'd8;
+      S32, U32, F32: return 64'd4;
+      default: return 64'd8;
     endcase
   endfunction
 
@@ -202,7 +205,16 @@ package hawks;
     OPCODE_BRANCH    = 7'b1100011,  // Branch (beq, bne, blt...)
     OPCODE_JALR      = 7'b1100111,  // JALR
     OPCODE_JAL       = 7'b1101111,  // JAL
-    OPCODE_SYSTEM    = 7'b1110011   // ECALL, EBREAK, CSRR*
+    OPCODE_SYSTEM    = 7'b1110011,  // ECALL, EBREAK, CSRR*
+
+    // FPU related
+    OPCODE_FP_LOAD  = 7'b0000111,  // Floating-point Load (flw, fld, flh...)
+    OPCODE_FP_STORE = 7'b0100111,  // Floating-point Store (fsw, fsd, fsh...)
+    OPCODE_FMADD    = 7'b1000011,  // Fused Multiply-Add (fmadd.s, fmadd.d...)
+    OPCODE_FMSUB    = 7'b1000111,  // Fused Multiply-Sub (fmsub.s, fmsub.d...)
+    OPCODE_FNMSUB   = 7'b1001011,  // Negated Fused Multiply-Sub (fnmsub.s...)
+    OPCODE_FNMADD   = 7'b1001111,  // Negated Fused Multiply-Add (fnmadd.s...)
+    OPCODE_FP_OP    = 7'b1010011   // FP reg-reg ops (fadd, fsub, fcvt, fmv...)
   } opcode_e;
 
   typedef enum {
@@ -360,7 +372,9 @@ package hawks;
     LD_LD,
     LD_LBU,   // 5
     LD_LHU,
-    LD_LWU
+    LD_LWU,
+    LD_LFW,   // float
+    LD_LFD    // double
   } ld_op_e;
 
   typedef enum {
@@ -368,7 +382,9 @@ package hawks;
     SD_SB,
     SD_SH,
     SD_SW,
-    SD_SD
+    SD_SD,
+    SD_SFW,
+    SD_SFD
   } sd_op_e;
 
   typedef enum {
@@ -388,17 +404,23 @@ package hawks;
     ld_op_e   ld_op;
     sd_op_e   sd_op;
     amo_op_e  amo_op;
+    fop_e     fop;
 
     logic [4:0]  rs1;
     logic [4:0]  rs2;
+    logic [4:0]  rs3;
     logic [4:0]  rd;
     logic [4:0]  csr_imm;
     logic [11:0] csr;
     logic        reg_write;
+    logic        fpr_write;
     logic        rvc;
+    logic        single;
+    logic [2:0]  frm;
 
     op_src_e op_s1;
     op_src_e op_s2;
+    op_src_e op_s3;
     reg_t    imm;
   } id_t;
 
@@ -407,7 +429,8 @@ package hawks;
     WB_SRC_ALU,
     WB_SRC_MEM,
     WB_SRC_AMO,
-    WB_SRC_CSR
+    WB_SRC_CSR,
+    WB_SRC_FPU
   } wb_src_e;
 
   typedef enum logic [1:0] {
@@ -643,12 +666,10 @@ package hawks;
     FOP_CVT_F_WU = 7'b11_01110,
     FOP_CVT_F_L  = 7'b11_01111,
     FOP_CVT_F_LU = 7'b11_10000,
-    FOP_CVT_S_D  = 7'b11_10001,
-    FOP_CVT_D_S  = 7'b11_10010,
-    FOP_MV_X_W   = 7'b11_10011,  // FMV.X.W
-    FOP_MV_W_X   = 7'b11_10100,  // FMV.W.X
-    FOP_MV_X_D   = 7'b11_10101,  // FMV.X.D
-    FOP_MV_D_X   = 7'b11_10110   // FMV.D.X
+    FOP_CVT_S_D  = 7'b11_10001,  // fcvt.s.d = double to single
+    FOP_CVT_D_S  = 7'b11_10010,  // fcvt.d.s = single to double
+    FOP_MV_X_F   = 7'b11_10011,  // FMV.X.W = mv single / double to integer
+    FOP_MV_F_X   = 7'b11_10110   // FMV.D.X = mv integer to double / single
   } fop_e;
 
   function automatic logic check_file_exist(string name);
@@ -770,7 +791,7 @@ module soc (
   output logic halt_o
 );
 
-  logic stage_ready[5];
+  logic stage_ready[6];
   logic btaken, ttaken;
   wb_src_e wb_src;
   reg_t wb_alu, wb_amo, wb_csr, wb_mem;
@@ -839,7 +860,8 @@ module soc (
     .exc_o(exc[2]),
     .id_o(id_out),
     .wb_src_o(wb_src),
-    .rif(rf.master)
+    .rif(rf.master),
+    .fif(fprif)
   );
 
   exu exu1 (
@@ -859,6 +881,26 @@ module soc (
     .mem_wd_o(mem_wd),
     .amo_wd_o(amo_wd),
     .rif(rf.master)
+  );
+
+  fop_e fop;
+  regif fprif ();
+  fflags_t fflags;
+  reg_t wb_fpu2gpr;
+  reg_t wb_fpu2fpr;
+  logic [2:0] frm;
+  fpu fpu1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(stage == STG_EXEC),
+    .op_i(id_out.fop),
+    .single_i(id_out.single),
+    .rm_i(frm),
+    .rif(fprif.master),
+    .wb_gpr_o(wb_fpu2gpr),  // to rfu
+    .wb_fpr_o(wb_fpu2fpr),  // to fpr
+    .flags_o(fflags),  // to fcsr
+    .ready_o(stage_ready[5])
   );
 
   reg_t mem_wd;
@@ -927,6 +969,7 @@ module soc (
     .trap_o(ttaken),
     .trap_target_o(ttarget),
     .tlb_invalid_o(tlb_invalid),
+    .fflags_i(fflags),
     .time_i(timeval),
     .halt_o(halt),
     .irq_timer_i(itimer),
@@ -1381,6 +1424,7 @@ module idu (
 
   // decode output
   regif.master rif,
+  regif.master fif,
   output id_t id_o,
   output wb_src_e wb_src_o
 );
@@ -1421,6 +1465,11 @@ module idu (
   imm_type_e imm_type;
   logic [4:0] code;
 
+  // fpu related
+  logic [4:0] f5;
+  logic [2:0] rm;
+  logic [1:0] fmt;
+
   always_comb begin : decode
     ecause = EXC_NONE;
     if (valid) begin
@@ -1432,7 +1481,10 @@ module idu (
         id_o.rs2    = instr_i[24:20];
         id_o.rd     = instr_i[11:7];
         f3          = instr_i[14:12];
+        f5          = instr_i[31:27];
         f7          = instr_i[31:25];
+        rm          = instr_i[14:12];
+        fmt         = instr_i[26:25];
         fc          = {f7, f3};
         amo         = {f7[6:2], f3};
         rif.r1      = instr_i[19:15];
@@ -1865,6 +1917,232 @@ module idu (
                 id_o.amo_op = AMO_NONE;
                 `LOGE($sformatf("unknown AMO f7:%b f3:%b", f7, f3));
               end
+            endcase
+          end
+
+          // fload point instruction
+          OPCODE_FP_LOAD: begin
+            id_o.fpr_write = 1;
+            wb_src_o = WB_SRC_MEM;
+            imm_type = IMM_I;
+            id_o.alu_op = ALU_ADD;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_IMM;
+            unique case (instr_i[14:12])
+              3'b010: begin
+                id_o.ld_op  = LD_LFW;
+                id_o.single = 1;
+              end
+              3'b011: begin
+                id_o.ld_op  = LD_LFD;
+                id_o.single = 0;
+              end
+              default: ecause = EXC_ILLEGAL_INSTRUCTION;
+            endcase
+          end
+          OPCODE_FP_STORE: begin
+            id_o.fpr_write = 0;
+            imm_type = IMM_S;
+            id_o.alu_op = ALU_ADD;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_IMM;
+            unique case (instr_i[14:12])
+              3'b010: begin
+                id_o.sd_op  = SD_SFW;
+                id_o.single = 1;
+              end
+              3'b011: begin
+                id_o.sd_op  = SD_SFD;
+                id_o.single = 0;
+              end
+              default: ecause = EXC_ILLEGAL_INSTRUCTION;
+            endcase
+          end
+          OPCODE_FMADD: begin
+            id_o.fpr_write = 1;
+            wb_src_o = WB_SRC_FPU;
+            imm_type = IMM_S;
+            id_o.rs3 = instr_i[31:27];
+            id_o.frm = rm;
+            id_o.fop = FOP_MADD;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            id_o.op_s3 = OP_SRC_REG;
+            fif.r1 = instr_i[19:15];
+            fif.r2 = instr_i[24:20];
+            fif.r3 = instr_i[31:27];
+            unique case (fmt)
+              2'b00:   id_o.single = 1;
+              2'b01:   id_o.single = 0;
+              default: ecause = EXC_ILLEGAL_INSTRUCTION;
+            endcase
+          end
+          OPCODE_FMSUB: begin
+            id_o.fpr_write = 1;
+            wb_src_o = WB_SRC_FPU;
+            id_o.rs3 = instr_i[31:27];
+            id_o.frm = rm;
+            id_o.fop = FOP_MSUB;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            id_o.op_s3 = OP_SRC_REG;
+            fif.r1 = instr_i[19:15];
+            fif.r2 = instr_i[24:20];
+            fif.r3 = instr_i[31:27];
+            unique case (fmt)
+              2'b00:   id_o.single = 1;
+              2'b01:   id_o.single = 0;
+              default: ecause = EXC_ILLEGAL_INSTRUCTION;
+            endcase
+          end
+          OPCODE_FNMADD: begin
+            id_o.fpr_write = 1;
+            wb_src_o = WB_SRC_FPU;
+            id_o.rs3 = instr_i[31:27];
+            id_o.frm = rm;
+            id_o.fop = FOP_NMADD;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            id_o.op_s3 = OP_SRC_REG;
+            fif.r1 = instr_i[19:15];
+            fif.r2 = instr_i[24:20];
+            fif.r3 = instr_i[31:27];
+            unique case (fmt)
+              2'b00:   id_o.single = 1;
+              2'b01:   id_o.single = 0;
+              default: ecause = EXC_ILLEGAL_INSTRUCTION;
+            endcase
+          end
+          OPCODE_FNMSUB: begin
+            id_o.fpr_write = 1;
+            wb_src_o = WB_SRC_FPU;
+            id_o.rs3 = instr_i[31:27];
+            id_o.frm = rm;
+            id_o.fop = FOP_NMSUB;
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            id_o.op_s3 = OP_SRC_REG;
+            fif.r1 = instr_i[19:15];
+            fif.r2 = instr_i[24:20];
+            fif.r3 = instr_i[31:27];
+            unique case (fmt)
+              2'b00:   id_o.single = 1;
+              2'b01:   id_o.single = 0;
+              default: ecause = EXC_ILLEGAL_INSTRUCTION;
+            endcase
+          end
+          OPCODE_FP_OP: begin
+            id_o.frm = rm;
+            fif.r1 = instr_i[19:15];
+            fif.r2 = instr_i[24:20];
+            id_o.op_s1 = OP_SRC_REG;
+            id_o.op_s2 = OP_SRC_REG;
+            id_o.fpr_write = 1;
+            wb_src_o = WB_SRC_FPU;
+            unique case (fmt)
+              2'b00:   id_o.single = 1;
+              2'b01:   id_o.single = 0;
+              default: ecause = EXC_ILLEGAL_INSTRUCTION;
+            endcase
+
+            unique case (f5)
+              5'b00000: id_o.fop = FOP_ADD;
+              5'b00001: id_o.fop = FOP_SUB;
+              5'b00010: id_o.fop = FOP_MUL;
+              5'b00011: id_o.fop = FOP_DIV;
+              5'b01011: begin
+                id_o.fop   = FOP_SQRT;
+                id_o.op_s2 = OP_SRC_NONE;
+              end
+              5'b00100: begin
+                unique case (rm)
+                  3'b000:  id_o.fop = FOP_SGNJ;
+                  3'b001:  id_o.fop = FOP_SGNJN;
+                  3'b010:  id_o.fop = FOP_SGNJX;
+                  default: ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              5'b00101: begin  // min/max
+                unique case (rm)
+                  3'b000:  id_o.fop = FOP_MIN;
+                  3'b001:  id_o.fop = FOP_MAX;
+                  default: ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              5'b11000: begin  // fpr(single/double) -> gpr((U)int)
+                id_o.fpr_write = 0;
+                id_o.reg_write = 1;
+                id_o.op_s1 = OP_SRC_REG;
+                unique case (instr_i[24:20])
+                  5'b00000: id_o.fop = FOP_CVT_W_F;  // ->s32
+                  5'b00001: id_o.fop = FOP_CVT_WU_F;  // ->u32
+                  5'b00010: id_o.fop = FOP_CVT_L_F;  // ->s64
+                  5'b00011: id_o.fop = FOP_CVT_LU_F;  // ->u64
+                  default:  ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              5'b11010: begin  // gpr (U)int -> single / double
+                id_o.fpr_write = 1;
+                id_o.reg_write = 0;
+                rif.r1 = instr_i[19:15];
+                id_o.op_s1 = OP_SRC_REG;
+                unique case (instr_i[24:20])
+                  5'b00000: id_o.fop = FOP_CVT_F_W;
+                  5'b00001: id_o.fop = FOP_CVT_F_WU;
+                  5'b00010: id_o.fop = FOP_CVT_F_L;
+                  5'b00011: id_o.fop = FOP_CVT_F_LU;
+                  default:  ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              5'b10001: begin  // float <-> double
+                id_o.op_s2 = OP_SRC_NONE;
+                unique case (instr_i[24:20])
+                  5'b00000: id_o.fop = FOP_CVT_D_S;
+                  5'b00001: id_o.fop = FOP_CVT_S_D;
+                  default:  ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              5'b11100: begin  // move fpr to gpr
+                id_o.fpr_write = 0;
+                id_o.reg_write = 1;
+                id_o.op_s2 = OP_SRC_NONE;
+                unique case (rm)
+                  3'b000:  id_o.fop = FOP_MV_X_F;
+                  3'b001:  id_o.fop = FOP_CLASS;  // fclass.s
+                  default: ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              5'b11110: begin  // move gpr to fpr
+                unique case (rm)
+                  3'b000: begin
+                    rif.r1 = instr_i[19:15];
+                    id_o.op_s2 = OP_SRC_NONE;
+                    id_o.fop = FOP_MV_F_X;
+                  end
+                  3'b001: begin
+                    id_o.fpr_write = 0;
+                    id_o.reg_write = 1;
+                    id_o.op_s2 = OP_SRC_NONE;
+                    id_o.fop = FOP_CLASS;  // fclass.d
+                  end
+                  default: ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              5'b10100: begin  // fcmp
+                id_o.fpr_write = 0;
+                id_o.reg_write = 1;
+                id_o.op_s1 = OP_SRC_REG;
+                id_o.op_s2 = OP_SRC_REG;
+                rif.r1 = instr_i[19:15];
+                rif.r2 = instr_i[24:20];
+                unique case (instr_i[14:12])
+                  3'b000:  id_o.fop = FOP_CMP_LE;
+                  3'b001:  id_o.fop = FOP_CMP_LT;
+                  3'b010:  id_o.fop = FOP_CMP_EQ;
+                  default: ecause = EXC_ILLEGAL_INSTRUCTION;
+                endcase
+              end
+              default:  ;
             endcase
           end
           OPCODE_FENCE: begin
@@ -3120,6 +3398,8 @@ module lsu (
       SD_SH:   return U16;
       SD_SW:   return U32;
       SD_SD:   return US64;
+      SD_SFW:  return F32;
+      SD_SFD:  return F64;
       default: return US64;
     endcase
   endfunction
@@ -3132,6 +3412,8 @@ module lsu (
       LD_LW:   return S32;
       LD_LWU:  return U32;
       LD_LD:   return US64;
+      LD_LFW:  return F32;
+      LD_LFD:  return F64;
       default: return US64;
     endcase
   endfunction
@@ -3175,6 +3457,8 @@ module sram #(
           U16: mif.rd = `HU2R(m, idx);
           S32: mif.rd = `W2R(m, idx);
           U32: mif.rd = `WU2R(m, idx);
+          F32: mif.rd = `FW2R(m, idx);
+          F64: mif.rd = `D2R(m, idx);
           US64: mif.rd = `D2R(m, idx);
           default: ;
         endcase
@@ -3192,11 +3476,11 @@ module sram #(
       if (mif.valid && mif.we) begin
         `LOGI($sformatf("write M[%0d]=0x%0h type:%0d", idx, mif.wd, mif.dtype));
         unique case (mif.dtype)
-          S8, U8:   `write_data(m, idx, mif.wd, 1);
+          S8, U8: `write_data(m, idx, mif.wd, 1);
           S16, U16: `write_data(m, idx, mif.wd, 2);
-          S32, U32: `write_data(m, idx, mif.wd, 4);
-          US64:     `write_data(m, idx, mif.wd, 8);
-          default:  ;
+          S32, U32, F32: `write_data(m, idx, mif.wd, 4);
+          US64, F64: `write_data(m, idx, mif.wd, 8);
+          default: ;
         endcase
       end
     end
@@ -3584,6 +3868,7 @@ module csr (
   output logic               trap_o,
   output addr_t              trap_target_o,
   input  reg_t               time_i,
+  input  fflags_t            fflags_i,       // fpu fflags
 
   // irq interface
   input  logic irq_timer_i,   // timer int from clint
@@ -4641,6 +4926,25 @@ module fpr (
       end
     end
   end
+endmodule
+
+//------------------------------------
+// FPU top module
+//------------------------------------
+module fpu (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input fop_e op_i,
+  input logic single_i,
+  input logic [2:0] rm_i,
+  regif.master rif,
+
+  output reg_t    wb_gpr_o, // to rfu
+  output reg_t    wb_fpr_o, // to fpr
+  output fflags_t flags_o,  // to fcsr
+  output logic    ready_o
+);
 
 endmodule
 
