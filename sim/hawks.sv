@@ -392,7 +392,8 @@ package hawks;
     OP_SRC_REG,
     OP_SRC_IMM,
     OP_SRC_AMO,
-    OP_SRC_PC
+    OP_SRC_PC,
+    OP_SRC_FPR
   } op_src_e;
 
   typedef struct packed {
@@ -896,11 +897,24 @@ module soc (
     .op_i(id_out.fop),
     .single_i(id_out.single),
     .rm_i(frm),
-    .rif(fprif.master),
+    .fstate_i(mstatus.FS),
+    .rif(rf.master),
+    .fif(fprif.master),
     .wb_gpr_o(wb_fpu2gpr),  // to rfu
     .wb_fpr_o(wb_fpu2fpr),  // to fpr
     .flags_o(fflags),  // to fcsr
     .ready_o(stage_ready[5])
+  );
+
+  fpr fpr1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(stage == STG_WB && id_out.fpr_write == 1),
+    .rd_i(id_out.rd),
+    .wb_src_i(wb_src),
+    .wb_fpu_i(wb_fpu2fpr),
+    .wb_mem_i(wb_mem),
+    .rif(fprif.slave)
   );
 
   reg_t mem_wd;
@@ -1928,6 +1942,7 @@ module idu (
             id_o.alu_op = ALU_ADD;
             id_o.op_s1 = OP_SRC_REG;
             id_o.op_s2 = OP_SRC_IMM;
+            rif.r1 = instr_i[19:15];
             unique case (instr_i[14:12])
               3'b010: begin
                 id_o.ld_op  = LD_LFW;
@@ -1941,11 +1956,11 @@ module idu (
             endcase
           end
           OPCODE_FP_STORE: begin
-            id_o.fpr_write = 0;
             imm_type = IMM_S;
             id_o.alu_op = ALU_ADD;
             id_o.op_s1 = OP_SRC_REG;
             id_o.op_s2 = OP_SRC_IMM;
+            rif.r1 = instr_i[19:15];
             unique case (instr_i[14:12])
               3'b010: begin
                 id_o.sd_op  = SD_SFW;
@@ -1961,13 +1976,12 @@ module idu (
           OPCODE_FMADD: begin
             id_o.fpr_write = 1;
             wb_src_o = WB_SRC_FPU;
-            imm_type = IMM_S;
             id_o.rs3 = instr_i[31:27];
             id_o.frm = rm;
             id_o.fop = FOP_MADD;
-            id_o.op_s1 = OP_SRC_REG;
-            id_o.op_s2 = OP_SRC_REG;
-            id_o.op_s3 = OP_SRC_REG;
+            id_o.op_s1 = OP_SRC_FPR;
+            id_o.op_s2 = OP_SRC_FPR;
+            id_o.op_s3 = OP_SRC_FPR;
             fif.r1 = instr_i[19:15];
             fif.r2 = instr_i[24:20];
             fif.r3 = instr_i[31:27];
@@ -1983,9 +1997,9 @@ module idu (
             id_o.rs3 = instr_i[31:27];
             id_o.frm = rm;
             id_o.fop = FOP_MSUB;
-            id_o.op_s1 = OP_SRC_REG;
-            id_o.op_s2 = OP_SRC_REG;
-            id_o.op_s3 = OP_SRC_REG;
+            id_o.op_s1 = OP_SRC_FPR;
+            id_o.op_s2 = OP_SRC_FPR;
+            id_o.op_s3 = OP_SRC_FPR;
             fif.r1 = instr_i[19:15];
             fif.r2 = instr_i[24:20];
             fif.r3 = instr_i[31:27];
@@ -2001,9 +2015,9 @@ module idu (
             id_o.rs3 = instr_i[31:27];
             id_o.frm = rm;
             id_o.fop = FOP_NMADD;
-            id_o.op_s1 = OP_SRC_REG;
-            id_o.op_s2 = OP_SRC_REG;
-            id_o.op_s3 = OP_SRC_REG;
+            id_o.op_s1 = OP_SRC_FPR;
+            id_o.op_s2 = OP_SRC_FPR;
+            id_o.op_s3 = OP_SRC_FPR;
             fif.r1 = instr_i[19:15];
             fif.r2 = instr_i[24:20];
             fif.r3 = instr_i[31:27];
@@ -2019,9 +2033,9 @@ module idu (
             id_o.rs3 = instr_i[31:27];
             id_o.frm = rm;
             id_o.fop = FOP_NMSUB;
-            id_o.op_s1 = OP_SRC_REG;
-            id_o.op_s2 = OP_SRC_REG;
-            id_o.op_s3 = OP_SRC_REG;
+            id_o.op_s1 = OP_SRC_FPR;
+            id_o.op_s2 = OP_SRC_FPR;
+            id_o.op_s3 = OP_SRC_FPR;
             fif.r1 = instr_i[19:15];
             fif.r2 = instr_i[24:20];
             fif.r3 = instr_i[31:27];
@@ -2035,8 +2049,8 @@ module idu (
             id_o.frm = rm;
             fif.r1 = instr_i[19:15];
             fif.r2 = instr_i[24:20];
-            id_o.op_s1 = OP_SRC_REG;
-            id_o.op_s2 = OP_SRC_REG;
+            id_o.op_s1 = OP_SRC_FPR;
+            id_o.op_s2 = OP_SRC_FPR;
             id_o.fpr_write = 1;
             wb_src_o = WB_SRC_FPU;
             unique case (fmt)
@@ -2072,7 +2086,7 @@ module idu (
               5'b11000: begin  // fpr(single/double) -> gpr((U)int)
                 id_o.fpr_write = 0;
                 id_o.reg_write = 1;
-                id_o.op_s1 = OP_SRC_REG;
+                id_o.op_s2 = OP_SRC_NONE;
                 unique case (instr_i[24:20])
                   5'b00000: id_o.fop = FOP_CVT_W_F;  // ->s32
                   5'b00001: id_o.fop = FOP_CVT_WU_F;  // ->u32
@@ -2082,10 +2096,9 @@ module idu (
                 endcase
               end
               5'b11010: begin  // gpr (U)int -> single / double
-                id_o.fpr_write = 1;
-                id_o.reg_write = 0;
                 rif.r1 = instr_i[19:15];
-                id_o.op_s1 = OP_SRC_REG;
+                id_o.op_s2 = OP_SRC_REG;
+                id_o.op_s2 = OP_SRC_NONE;
                 unique case (instr_i[24:20])
                   5'b00000: id_o.fop = FOP_CVT_F_W;
                   5'b00001: id_o.fop = FOP_CVT_F_WU;
@@ -2116,6 +2129,7 @@ module idu (
                 unique case (rm)
                   3'b000: begin
                     rif.r1 = instr_i[19:15];
+                    id_o.op_s1 = OP_SRC_REG;
                     id_o.op_s2 = OP_SRC_NONE;
                     id_o.fop = FOP_MV_F_X;
                   end
@@ -2131,10 +2145,6 @@ module idu (
               5'b10100: begin  // fcmp
                 id_o.fpr_write = 0;
                 id_o.reg_write = 1;
-                id_o.op_s1 = OP_SRC_REG;
-                id_o.op_s2 = OP_SRC_REG;
-                rif.r1 = instr_i[19:15];
-                rif.r2 = instr_i[24:20];
                 unique case (instr_i[14:12])
                   3'b000:  id_o.fop = FOP_CMP_LE;
                   3'b001:  id_o.fop = FOP_CMP_LT;
@@ -2142,7 +2152,7 @@ module idu (
                   default: ecause = EXC_ILLEGAL_INSTRUCTION;
                 endcase
               end
-              default:  ;
+              default:  ecause = EXC_ILLEGAL_INSTRUCTION;
             endcase
           end
           OPCODE_FENCE: begin
@@ -2160,10 +2170,10 @@ module idu (
         endcase
       end else begin
         // C extension
-        id_o = '0;
+        id_o     = '0;
         id_o.rvc = 1;
         wb_src_o = WB_SRC_NONE;
-        code = {instr_i[1:0], instr_i[15:13]};
+        code     = {instr_i[1:0], instr_i[15:13]};
         unique case (code)
           //----------------
           // Quadrant 0
@@ -2257,14 +2267,15 @@ module idu (
           // TODO C.FLD
           5'b00001: begin
             `LOGI("C.FLD");
-            id_o.opcode    = OPCODE_LOAD;
+            id_o.opcode    = OPCODE_FP_LOAD;
             id_o.imm       = {56'b0, instr_i[6], instr_i[5], instr_i[12], instr_i[11], instr_i[10], 3'b000};
             id_o.rd        = {2'b01, instr_i[4:2]};
             id_o.rs1       = {2'b01, instr_i[9:7]};
             rif.r1         = {2'b01, instr_i[9:7]};
             id_o.alu_op    = ALU_ADD;
-            id_o.reg_write = 1'b1;
-            id_o.ld_op     = LD_LD;
+            id_o.reg_write = 1'b0;
+            id_o.fpr_write = 1'b1;
+            id_o.ld_op     = LD_LFD;
             id_o.op_s1     = OP_SRC_REG;
             id_o.op_s2     = OP_SRC_IMM;
             wb_src_o       = WB_SRC_MEM;
@@ -2273,15 +2284,16 @@ module idu (
           // C.FSD TODO
           5'b00101: begin
             `LOGI("C.FSD");
-            id_o.opcode    = OPCODE_STORE;
+            id_o.opcode    = OPCODE_FP_STORE;
             id_o.imm       = {56'b0, instr_i[6], instr_i[5], instr_i[12], instr_i[11], instr_i[10], 3'b000};
             id_o.rs1       = {2'b01, instr_i[9:7]};
             id_o.rs2       = {2'b01, instr_i[4:2]};
             rif.r1         = {2'b01, instr_i[9:7]};
-            rif.r2         = {2'b01, instr_i[4:2]};
+            fif.r2         = {2'b01, instr_i[4:2]};
             id_o.alu_op    = ALU_ADD;
-            id_o.sd_op     = SD_SD;
+            id_o.sd_op     = SD_SFD;
             id_o.reg_write = 1'b0;
+            id_o.fpr_write = 1'b0;
             id_o.op_s1     = OP_SRC_REG;
             id_o.op_s2     = OP_SRC_IMM;
             wb_src_o       = WB_SRC_NONE;
@@ -2538,14 +2550,15 @@ module idu (
           // TODO C.FLDSP
           5'b10001: begin
             `LOGI("C.FLDSP");
-            id_o.opcode    = OPCODE_LOAD;
+            id_o.opcode    = OPCODE_FP_LOAD;
             id_o.imm       = {55'b0, instr_i[4:2], instr_i[12], instr_i[6:5], 3'b000};
             id_o.rd        = instr_i[11:7];
             id_o.rs1       = 5'd2;
             rif.r1         = 5'd2;
             id_o.alu_op    = ALU_ADD;
-            id_o.ld_op     = LD_LD;
-            id_o.reg_write = 1'b1;
+            id_o.ld_op     = LD_LFD;
+            id_o.reg_write = 1'b0;
+            id_o.fpr_write = 1'b1;
             id_o.op_s1     = OP_SRC_REG;
             id_o.op_s2     = OP_SRC_IMM;
             wb_src_o       = WB_SRC_MEM;
@@ -2696,18 +2709,18 @@ module idu (
             id_o.op_s2     = OP_SRC_IMM;
             wb_src_o       = WB_SRC_NONE;
           end
-          // C.FSWSP / C.FSDSP
+          // C.FSDSP
           5'b10101: begin
             // TODO C.FSDSP = fsd  fs2, uimm(x2)
             `LOGI("C.FSDSP");
-            id_o.opcode    = OPCODE_STORE;
+            id_o.opcode    = OPCODE_FP_STORE;
             id_o.imm       = {55'b0, instr_i[9:7], instr_i[12:10], 3'b000};
             id_o.rs1       = 5'd2;
             id_o.rs2       = instr_i[11:7];
             rif.r1         = 5'd2;
-            rif.r2         = instr_i[11:7];
+            fif.r2         = instr_i[11:7];
             id_o.alu_op    = ALU_ADD;
-            id_o.sd_op     = SD_SD;
+            id_o.sd_op     = SD_SFD;
             id_o.reg_write = 1'b0;
             id_o.op_s1     = OP_SRC_REG;
             id_o.op_s2     = OP_SRC_IMM;
@@ -4904,7 +4917,7 @@ module fpr (
   input logic rst_n,
   input logic valid,
   input logic [4:0] rd_i,
-  input logic fpr_src_i,
+  input wb_src_e wb_src_i,
   input reg_t wb_fpu_i,
   input reg_t wb_mem_i,
   regif.slave rif
@@ -4922,7 +4935,7 @@ module fpr (
       foreach (f[i]) f[i] <= '0;
     end else begin
       if (valid) begin
-        f[rd_i] <= fpr_src_i ? wb_fpu_i : wb_mem_i;
+        f[rd_i] <= wb_src_i == WB_SRC_FPU ? wb_fpu_i : wb_mem_i;
       end
     end
   end
@@ -4938,12 +4951,42 @@ module fpu (
   input fop_e op_i,
   input logic single_i,
   input logic [2:0] rm_i,
+  input logic [1:0] fstate_i,
   regif.master rif,
+  regif.master fif,
 
   output reg_t    wb_gpr_o, // to rfu
   output reg_t    wb_fpr_o, // to fpr
   output fflags_t flags_o,  // to fcsr
   output logic    ready_o
+);
+
+  logic enable;
+  assign enable = (fstate_i == 2'b00);
+
+  always_comb begin
+    if (enable & valid) begin
+      unique case (op_i)
+        FOP_CMP_LE: ;
+        default: ;
+      endcase
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// fpu misc operations
+//------------------------------------
+module fmisc (
+  input  logic clk,
+  input  logic rst_n,
+  input  logic valid,
+  input  reg_t op1_i,
+  input  reg_t op2_i,
+  output reg_t result_o,
+  output logic ready_o,
+  output logic valid_o
 );
 
 endmodule
