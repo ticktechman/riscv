@@ -314,9 +314,9 @@ package hawks;
 
   typedef enum logic [11:0] {
     // FPU related
-    FFLAGS = 12'h000,
-    FRM    = 12'h001,
-    FCSR   = 12'h002,
+    FFLAGS = 12'h001,
+    FRM    = 12'h002,
+    FCSR   = 12'h003,
 
     // csr register in unprivilege mode
     CYCLE   = 12'hC00,
@@ -631,6 +631,13 @@ package hawks;
     fflags_t     fflags;    // Bits [4:0] : Accrued Exceptions
   } fcsr_t;
 
+  typedef struct packed {
+    logic NAN;
+    logic SNAN;
+    logic INF;
+    logic ZERO;
+  } ffeature_t;
+
   typedef enum logic [6:0] {
     FOP_NONE = 7'b00_00000,
 
@@ -731,7 +738,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(3000)
+    .COUNTER(1000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -881,10 +888,10 @@ module soc (
     .mem_addr_o(mem_addr),
     .mem_wd_o(mem_wd),
     .amo_wd_o(amo_wd),
-    .rif(rf.master)
+    .rif(rf.master),
+    .fif(fprif.master)
   );
 
-  fop_e fop;
   regif fprif ();
   fflags_t fflags;
   reg_t wb_fpu2gpr;
@@ -894,6 +901,7 @@ module soc (
     .clk(clk),
     .rst_n(rst_n),
     .valid(stage == STG_EXEC),
+    .id_i(id_out),
     .op_i(id_out.fop),
     .single_i(id_out.single),
     .rm_i(frm),
@@ -952,7 +960,8 @@ module soc (
     .alu_i(wb_alu),
     .csr_i(wb_csr),
     .amo_i(wb_amo),
-    .mem_i(wb_mem)
+    .mem_i(wb_mem),
+    .fpu_i(wb_fpu2gpr)
   );
 
   satp_t satp;
@@ -984,6 +993,8 @@ module soc (
     .trap_target_o(ttarget),
     .tlb_invalid_o(tlb_invalid),
     .fflags_i(fflags),
+    .frm_o(frm),
+    .fpr_write_i(id_out.fpr_write),
     .time_i(timeval),
     .halt_o(halt),
     .irq_timer_i(itimer),
@@ -1024,7 +1035,7 @@ module soc (
   );
 
   sram #(
-    .DATAONLY(0)
+    .DATAONLY(1)
   ) sram2 (
     .clk(clk),
     .rst_n(rst_n),
@@ -1141,7 +1152,7 @@ module soc (
           end
         end
         STG_EXEC: begin
-          if (stage_ready[2]) begin
+          if (stage_ready[2] || stage_ready[5]) begin
             if (exc[5].fired || exc[3].fired) begin
               exc_stage <= STG_EXEC;
               stage <= STG_WB;
@@ -1936,6 +1947,7 @@ module idu (
 
           // fload point instruction
           OPCODE_FP_LOAD: begin
+            `LOGI("FP_LOAD");
             id_o.fpr_write = 1;
             wb_src_o = WB_SRC_MEM;
             imm_type = IMM_I;
@@ -1956,6 +1968,7 @@ module idu (
             endcase
           end
           OPCODE_FP_STORE: begin
+            `LOGI("FP_STORE");
             imm_type = IMM_S;
             id_o.alu_op = ALU_ADD;
             id_o.op_s1 = OP_SRC_REG;
@@ -1974,6 +1987,7 @@ module idu (
             endcase
           end
           OPCODE_FMADD: begin
+            `LOGI("FMADD");
             id_o.fpr_write = 1;
             wb_src_o = WB_SRC_FPU;
             id_o.rs3 = instr_i[31:27];
@@ -1992,6 +2006,7 @@ module idu (
             endcase
           end
           OPCODE_FMSUB: begin
+            `LOGI("FMSUB");
             id_o.fpr_write = 1;
             wb_src_o = WB_SRC_FPU;
             id_o.rs3 = instr_i[31:27];
@@ -2010,6 +2025,7 @@ module idu (
             endcase
           end
           OPCODE_FNMADD: begin
+            `LOGI("FNMADD");
             id_o.fpr_write = 1;
             wb_src_o = WB_SRC_FPU;
             id_o.rs3 = instr_i[31:27];
@@ -2028,6 +2044,7 @@ module idu (
             endcase
           end
           OPCODE_FNMSUB: begin
+            `LOGI("FNMSUB");
             id_o.fpr_write = 1;
             wb_src_o = WB_SRC_FPU;
             id_o.rs3 = instr_i[31:27];
@@ -2046,6 +2063,7 @@ module idu (
             endcase
           end
           OPCODE_FP_OP: begin
+            `LOGI("FP_OP");
             id_o.frm = rm;
             fif.r1 = instr_i[19:15];
             fif.r2 = instr_i[24:20];
@@ -2760,7 +2778,8 @@ module exu (
   output addr_t       mem_addr_o,
   output reg_t        mem_wd_o,
   output reg_t        amo_wd_o,
-         regif.master rif
+         regif.master rif,
+         regif.master fif
 );
   reg_t alu_result;
   reg_t wb, wb_amo, mem_wd, amo_wd;
@@ -2881,10 +2900,14 @@ module exu (
   always_comb begin
     mem_addr = '0;
     mem_wd   = '0;
-    if (id_i.opcode inside {OPCODE_LOAD, OPCODE_STORE}) begin
+    if (id_i.ld_op != LD_NONE || id_i.sd_op != SD_NONE) begin
       mem_addr = alu_result;
-      if (id_i.opcode == OPCODE_STORE) begin
-        mem_wd = rif.v2;
+      if (id_i.sd_op != SD_NONE) begin
+        if (id_i.sd_op inside {SD_SFW, SD_SFD}) begin
+          mem_wd = fif.v2;
+        end else begin
+          mem_wd = rif.v2;
+        end
       end
     end
   end
@@ -3438,7 +3461,7 @@ endmodule
 //------------------------------------
 module sram #(
   parameter logic DATAONLY = 0,
-  parameter int unsigned CAPS_IN_BYTES = 256 * MB
+  parameter int unsigned CAPS_IN_BYTES = 256 * KB
 ) (
   input logic clk,
   input logic rst_n,
@@ -3882,6 +3905,8 @@ module csr (
   output addr_t              trap_target_o,
   input  reg_t               time_i,
   input  fflags_t            fflags_i,       // fpu fflags
+  output logic        [ 2:0] frm_o,          // fpu frm
+  input  logic               fpr_write_i,    // update mstatus.FS
 
   // irq interface
   input  logic irq_timer_i,   // timer int from clint
@@ -3924,11 +3949,11 @@ module csr (
   mcause_e ecause;
   fcsr_t fcsr;
 
-  // assign reg for mmu
   always_comb begin
     priv_o    = priv;
     satp_o    = satp;
     mstatus_o = mstatus;
+    frm_o     = fcsr.frm;
   end
 
   reg_t rd;
@@ -4058,7 +4083,7 @@ module csr (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       priv       <= M_MACHINE;
-      mstatus    <= '{UXL: 2'b10, SXL: 2'b10, default: 0};
+      mstatus    <= '{UXL: 2'b10, SXL: 2'b10, FS: 2'b01, default: 0};
       misa       <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
       medeleg    <= '0;
       mideleg    <= '0;
@@ -4080,8 +4105,9 @@ module csr (
       scounteren <= '0;
       mvendorid  <= 64'h489;
       marchid    <= 64'h1;
-      mimpid     <= 64'h0;
-      mtime      <= 64'h0;
+      mimpid     <= '0;
+      mtime      <= '0;
+      fcsr       <= '0;
     end else begin
       cycle <= cycle + 1;
       mtime <= time_i;
@@ -4155,134 +4181,133 @@ module csr (
     trap_target_o = '0;
     interrupted_o = 0;
 
-    if (commit_i && exc_fired_i) begin
-      `LOGE($sformatf("exc fired: 0x%0h", exc_i.cause));
-      if (priv < M_MACHINE) begin
-        if (edeleg(exc_i.cause)) begin
-          strap = 1;
+    if (commit_i) begin
+      status = mstatus;
+      if (fpr_write_i) begin
+        status.FS = 2'b11;
+        status.SD = 1'b1;
+      end
+      if (exc_fired_i) begin
+        `LOGE($sformatf("exc fired: 0x%0h", exc_i.cause));
+        if (priv < M_MACHINE) begin
+          if (edeleg(exc_i.cause)) begin
+            strap = 1;
+          end
         end
-      end
-      if (strap) begin
-        // strap
-        cause         = exc_i.cause;
-        eval          = exc_i.eval;
-        epc           = pc_i;
-        priv_next     = M_SUPER;
-        status        = mstatus;
-        status.SPP    = priv == M_USER ? 0 : 1;
-        status.SPIE   = mstatus.SIE;
-        status.SIE    = 0;
-        trap_o        = 1;
-        trap_target_o = stvec;
-      end else begin
-        // mtrap
-        cause         = exc_i.cause;
-        eval          = exc_i.eval;
-        epc           = pc_i;
-        priv_next     = M_MACHINE;
-        status        = mstatus;
-        status.MPP    = priv;
-        status.MPIE   = mstatus.MIE;
-        status.MIE    = 0;
-        trap_o        = 1;
-        trap_target_o = mtvec;
-      end
-    end else if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
-      if (op_i == SYS_SRET) begin
-        `LOGI($sformatf("SRET->%0d", mstatus.SPP));
-        priv_next     = mstatus.SPP ? M_SUPER : M_USER;
-        status        = mstatus;
-        status.SPP    = '0;
-        status.SIE    = mstatus.SPIE;
-        status.SPIE   = '0;
-        trap_o        = 1;
-        trap_target_o = sepc;
-      end else begin
-        `LOGI($sformatf("MRET->%0d", mstatus.MPP));
-        status = mstatus;
-        if (mstatus.MPP < M_MACHINE) begin
-          status.MPRV = 0;
+        if (strap) begin
+          // strap
+          cause         = exc_i.cause;
+          eval          = exc_i.eval;
+          epc           = pc_i;
+          priv_next     = M_SUPER;
+          status.SPP    = priv == M_USER ? 0 : 1;
+          status.SPIE   = mstatus.SIE;
+          status.SIE    = 0;
+          trap_o        = 1;
+          trap_target_o = stvec;
+        end else begin
+          // mtrap
+          cause         = exc_i.cause;
+          eval          = exc_i.eval;
+          epc           = pc_i;
+          priv_next     = M_MACHINE;
+          status.MPP    = priv;
+          status.MPIE   = mstatus.MIE;
+          status.MIE    = 0;
+          trap_o        = 1;
+          trap_target_o = mtvec;
         end
-        status.MPP    = 0;
-        status.MIE    = mstatus.MPIE;
-        status.MPIE   = 0;
-        priv_next     = priviledge_e'(mstatus.MPP);
-        trap_o        = 1;
-        trap_target_o = mepc;
-      end
-    end else if (commit_i && m_intr != reg_t'(0)) begin
-      interrupted_o = 1;
-      if (mstatus.MIE) begin
-        trap_o = 1;
-        trap_target_o = mtvec;
-        status = mstatus;
-        status.MPP = priv;
-        status.MPIE = mstatus.MIE;
-        status.MIE = 0;
-        priv_next = M_MACHINE;
-        cause = mintr2cause(m_intr);
-        epc = pc_i;
-        `LOGW($sformatf("M-intr: %0h", cause));
-      end
-    end else if (commit_i && s_intr != reg_t'(0)) begin
-      interrupted_o = 1;
-      if (mstatus.SIE) begin
-        trap_o = 1;
-        trap_target_o = stvec;
-        status = mstatus;
-        status.SPP = (priv == M_USER ? 0 : 1);
-        status.SPIE = mstatus.SIE;
-        status.SIE = 0;
-        priv_next = M_SUPER;
-        cause = sintr2cause(s_intr);
-        epc = pc_i;
-        `LOGW($sformatf("S-intr: %0h", cause));
+      end else if (op_i inside {SYS_SRET, SYS_MRET}) begin
+        if (op_i == SYS_SRET) begin
+          `LOGI($sformatf("SRET->%0d", mstatus.SPP));
+          priv_next     = mstatus.SPP ? M_SUPER : M_USER;
+          status.SPP    = '0;
+          status.SIE    = mstatus.SPIE;
+          status.SPIE   = '0;
+          trap_o        = 1;
+          trap_target_o = sepc;
+        end else begin
+          `LOGI($sformatf("MRET->%0d", mstatus.MPP));
+          if (mstatus.MPP < M_MACHINE) begin
+            status.MPRV = 0;
+          end
+          status.MPP    = 0;
+          status.MIE    = mstatus.MPIE;
+          status.MPIE   = 0;
+          priv_next     = priviledge_e'(mstatus.MPP);
+          trap_o        = 1;
+          trap_target_o = mepc;
+        end
+      end else if (m_intr != reg_t'(0)) begin
+        interrupted_o = 1;
+        if (mstatus.MIE) begin
+          trap_o = 1;
+          trap_target_o = mtvec;
+          status.MPP = priv;
+          status.MPIE = mstatus.MIE;
+          status.MIE = 0;
+          priv_next = M_MACHINE;
+          cause = mintr2cause(m_intr);
+          epc = pc_i;
+          `LOGW($sformatf("M-intr: %0h", cause));
+        end
+      end else if (s_intr != reg_t'(0)) begin
+        interrupted_o = 1;
+        if (mstatus.SIE) begin
+          trap_o = 1;
+          trap_target_o = stvec;
+          status.SPP = (priv == M_USER ? 0 : 1);
+          status.SPIE = mstatus.SIE;
+          status.SIE = 0;
+          priv_next = M_SUPER;
+          cause = sintr2cause(s_intr);
+          epc = pc_i;
+          `LOGW($sformatf("S-intr: %0h", cause));
+        end
       end
     end
-
   end
 
   // update register when trapped or xRET
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      if (commit_i && exc_i.fired) begin
-        if (strap) begin
-          `LOGW("strap");
-          priv <= priv_next;
-          sepc <= epc;
-          scause <= cause;
-          mstatus <= status;
-          stval <= eval;
-        end else begin
-          `LOGW("mtrap");
-          priv <= priv_next;
-          mepc <= epc;
-          mcause <= cause;
-          mstatus <= status;
-          mtval <= eval;
-        end
-      end else if (commit_i && op_i inside {SYS_SRET, SYS_MRET}) begin
+      if (commit_i) begin
         mstatus <= status;
-        priv    <= priv_next;
-        if (op_i == SYS_SRET) begin
-          scause <= '0;
-        end else begin
-          mcause <= '0;
-        end
-      end else if (commit_i && m_intr != reg_t'(0)) begin
-        if (mstatus.MIE) begin
-          mstatus <= status;
+        fcsr.fflags <= fcsr.fflags | fflags_i;
+        if (exc_i.fired) begin
+          if (strap) begin
+            `LOGW("strap");
+            priv   <= priv_next;
+            sepc   <= epc;
+            scause <= cause;
+            stval  <= eval;
+          end else begin
+            `LOGW("mtrap");
+            priv   <= priv_next;
+            mepc   <= epc;
+            mcause <= cause;
+            mtval  <= eval;
+          end
+        end else if (op_i inside {SYS_SRET, SYS_MRET}) begin
           priv <= priv_next;
-          mepc <= epc;
-          mcause <= cause;
-        end
-      end else if (commit_i && s_intr != reg_t'(0)) begin
-        if (mstatus.SIE) begin
-          mstatus <= status;
-          priv <= priv_next;
-          sepc <= epc;
-          scause <= cause;
+          if (op_i == SYS_SRET) begin
+            scause <= '0;
+          end else begin
+            mcause <= '0;
+          end
+        end else if (m_intr != reg_t'(0)) begin
+          if (mstatus.MIE) begin
+            priv   <= priv_next;
+            mepc   <= epc;
+            mcause <= cause;
+          end
+        end else if (s_intr != reg_t'(0)) begin
+          if (mstatus.SIE) begin
+            priv   <= priv_next;
+            sepc   <= epc;
+            scause <= cause;
+          end
         end
       end
     end
@@ -4348,7 +4373,8 @@ module rfu (
   input  reg_t             alu_i,
   input  reg_t             mem_i,
   input  reg_t             amo_i,
-  input  reg_t             csr_i
+  input  reg_t             csr_i,
+  input  reg_t             fpu_i
 );
   reg_t x[REGMAX];
   reg_t r;
@@ -4359,6 +4385,7 @@ module rfu (
       WB_SRC_MEM: r = mem_i;
       WB_SRC_CSR: r = csr_i;
       WB_SRC_AMO: r = amo_i;
+      WB_SRC_FPU: r = fpu_i;
       default: ;
     endcase
   end
@@ -4948,6 +4975,7 @@ module fpu (
   input logic clk,
   input logic rst_n,
   input logic valid,
+  input id_t id_i,
   input fop_e op_i,
   input logic single_i,
   input logic [2:0] rm_i,
@@ -4961,34 +4989,194 @@ module fpu (
   output logic    ready_o
 );
 
+  reg_t wb_gpr, wb_fpr;
+  fflags_t flags;
+  ffeature_t features[3];
   logic enable;
   assign enable = (fstate_i == 2'b00);
 
+  // check input value
   always_comb begin
-    if (enable & valid) begin
-      unique case (op_i)
-        FOP_CMP_LE: ;
-        default: ;
-      endcase
+    features = '{default: 0};
+    if (id_i.op_s1 == OP_SRC_FPR) begin
+      features[0] = calc_features(fif.v1, id_i.single);
+    end
+    if (id_i.op_s2 == OP_SRC_FPR) begin
+      features[1] = calc_features(fif.v2, id_i.single);
+    end
+    if (id_i.op_s3 == OP_SRC_FPR) begin
+      features[2] = calc_features(fif.v3, id_i.single);
     end
   end
 
+  // do float compare
+  reg_t cmp_result;
+  fflags_t cmp_flags;
+  logic cmp_ready, cmp_valid;
+  fcmp fcmp1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid),
+    .single_i(id_i.single),
+    .feat({features[1], features[0]}),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .op2_i(fif.v2),
+    .result_o(cmp_result),
+    .flags_o(cmp_flags),
+    .ready_o(cmp_ready),
+    .valid_o(cmp_valid)
+  );
+
+
+  always_comb begin
+    wb_fpr = '0;
+    wb_gpr = '0;
+    flags  = '0;
+    if (cmp_valid) begin
+      wb_gpr  = cmp_result;
+      flags   = cmp_flags;
+      ready_o = cmp_ready;
+      `LOGI($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      if (valid) begin
+        wb_fpr_o = wb_fpr;
+        wb_gpr_o = wb_gpr;
+        flags_o  = flags;
+      end
+    end
+  end
+
+  function automatic ffeature_t calc_features(reg_t v, logic single);
+    ffeature_t feature = '{default: 0};
+    if (single) begin
+      feature.NAN  = v[30:23] == 8'hff && v[22:0] != 23'h0;
+      feature.SNAN = v[30:23] == 8'hff && v[22:0] != 23'h0 && v[22] == 0;
+      feature.INF  = v[30:23] == 8'hff && v[22:0] == 23'h0;
+      feature.ZERO = v[30:23] == 8'h00 && v[22:0] == 23'h0;
+    end else begin
+      feature.NAN  = v[62:52] == 11'h7ff && v[51:0] != 52'h0;
+      feature.SNAN = v[62:52] == 11'h7ff && v[51:0] != 52'h0 && v[51] == 0;
+      feature.INF  = v[62:52] == 11'h7ff && v[51:0] == 52'h0;
+      feature.ZERO = v[62:52] == 11'h000 && v[51:0] == 52'h0;
+    end
+    return feature;
+  endfunction
 endmodule
 
 //------------------------------------
-// fpu misc operations
+// float compare
 //------------------------------------
-module fmisc (
-  input  logic clk,
-  input  logic rst_n,
-  input  logic valid,
-  input  reg_t op1_i,
-  input  reg_t op2_i,
+module fcmp (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input ffeature_t feat[2],
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
   output reg_t result_o,
+  output fflags_t flags_o,
   output logic ready_o,
   output logic valid_o
 );
 
+  always_comb begin
+    ready_o = 1;
+  end
+
+  logic rst;
+  logic nan, snan, all_zero;
+
+  logic [1:0] sign;
+  logic [62:0] val1, val2;
+
+  always_comb begin
+    valid_o = 0;
+    if (valid) begin
+      valid_o = 1;
+      flags_o = '0;
+      rst = 0;
+
+      nan = feat[0].NAN | feat[1].NAN;
+      snan = feat[0].SNAN | feat[1].SNAN;
+      all_zero = feat[0].ZERO && feat[1].ZERO;
+
+      if (single_i) begin
+        sign = {op1_i[31], op2_i[31]};
+        val1 = {32'b0, op1_i[30:0]};
+        val2 = {32'b0, op2_i[30:0]};
+      end else begin
+        sign = {op1_i[63], op2_i[63]};
+        val1 = op1_i[62:0];
+        val2 = op2_i[62:0];
+      end
+
+      unique case (op_i)
+        FOP_CMP_EQ: begin
+          if (nan) begin
+            rst = 0;
+            if (snan) flags_o.nv = 1;
+          end else begin
+            if (single_i) begin
+              rst = (op1_i[31:0] == op2_i[31:0]) | all_zero;
+            end else begin
+              rst = (op1_i == op2_i) | all_zero;
+            end
+          end
+        end
+
+        FOP_CMP_LE: begin
+          if (nan) begin
+            rst = 0;
+            flags_o.nv = 1;
+          end else if (all_zero) begin
+            rst = 1;
+          end else begin
+            unique case (sign)
+              2'b00:   rst = (val1 <= val2);
+              2'b11:   rst = (val1 >= val2);
+              2'b10:   rst = 1;
+              2'b01:   rst = 0;
+              default: rst = 0;
+            endcase
+          end
+        end
+
+        FOP_CMP_LT: begin
+          if (nan) begin
+            rst = 0;
+            flags_o.nv = 1;
+          end else if (all_zero) begin
+            rst = 0;
+          end else begin
+            unique case (sign)
+              2'b00:   rst = (val1 < val2);
+              2'b11:   rst = (val1 > val2);
+              2'b10:   rst = 1;
+              2'b01:   rst = 0;
+              default: rst = 0;
+            endcase
+          end
+        end
+
+        default: begin
+          valid_o = 0;
+          rst = 0;
+        end
+      endcase
+    end
+
+    result_o = {63'b0, rst};
+  end
+
 endmodule
+
 
 /******************************************************************************/
