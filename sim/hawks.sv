@@ -636,7 +636,7 @@ package hawks;
     logic SNAN;
     logic INF;
     logic ZERO;
-  } ffeature_t;
+  } fattr_t;
 
   typedef enum logic [6:0] {
     FOP_NONE = 7'b00_00000,
@@ -679,6 +679,10 @@ package hawks;
     FOP_MV_X_F   = 7'b11_10011,  // FMV.X.W = mv single / double to integer
     FOP_MV_F_X   = 7'b11_10110   // FMV.D.X = mv integer to double / single
   } fop_e;
+
+  // canonical NaN
+  localparam CNAN_D = 64'h7FF8000000000000;
+  localparam CNAN_S = 32'h7FC00000;
 
   function automatic logic check_file_exist(string name);
     int fd = $fopen(name, "r");
@@ -4991,21 +4995,21 @@ module fpu (
 
   reg_t wb_gpr, wb_fpr;
   fflags_t flags;
-  ffeature_t features[3];
+  fattr_t attrs[3];
   logic enable;
   assign enable = (fstate_i == 2'b00);
 
   // check input value
   always_comb begin
-    features = '{default: 0};
+    attrs = '{default: 0};
     if (id_i.op_s1 == OP_SRC_FPR) begin
-      features[0] = calc_features(fif.v1, id_i.single);
+      attrs[0] = calc_attr(fif.v1, id_i.single);
     end
     if (id_i.op_s2 == OP_SRC_FPR) begin
-      features[1] = calc_features(fif.v2, id_i.single);
+      attrs[1] = calc_attr(fif.v2, id_i.single);
     end
     if (id_i.op_s3 == OP_SRC_FPR) begin
-      features[2] = calc_features(fif.v3, id_i.single);
+      attrs[2] = calc_attr(fif.v3, id_i.single);
     end
   end
 
@@ -5018,7 +5022,7 @@ module fpu (
     .rst_n(rst_n),
     .valid(valid),
     .single_i(id_i.single),
-    .feat({features[1], features[0]}),
+    .attr_i({attrs[1], attrs[0]}),
     .op_i(id_i.fop),
     .op1_i(fif.v1),
     .op2_i(fif.v2),
@@ -5052,20 +5056,20 @@ module fpu (
     end
   end
 
-  function automatic ffeature_t calc_features(reg_t v, logic single);
-    ffeature_t feature = '{default: 0};
+  function automatic fattr_t calc_attr(reg_t v, logic single);
+    fattr_t attr = '{default: 0};
     if (single) begin
-      feature.NAN  = v[30:23] == 8'hff && v[22:0] != 23'h0;
-      feature.SNAN = v[30:23] == 8'hff && v[22:0] != 23'h0 && v[22] == 0;
-      feature.INF  = v[30:23] == 8'hff && v[22:0] == 23'h0;
-      feature.ZERO = v[30:23] == 8'h00 && v[22:0] == 23'h0;
+      attr.NAN  = v[30:23] == 8'hff && v[22:0] != 23'h0;
+      attr.SNAN = v[30:23] == 8'hff && v[22:0] != 23'h0 && v[22] == 0;
+      attr.INF  = v[30:23] == 8'hff && v[22:0] == 23'h0;
+      attr.ZERO = v[30:23] == 8'h00 && v[22:0] == 23'h0;
     end else begin
-      feature.NAN  = v[62:52] == 11'h7ff && v[51:0] != 52'h0;
-      feature.SNAN = v[62:52] == 11'h7ff && v[51:0] != 52'h0 && v[51] == 0;
-      feature.INF  = v[62:52] == 11'h7ff && v[51:0] == 52'h0;
-      feature.ZERO = v[62:52] == 11'h000 && v[51:0] == 52'h0;
+      attr.NAN  = v[62:52] == 11'h7ff && v[51:0] != 52'h0;
+      attr.SNAN = v[62:52] == 11'h7ff && v[51:0] != 52'h0 && v[51] == 0;
+      attr.INF  = v[62:52] == 11'h7ff && v[51:0] == 52'h0;
+      attr.ZERO = v[62:52] == 11'h000 && v[51:0] == 52'h0;
     end
-    return feature;
+    return attr;
   endfunction
 endmodule
 
@@ -5077,7 +5081,7 @@ module fcmp (
   input logic rst_n,
   input logic valid,
   input logic single_i,
-  input ffeature_t feat[2],
+  input fattr_t attr_i[2],
   input fop_e op_i,
   input reg_t op1_i,
   input reg_t op2_i,
@@ -5104,9 +5108,9 @@ module fcmp (
       flags_o = '0;
       rst = 0;
 
-      nan = feat[0].NAN | feat[1].NAN;
-      snan = feat[0].SNAN | feat[1].SNAN;
-      all_zero = feat[0].ZERO && feat[1].ZERO;
+      nan = attr_i[0].NAN | attr_i[1].NAN;
+      snan = attr_i[0].SNAN | attr_i[1].SNAN;
+      all_zero = attr_i[0].ZERO && attr_i[1].ZERO;
 
       if (single_i) begin
         sign = {op1_i[31], op2_i[31]};
@@ -5178,5 +5182,30 @@ module fcmp (
 
 endmodule
 
+//------------------------------------
+// fadd and fsub
+//------------------------------------
+module faddsub (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fattr_t attr_i[2],
+  input logic [2:0] rm_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+
+  // S1-unpack and input check special case
+  // S2-alignment & shift & add/sub
+  // S3-normalize & round
+  // S4-pack & flags
+
+endmodule
 
 /******************************************************************************/
