@@ -76,8 +76,6 @@ module mini (
       `LOGW("reset");
     end else begin
       `LOGI("hello");
-      r <= '1;
-      r[2:0] <= 3'b010;
       `LOGI($sformatf("%0h", r));
     end
   end
