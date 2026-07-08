@@ -5034,21 +5034,20 @@ module fpu (
     .ready_o(cmp_ready),
     .valid_o(cmp_valid)
   );
-  // module fadd (
-  //   input logic clk,
-  //   input logic rst_n,
-  //   input logic valid,
-  //   input logic single_i,
-  //   input fattr_t attr_i[2],
-  //   input logic [2:0] rm_i,
-  //   input fop_e op_i,
-  //   input reg_t op1_i,
-  //   input reg_t op2_i,
-  //   output reg_t result_o,
-  //   output fflags_t flags_o,
-  //   output logic ready_o,
-  //   output logic valid_o
-  // );
+
+  reg_t fmv_result;
+  logic fmv_ready, fmv_valid;
+  fmv fmv1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid),
+    .single_i(id_i.single),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .result_o(fmv_result),
+    .ready_o(fmv_ready),
+    .valid_o(fmv_valid)
+  );
 
   reg_t add_result;
   fflags_t add_flags;
@@ -5087,6 +5086,14 @@ module fpu (
       ready_o = add_ready;
       if (add_ready) begin
         `LOGI($sformatf("FADD:0x%0h flags:%b", add_result, add_flags));
+      end
+    end else if (fmv_valid) begin
+      ready_o = fmv_ready;
+      flags   = '0;
+      if (id_i.fop == FOP_MV_F_X) begin
+        wb_fpr = fmv_result;
+      end else begin
+        wb_gpr = fmv_result;
       end
     end else begin
       ready_o = 1;
@@ -5634,17 +5641,43 @@ module fadd (
 endmodule
 
 //------------------------------------
-// round up / down
-// manti: ... LSB | G R S
+// mv
 //------------------------------------
-module frnd (
-  input logic clk,
-  input logic rst_n,
-  input grs_t grs_i,
-  input logic lsb_i,
-  input [2:0] rm_i,
-  output logic rndup_o
+module fmv (
+  input  logic clk,
+  input  logic rst_n,
+  input  logic valid,
+  input  logic single_i,
+  input  fop_e op_i,
+  input  reg_t op1_i,
+  output reg_t result_o,
+  output logic ready_o,
+  output logic valid_o
 );
+
+  always_comb begin
+    ready_o = valid;
+  end
+
+  always_comb begin
+    valid_o  = 0;
+    result_o = '0;
+    if (valid) begin
+      unique case (op_i)
+        FOP_MV_X_F: begin
+          result_o = single_i ? {{32{op1_i[31]}}, op1_i[31:0]} : op1_i;
+          valid_o  = 1;
+        end
+        FOP_MV_F_X: begin
+          result_o = single_i ? {32'hffff_ffff, op1_i[31:0]} : op1_i;
+          valid_o  = 1;
+        end
+        default: begin
+          valid_o = 0;
+        end
+      endcase
+    end
+  end
 
 endmodule
 
