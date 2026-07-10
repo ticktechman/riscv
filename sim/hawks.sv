@@ -684,9 +684,9 @@ package hawks;
     FOP_MV_F_X   = 7'b11_10110   // FMV.D.X = mv integer to double / single
   } fop_e;
 
-  // canonical NaN
-  localparam CNAN_D = 64'h7FF8000000000000;
-  localparam CNAN_S = 32'h7FC00000;
+  // canonical qNaN
+  localparam CQNAN_D = 64'h7FF8000000000000;
+  localparam CQNAN_S = 32'h7FC00000;
 
   function automatic logic check_file_exist(string name);
     int fd = $fopen(name, "r");
@@ -746,7 +746,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(1000)
+    .COUNTER(2000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -5068,6 +5068,25 @@ module fpu (
     .valid_o(add_valid)
   );
 
+  reg_t mul_result;
+  fflags_t mul_flags;
+  logic mul_ready, mul_valid;
+  fmul fmul1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid && id_i.fop == FOP_MUL),
+    .single_i(id_i.single),
+    .attr_i({attrs[1], attrs[0]}),
+    .rm_i(rm_i),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .op2_i(fif.v2),
+    .result_o(mul_result),
+    .flags_o(mul_flags),
+    .ready_o(mul_ready),
+    .valid_o(mul_valid)
+  );
+
   always_comb begin
     wb_fpr  = '0;
     wb_gpr  = '0;
@@ -5086,6 +5105,13 @@ module fpu (
       ready_o = add_ready;
       if (add_ready) begin
         `LOGI($sformatf("FADD:0x%0h flags:%b", add_result, add_flags));
+      end
+    end else if (mul_valid) begin
+      wb_fpr  = mul_result;
+      flags   = mul_flags;
+      ready_o = mul_ready;
+      if (mul_ready) begin
+        `LOGI($sformatf("FMUL:0x%0h flags:%b", mul_result, mul_flags));
       end
     end else if (fmv_valid) begin
       ready_o = fmv_ready;
@@ -5309,7 +5335,7 @@ module fadd (
 
     res = '{valid: 1, default: 0};
     s1 = single_i ? op1_i[31] : op1_i[63];
-    s2 = single_i ? op2_i[31] : op2_i[63];
+    s2 = single_i ? op2_i[31] ^ op_i == FOP_SUB : op2_i[63] ^ op_i == FOP_SUB;
     nan = attr_i[0].NAN | attr_i[1].NAN;
     infi = attr_i[0].INF | attr_i[1].INF;
     both_nan = attr_i[0].NAN & attr_i[1].NAN;
@@ -5319,7 +5345,7 @@ module fadd (
 
     // NaN + [NaN]
     if (nan) begin
-      res.result   = single_i ? 64'(CNAN_S) : CNAN_D;
+      res.result   = single_i ? 64'(CQNAN_S) : CQNAN_D;
       res.flags.nv = 1;
       return res;
     end
@@ -5329,7 +5355,7 @@ module fadd (
       if (both_infi) begin
         // same sign
         if (s1 != s2) begin
-          res.result   = single_i ? 64'(CNAN_S) : CNAN_D;
+          res.result   = single_i ? 64'(CQNAN_S) : CQNAN_D;
           res.flags.nv = 1;
         end else begin
           res.result = single_i ? 64'(`BUILD_INF_S(s1)) : `BUILD_INF_D(s1);
@@ -5635,6 +5661,500 @@ module fadd (
       normed_r      <= normed;
       unpacked_r[0] <= unpacked[0];
       unpacked_r[1] <= unpacked[1];
+    end
+  end
+
+endmodule
+
+
+//------------------------------------
+// FPU multiply
+//------------------------------------
+module fmul (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fattr_t attr_i[2],
+  input logic [2:0] rm_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+  typedef enum {
+    SB = 0,
+    S1,
+    S2,
+    S3,
+    SE
+  } state_e;
+
+  typedef struct packed {
+    logic    valid;
+    reg_t    result;
+    fflags_t flags;
+  } ffast_t;
+
+  typedef struct packed {
+    logic sign;
+    logic [11:0] exp;
+    logic [52:0] manti;  // hidden-1bit, frac-52bit
+  } funpack_t;
+
+  typedef struct packed {
+    reg_t result;
+    fflags_t flags;
+  } fpacked_t;
+
+  typedef struct packed {
+    logic sign;
+    logic [11:0] exp;
+    logic [105:0] manti;
+    fflags_t flags;
+  } fmul_t;
+
+  function automatic int clz(logic [105:0] val);
+    int i;
+    for (i = 105; i >= 0; i--) if (val[i] != 1'b0) break;
+    return 105 - i;
+  endfunction
+
+  function automatic ffast_t check_fastpath(reg_t v1, v2, fattr_t a1, a2);
+    // +/-zero, +/-inf, QNaN, SNaN, normal, subnormal
+    logic sign;
+    ffast_t res;
+    res = '0;
+    res.valid = 1;
+    sign = single_i ? v1[31] ^ v2[31] : v1[63] ^ v2[63];
+
+    if (a1.SNAN || a2.SNAN || (a1.INF && a2.ZERO) || (a1.ZERO && a2.INF)) begin
+      res.result   = single_i ? {32'hffff_ffff, CQNAN_S} : CQNAN_D;
+      res.flags.nv = 1;
+    end
+    if (a1.QNAN || a2.QNAN) begin
+      res.result = a1.QNAN ? v1 : v2;
+    end
+    if (a1.ZERO || a2.ZERO) begin
+      res.result = single_i ? {32'hffff_ffff, sign, 31'b0} : {sign, 63'b0};
+      return res;
+    end
+    if (a1.INF || a2.INF) begin
+      res.result = single_i ? {32'hffff_ffff, sign, 8'hff, 23'b0} : {sign, 11'h7ff, 52'b0};
+      return res;
+    end
+    res.valid = 0;
+    return res;
+  endfunction
+
+  function automatic funpack_t unpack(reg_t v, fattr_t a);
+    funpack_t res;
+    res = '0;
+    res.sign = single_i ? v[31] : v[63];
+    if (a.SUBN) begin
+      res.exp   = 12'd1;
+      res.manti = single_i ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
+    end else begin
+      res.exp   = single_i ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
+      res.manti = single_i ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
+    end
+    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    return res;
+  endfunction
+
+  function automatic fmul_t multiply(funpack_t u1, funpack_t u2);
+    fmul_t res;
+    res.sign  = u1.sign ^ u2.sign;
+    res.exp   = u1.exp + u2.exp - (single_i ? 12'd126 : 12'd1023);
+    res.manti = u1.manti * u2.manti;
+    return res;
+  endfunction
+
+  `define ONES(n) {n{1'b1}}
+  function automatic fmul_t normalize(fmul_t v);
+    fmul_t res;
+    logic L, G, R, S, rndup;
+    logic [11:0] exp, exp2;
+    logic [105:0] manti;
+    int lz = clz(v.manti);
+    exp = v.exp - 12'(lz) + 12'd1;
+    `LOGI($sformatf("exp:%0d manti:%h", exp, v.manti));
+    manti = v.manti << lz;
+    L = manti[53];
+    G = manti[52];
+    R = manti[51];
+    S = |manti[50:0];
+
+    // round up
+    unique case (rm_i)
+      RNE: rndup = G & (R | S | L);
+      RDN: rndup = v.sign & (G | R | S);
+      RUP: rndup = (!v.sign) & (G | R | S);
+      RMM: rndup = G;
+      default: rndup = 0;
+    endcase
+
+    res.exp = exp;
+    exp2 = exp;
+    if (rndup) begin
+      if (manti[105:53] == `ONES(53)) begin
+        res.manti = {1'b1, 105'b0};
+        exp2 = exp + 12'd1;
+        res.exp = exp2;
+      end
+    end else begin
+      res.manti = manti;
+    end
+
+    // flags
+    res.flags.nx = (G | R | S);
+    if (single_i) begin
+      if ($signed(exp2) >= 12'd255) begin
+        res.flags.of = 1;
+        res.flags.nx = 1;
+        res.exp = 12'h0ff;
+        res.manti = '0;
+      end else if ($signed(exp2) <= 0) begin
+        res.flags.uf = 1;
+        res.flags.nx = 1;
+        res.exp = 12'b0;
+        res.manti = '0;
+      end
+    end else begin
+      if ($signed(exp2) >= 12'd2047) begin
+        res.flags.of = 1;
+        res.flags.nx = 1;
+        res.exp = 12'h7ff;
+        res.manti = '0;
+      end else if ($signed(exp2) <= 0) begin
+        res.flags.uf = 1;
+        res.flags.nx = 1;
+        res.exp = 12'b0;
+        res.manti = '0;
+      end
+    end
+
+    `LOGI($sformatf("s:%b e:%0d m=%h", res.sign, res.exp, res.manti));
+    return res;
+  endfunction
+
+  function automatic fpacked_t pack(fmul_t v);
+    fpacked_t res;
+    res.result = single_i ? {32'hffff_ffff, v.sign, v.exp[7:0], v.manti[104:82]} : {v.sign, v.exp[10:0], v.manti[104:53]};
+    res.flags = v.flags;
+    return res;
+  endfunction
+
+  // FSM
+  state_e state, next_state;
+  ffast_t fast, fast_r;
+  funpack_t u1, u2, u1_r, u2_r;
+  fmul_t mult, mult_r, norm, norm_r;
+  fpacked_t pcked;
+  always_comb begin
+    next_state = state;
+    if (valid) begin
+      unique case (state)
+        SB: next_state = S1;
+        S1: next_state = fast_r.valid ? SE : S2;
+        S2: next_state = S3;
+        S3: next_state = SE;
+        SE: next_state = SB;
+        default: ;
+      endcase
+    end
+  end
+
+  always_comb begin
+    fast     = fast_r;
+    u1       = u1_r;
+    u2       = u2_r;
+    mult     = mult_r;
+    norm     = norm_r;
+    result_o = '0;
+    flags_o  = '0;
+    pcked    = '0;
+    if (state == S1) begin
+      fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
+      if (!fast.valid) begin
+        u1 = unpack(op1_i, attr_i[0]);
+        u2 = unpack(op2_i, attr_i[1]);
+      end
+    end else if (state == S2) begin
+      // multiply
+      mult = multiply(u1, u2);
+    end else if (state == S3) begin
+      // normalize
+      norm = normalize(mult);
+    end else if (state == SE) begin
+      // pack
+      pcked = pack(norm);
+      if (fast.valid) begin
+        result_o = fast.result;
+        flags_o  = fast.flags;
+      end else begin
+        result_o = pcked.result;
+        flags_o  = pcked.flags;
+      end
+    end
+  end
+
+  assign ready_o = (state == SE || !valid);
+  assign valid_o = valid;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state <= SB;
+    end else begin
+      state <= next_state;
+    end
+  end
+
+  // fast path
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      fast_r <= fast;
+      u1_r   <= u1;
+      u2_r   <= u2;
+      mult_r <= mult;
+      norm_r <= norm;
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// FPU divide
+//------------------------------------
+module fdiv (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fattr_t attr_i[2],
+  input logic [2:0] rm_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+  typedef enum {
+    SB = 0,
+    S1,
+    S2,
+    S3,
+    SE
+  } state_e;
+
+  // FSM
+  state_e state, next_state;
+  logic fast_path, fast_path_r;
+  always_comb begin
+    next_state = state;
+    if (valid) begin
+      unique case (state)
+        SB: next_state = S1;
+        S1: next_state = fast_path_r ? SE : S2;
+        S2: next_state = S3;
+        S3: next_state = SE;
+        SE: next_state = SB;
+        default: ;
+      endcase
+    end
+  end
+
+  always_comb begin
+    if (state == S1) begin
+      // unpack
+    end else if (state == S2) begin
+      // div
+    end else if (state == S3) begin
+      // normalize
+    end else if (state == SE) begin
+      // pack
+    end
+  end
+
+  assign ready_o = (state == SE || !valid);
+  assign valid_o = valid;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state <= SB;
+    end else begin
+      state <= next_state;
+    end
+  end
+
+  // fast path
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      fast_path_r <= fast_path;
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// fsqrt
+//------------------------------------
+module fsqrt (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fattr_t attr_i[2],
+  input logic [2:0] rm_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+  typedef enum {
+    SB = 0,
+    S1,
+    S2,
+    S3,
+    SE
+  } state_e;
+
+  // FSM
+  state_e state, next_state;
+  logic fast_path, fast_path_r;
+  always_comb begin
+    next_state = state;
+    if (valid) begin
+      unique case (state)
+        SB: next_state = S1;
+        S1: next_state = fast_path_r ? SE : S2;
+        S2: next_state = S3;
+        S3: next_state = SE;
+        SE: next_state = SB;
+        default: ;
+      endcase
+    end
+  end
+
+  always_comb begin
+    if (state == S1) begin
+      // unpack
+    end else if (state == S2) begin
+      // sqrt
+    end else if (state == S3) begin
+      // normalize
+    end else if (state == SE) begin
+      // pack
+    end
+  end
+
+  assign ready_o = (state == SE || !valid);
+  assign valid_o = valid;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state <= SB;
+    end else begin
+      state <= next_state;
+    end
+  end
+
+  // fast path
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      fast_path_r <= fast_path;
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// fma
+//------------------------------------
+module fma (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fattr_t attr_i[3],
+  input logic [2:0] rm_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  input reg_t op3_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+  typedef enum {
+    SB = 0,
+    S1,
+    S2,
+    S3,
+    S4,
+    SE
+  } state_e;
+
+  // FSM
+  state_e state, next_state;
+  logic fast_path, fast_path_r;
+  always_comb begin
+    next_state = state;
+    if (valid) begin
+      unique case (state)
+        SB: next_state = S1;
+        S1: next_state = fast_path_r ? SE : S2;
+        S2: next_state = S3;
+        S3: next_state = S4;
+        S4: next_state = SE;
+        SE: next_state = SB;
+        default: ;
+      endcase
+    end
+  end
+
+  always_comb begin
+    if (state == S1) begin
+      // unpack
+    end else if (state == S2) begin
+      // multiply
+    end else if (state == S3) begin
+      // add
+    end else if (state == S4) begin
+      // normalize
+    end else if (state == SE) begin
+      // pack
+    end
+  end
+
+  assign ready_o = (state == SE || !valid);
+  assign valid_o = valid;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state <= SB;
+    end else begin
+      state <= next_state;
+    end
+  end
+
+  // fast path
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+    end else begin
+      fast_path_r <= fast_path;
     end
   end
 
