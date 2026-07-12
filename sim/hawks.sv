@@ -74,6 +74,10 @@ package hawks;
       end \
     end\
 
+  `define FINF_S(s) {1'(s), 8'hff, 23'b0}
+  `define FINF_D(s) {1'(s), 11'h7ff, 52'b0}
+  `define ONES(n) {n{1'b1}}
+
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
   typedef logic [31:0] instr_t;
@@ -5087,6 +5091,25 @@ module fpu (
     .valid_o(mul_valid)
   );
 
+  reg_t div_result;
+  fflags_t div_flags;
+  logic div_ready, div_valid;
+  fdiv fdiv1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid && id_i.fop == FOP_DIV),
+    .single_i(id_i.single),
+    .attr_i({attrs[1], attrs[0]}),
+    .rm_i(rm_i),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .op2_i(fif.v2),
+    .result_o(div_result),
+    .flags_o(div_flags),
+    .ready_o(div_ready),
+    .valid_o(div_valid)
+  );
+
   always_comb begin
     wb_fpr  = '0;
     wb_gpr  = '0;
@@ -5112,6 +5135,13 @@ module fpu (
       ready_o = mul_ready;
       if (mul_ready) begin
         `LOGI($sformatf("FMUL:0x%0h flags:%b", mul_result, mul_flags));
+      end
+    end else if (div_valid) begin
+      wb_fpr  = div_result;
+      flags   = div_flags;
+      ready_o = div_ready;
+      if (div_ready) begin
+        `LOGI($sformatf("FDIV:0x%0h flags:%b", div_result, div_flags));
       end
     end else if (fmv_valid) begin
       ready_o = fmv_ready;
@@ -5773,7 +5803,6 @@ module fmul (
     return res;
   endfunction
 
-  `define ONES(n) {n{1'b1}}
   function automatic fmul_t normalize(fmul_t v);
     fmul_t res;
     logic L, G, R, S, rndup;
@@ -5950,20 +5979,199 @@ module fdiv (
     S1,
     S2,
     S3,
+    S4,
     SE
   } state_e;
 
+  typedef enum {
+    DIV_IDLE,
+    DIV_WORK,
+    DIV_PACK,
+    DIV_DONE
+  } dstate_e;
+
+  typedef struct packed {
+    logic    valid;
+    reg_t    result;
+    fflags_t flags;
+  } ffast_t;
+
+  typedef struct packed {
+    logic sign;
+    logic [11:0] exp;
+    logic [52:0] manti;  // hidden-1bit, frac-52bit
+  } funpack_t;
+
+  typedef struct packed {
+    reg_t result;
+    fflags_t flags;
+  } fpacked_t;
+
+  typedef struct packed {
+    logic sign;
+    logic [11:0] exp;
+    logic [52:0] manti;
+    grs_t grs;
+    fflags_t flags;
+  } fdiv_t;
+
+  function automatic int clz(logic [52:0] val);
+    int i;
+    for (i = 52; i >= 0; i--) if (val[i] != 1'b0) break;
+    return 52 - i;
+  endfunction
+
+  function automatic ffast_t check_fastpath(reg_t v1, v2, fattr_t a1, a2);
+    ffast_t res = '{valid: 1, default: 0};
+    logic sign = single_i ? v1[31] ^ v2[31] : v1[63] ^ v2[63];
+    if (a1.NAN || a2.NAN) begin
+      if (a1.SNAN || a2.SNAN) begin
+        res.flags.nv = 1;
+      end
+      res.result = single_i ? {32'hffff_ffff, CQNAN_S} : CQNAN_D;
+      return res;
+    end
+    if ((a1.INF && a2.INF) || (a1.ZERO && a2.ZERO)) begin
+      res.flags.nv = 1;
+      res.result   = single_i ? {32'hffff_ffff, CQNAN_S} : CQNAN_D;
+      return res;
+    end
+    if (a2.ZERO) begin
+      res.flags.dz = 1;
+      res.result   = single_i ? {`ONES(32), `FINF_S(sign)} : `FINF_D(sign);
+      return res;
+    end
+    if (a1.INF) begin
+      res.result = single_i ? {`ONES(32), `FINF_S(sign)} : `FINF_D(sign);
+      return res;
+    end
+    if (a2.INF || a1.ZERO) begin
+      res.result = single_i ? {`ONES(32), sign, 31'b0} : {sign, 63'b0};
+      return res;
+    end
+    res.valid = 0;
+    return res;
+  endfunction
+
+  function automatic funpack_t unpack(reg_t v, fattr_t a);
+    funpack_t res;
+    res = '0;
+    res.sign = single_i ? v[31] : v[63];
+    if (a.SUBN) begin
+      res.exp   = 12'd1;
+      res.manti = single_i ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
+    end else begin
+      res.exp   = single_i ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
+      res.manti = single_i ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
+    end
+    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    return res;
+  endfunction
+
+  function automatic funpack_t prenormalize(funpack_t v, fattr_t a);
+    funpack_t res = v;
+    // TODO need check
+    if (a.SUBN) begin
+      int lz = clz(v.manti);
+      if (lz > 0) begin
+        res.manti = v.manti << lz;
+        res.exp   = 12'd1 - 12'(lz);
+      end
+    end
+    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    return res;
+  endfunction
+
+  function automatic fdiv_t normalize(fdiv_t v);
+    fdiv_t res = '{default: 0, sign: v.sign};
+    logic [52:0] manti;
+    logic G, R, S, L;
+    logic rndup;
+    logic [11:0] exp;
+    L = v.manti[0];
+    G = v.grs.G;
+    R = v.grs.R;
+    S = v.grs.S;
+
+    // round up
+    unique case (rm_i)
+      RNE: rndup = G & (R | S | L);
+      RDN: rndup = v.sign & (G | R | S);
+      RUP: rndup = (!v.sign) & (G | R | S);
+      RMM: rndup = G;
+      default: rndup = 0;
+    endcase
+
+    exp = v.exp;
+    res.exp = v.exp;
+    manti = v.manti;
+    if (rndup) begin
+      manti = v.manti + 53'd1;
+      res.manti = manti;
+      if (manti == `ONES(53)) begin
+        res.manti = {1'b1, 52'b0};
+        exp = v.exp + 12'd1;
+        res.exp = exp;
+      end
+    end else begin
+      res.manti = v.manti;
+    end
+
+    // flags
+    res.flags.nx = (G | R | S);
+    if (single_i) begin
+      if ($signed(exp) >= 12'd255) begin
+        res.flags.of = 1;
+        res.flags.nx = 1;
+        res.exp = 12'h0ff;
+        res.manti = '0;
+      end else if ($signed(exp) <= 0) begin
+        res.flags.uf = 1;
+        res.flags.nx = 1;
+        res.exp = 12'b0;
+        res.manti = '0;
+      end
+    end else begin
+      if ($signed(exp) >= 12'd2047) begin
+        res.flags.of = 1;
+        res.flags.nx = 1;
+        res.exp = 12'h7ff;
+        res.manti = '0;
+      end else if ($signed(exp) <= 0) begin
+        res.flags.uf = 1;
+        res.flags.nx = 1;
+        res.exp = 12'b0;
+        res.manti = '0;
+      end
+    end
+    `LOGI($sformatf("rnd:%b s:%b e:%0d m:%0h", rndup, res.sign, res.exp, res.manti));
+    return res;
+  endfunction
+
+  function automatic fpacked_t pack(fdiv_t v);
+    fpacked_t res = '{default: 0};
+    res.result = single_i ? {32'hffff_ffff, v.sign, v.exp[7:0], v.manti[51:29]} : {v.sign, v.exp[10:0], v.manti[51:0]};
+    res.flags  = v.flags;
+    return res;
+  endfunction
+
   // FSM
   state_e state, next_state;
-  logic fast_path, fast_path_r;
+  dstate_e dstate, next_dstate;
+  ffast_t fast, fast_r;
+  funpack_t u1, u2, p1, p2, u1_r, u2_r, p1_r, p2_r;
+  fdiv_t norm, norm_r;
+  fpacked_t pcked;
+  logic do_div;
   always_comb begin
     next_state = state;
     if (valid) begin
       unique case (state)
         SB: next_state = S1;
-        S1: next_state = fast_path_r ? SE : S2;
+        S1: next_state = fast_r.valid ? SE : S2;
         S2: next_state = S3;
-        S3: next_state = SE;
+        S3: next_state = dstate == DIV_DONE ? S4 : S3;
+        S4: next_state = SE;
         SE: next_state = SB;
         default: ;
       endcase
@@ -5971,14 +6179,105 @@ module fdiv (
   end
 
   always_comb begin
+    fast     = fast_r;
+    u1       = u1_r;
+    u2       = u2_r;
+    p1       = p1_r;
+    p2       = p2_r;
+    norm     = norm_r;
+    do_div   = 0;
+    pcked    = '0;
+    result_o = '0;
+    flags_o  = '0;
     if (state == S1) begin
-      // unpack
+      fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
+      if (!fast.valid) begin
+        u1 = unpack(op1_i, attr_i[0]);
+        u2 = unpack(op2_i, attr_i[1]);
+      end
     end else if (state == S2) begin
-      // div
+      // clz && prenormalize
+      p1 = prenormalize(u1, attr_i[0]);
+      p2 = prenormalize(u2, attr_i[1]);
     end else if (state == S3) begin
-      // normalize
+      do_div = (dstate != DIV_DONE);
+    end else if (state == S4) begin
+      norm = normalize(dres_r);
     end else if (state == SE) begin
-      // pack
+      if (fast.valid) begin
+        result_o = fast.result;
+        flags_o  = fast.flags;
+      end else begin
+        pcked = pack(norm);
+        result_o = pcked.result;
+        flags_o = pcked.flags;
+      end
+    end
+  end
+
+  // div
+  logic [106:0] holder, holder_r;
+  logic [53:0] sub, divisor;
+  logic [54:0] quotient, quotient_r;
+  logic gotone, gotone_r;
+  logic [11:0] lz, lz_r;
+  int cnt, cnt_r;
+  fdiv_t dres, dres_r;
+
+  assign sub = holder_r[106:53] - divisor;
+  assign divisor = {1'b0, p2_r.manti};
+  always_comb begin
+    if (do_div) begin
+      dres = dres_r;
+      `LOGI($sformatf("dstate: %0d", dstate));
+      unique case (dstate)
+        DIV_IDLE: begin
+          dres = '0;
+          holder = {1'b0, p1_r.manti, 53'b0};
+          cnt = single_i ? 32'd26 : 32'd55;
+          next_dstate = DIV_WORK;
+          quotient = '0;
+          gotone = 0;
+          lz = 0;
+        end
+        DIV_WORK: begin
+          gotone = gotone_r;
+          lz = lz_r;
+          if (holder_r[106:53] >= divisor) begin
+            holder   = {sub[52:0], holder_r[52:0], 1'b0};
+            quotient = {quotient_r[53:0], 1'b1};
+            gotone   = 1;
+          end else begin
+            holder   = {holder_r[105:0], 1'b0};
+            quotient = {quotient_r[53:0], 1'b0};
+            if (!gotone) begin
+              lz = lz_r + 12'd1;
+            end
+          end
+          if (gotone) begin
+            cnt = cnt_r - 32'd1;
+          end
+          `LOGI($sformatf("cnt:%0d got:%b %h-%h q:%h", cnt, gotone, holder_r[105:53], divisor, quotient));
+          if (cnt <= 0) begin
+            next_dstate = DIV_PACK;
+          end
+        end
+        DIV_PACK: begin
+          dres.sign   = p1_r.sign ^ p2_r.sign;
+          dres.exp    = p1_r.exp - p2_r.exp + (single_i ? 12'd127 : 12'd1023) - lz_r;
+          dres.manti  = quotient_r[54:2];
+          dres.grs.G  = quotient_r[1];
+          dres.grs.R  = quotient_r[0];
+          dres.grs.S  = (|holder_r);
+          next_dstate = DIV_DONE;
+          `LOGI($sformatf("div done >> s:%b e:%0d m:%h", dres.sign, dres.exp, dres.manti));
+        end
+        DIV_DONE: begin
+          next_dstate = DIV_IDLE;
+        end
+      endcase
+    end else begin
+      next_dstate = DIV_IDLE;
     end
   end
 
@@ -5993,11 +6292,31 @@ module fdiv (
     end
   end
 
+  // for divide FSM
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      dstate <= DIV_IDLE;
+    end else begin
+      dstate     <= next_dstate;
+      cnt_r      <= cnt;
+      holder_r   <= holder;
+      quotient_r <= quotient;
+      gotone_r   <= gotone;
+      dres_r     <= dres;
+      lz_r       <= lz;
+    end
+  end
+
   // fast path
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      fast_path_r <= fast_path;
+      fast_r <= fast;
+      u1_r   <= u1;
+      u2_r   <= u2;
+      p1_r   <= p1;
+      p2_r   <= p2;
+      norm_r <= norm;
     end
   end
 
