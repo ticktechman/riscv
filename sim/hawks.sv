@@ -2836,7 +2836,9 @@ module exu (
         default:    op1 = pc_i;
       endcase
       op2 = id_i.op_s2 == OP_SRC_REG ? rif.v2 : id_i.imm;
-      `LOGI($sformatf("a:%0d d:%0d m:%0d amo:%0d", id_i.alu_op, id_i.div_op, id_i.mult_op, id_i.amo_op));
+      if(id_i.alu_op != ALU_NONE || id_i.div_op != DIV_NONE || id_i.mult_op != MULT_NONE || id_i.amo_op != AMO_NONE) begin
+        `LOGI($sformatf("a:%0d d:%0d m:%0d amo:%0d", id_i.alu_op, id_i.div_op, id_i.mult_op, id_i.amo_op));
+      end
     end
   end
 
@@ -6229,7 +6231,7 @@ module fdiv (
   always_comb begin
     if (do_div) begin
       dres = dres_r;
-      `LOGI($sformatf("dstate: %0d", dstate));
+      // `LOGI($sformatf("dstate: %0d", dstate));
       unique case (dstate)
         DIV_IDLE: begin
           dres = '0;
@@ -6257,7 +6259,7 @@ module fdiv (
           if (gotone) begin
             cnt = cnt_r - 32'd1;
           end
-          `LOGI($sformatf("cnt:%0d got:%b %h-%h q:%h", cnt, gotone, holder_r[105:53], divisor, quotient));
+          // `LOGI($sformatf("cnt:%0d got:%b %h-%h q:%h", cnt, gotone, holder_r[105:53], divisor, quotient));
           if (cnt <= 0) begin
             next_dstate = DIV_PACK;
           end
