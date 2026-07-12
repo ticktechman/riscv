@@ -6152,7 +6152,7 @@ module fdiv (
 
   function automatic fpacked_t pack(fdiv_t v);
     fpacked_t res = '{default: 0};
-    res.result = single_i ? {32'hffff_ffff, v.sign, v.exp[7:0], v.manti[51:29]} : {v.sign, v.exp[10:0], v.manti[51:0]};
+    res.result = single_i ? {32'hffff_ffff, v.sign, v.exp[7:0], v.manti[22:0]} : {v.sign, v.exp[10:0], v.manti[51:0]};
     res.flags  = v.flags;
     return res;
   endfunction
