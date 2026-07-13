@@ -5492,7 +5492,7 @@ module fadd (
       res.manti = {1'b0, a1.manti} + {1'b0, a2.manti};
     end
     res.sticky = s;
-    `LOGI($sformatf("s:%b e:%0d m:0x%0h", res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:0x%0h stick:%b", res.sign, res.exp, res.manti, res.sticky));
     return res;
   endfunction
 
@@ -5538,6 +5538,7 @@ module fadd (
       L = norm.manti[31];
       G = norm.manti[30];
       R = norm.manti[29];
+      S = (|norm.manti[28:0]) | norm.sticky;
     end else begin
       L = norm.manti[2];
       G = norm.manti[1];
@@ -5552,6 +5553,7 @@ module fadd (
       RMM: rnd = G;
       default: ;
     endcase
+    `LOGI($sformatf("G:%b R:%b S:%b", G, R, S));
     res.flags.nx = G | R | S;
 
     manti = single_i ? 56'({1'b0, norm.manti[55:31]}) : 56'({1'b0, norm.manti[55:2]});
@@ -5559,12 +5561,12 @@ module fadd (
     final_manti = manti;
 
     if (rnd) begin
+      res.flags.nx = 1;
       manti = manti + 55'd1;
       overflow = single_i ? manti[24] : manti[53];
       if (overflow) begin
         exp = exp + 11'd1;
         final_manti = manti >> 1;
-        res.flags.nx = 1;
       end else begin
         final_manti = manti;
       end
@@ -5605,6 +5607,7 @@ module fadd (
 
     res.flags.uf = (res.flags.nx && exp == 0);
 
+    `LOGI($sformatf("flags:%b", res.flags));
     // pack
     if (single_i) begin
       res.result = {32'hffff_ffff, norm.sign, exp[7:0], final_manti[22:0]};
@@ -5800,7 +5803,7 @@ module fmul (
   function automatic fmul_t multiply(funpack_t u1, funpack_t u2);
     fmul_t res;
     res.sign  = u1.sign ^ u2.sign;
-    res.exp   = u1.exp + u2.exp - (single_i ? 12'd126 : 12'd1023);
+    res.exp   = u1.exp + u2.exp - (single_i ? 12'd127 : 12'd1023);
     res.manti = u1.manti * u2.manti;
     return res;
   endfunction
@@ -5812,12 +5815,19 @@ module fmul (
     logic [105:0] manti;
     int lz = clz(v.manti);
     exp = v.exp - 12'(lz) + 12'd1;
-    `LOGI($sformatf("exp:%0d manti:%h", exp, v.manti));
+    `LOGI($sformatf("exp:%0d manti:%h lz:%0d", exp, v.manti, lz));
     manti = v.manti << lz;
-    L = manti[53];
-    G = manti[52];
-    R = manti[51];
-    S = |manti[50:0];
+    if (single_i) begin
+      L = manti[82];
+      G = manti[81];
+      R = manti[80];
+      S = |manti[79:0];
+    end else begin
+      L = manti[53];
+      G = manti[52];
+      R = manti[51];
+      S = |manti[50:0];
+    end
 
     // round up
     unique case (rm_i)
@@ -5835,6 +5845,7 @@ module fmul (
         res.manti = {1'b1, 105'b0};
         exp2 = exp + 12'd1;
         res.exp = exp2;
+      end else begin
       end
     end else begin
       res.manti = manti;
