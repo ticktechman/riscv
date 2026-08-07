@@ -232,6 +232,14 @@ module mini (
     endcase
   end
 
+  always_comb begin
+    real r;
+    real s;
+    r = $bitstoreal(64'h7FEFFFFFFFFFFFFF);
+    s = $sqrt(r);
+    `LOGI($sformatf("==%h", $realtobits(s)));
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state <= IDLE;

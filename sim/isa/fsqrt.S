@@ -102,20 +102,20 @@ _start:
     # ----------------------------------------------------
     # 11. sqrt(+∞) = +∞
     # ----------------------------------------------------
-    # fsqrt.d fa4, ft1
-    # feq.d a0, fa4, ft1
-    # beq   a0, x0, fail
+    fsqrt.d fa4, ft1
+    feq.d a0, fa4, ft1
+    beq   a0, x0, fail
 
     # ----------------------------------------------------
     # 12. sqrt(最大有限正数)
     # ----------------------------------------------------
-    # la   t1, fp_max_double
-    # fld  fa0, 0(t1)
-    # fsqrt.d fa4, fa0
-    # la   t1, fp_sqrt_max_double
-    # fld  ft2, 0(t1)
-    # feq.d a0, fa4, ft2
-    # beq   a0, x0, fail
+    la   t1, fp_max_double
+    fld  fa0, 0(t1)
+    fsqrt.d fa4, fa0
+    la   t1, fp_sqrt_max_double
+    fld  ft2, 0(t1)
+    feq.d a0, fa4, ft2
+    beq   a0, x0, fail
 
     # ----------------------------------------------------
     # 13. sqrt(-1.0) → qNaN + NV 异常
@@ -183,6 +183,6 @@ fp_subnorm:          .quad 0x0008000000000000
 fp_sqrt_subnorm:     .quad 0x1FF6A09E667F3BCD
 
 fp_max_double:       .quad 0x7FEFFFFFFFFFFFFF
-fp_sqrt_max_double:  .quad 0x5FEFFFFFFFFFFFFE
+fp_sqrt_max_double:  .quad 0x5FEFFFFFFFFFFFFF
 
 fp_neg_1_0:          .quad 0xBFF0000000000000

@@ -6602,7 +6602,11 @@ module fsqrt (
           default: rndup = 0;
         endcase
         manti = single_i ? {29'b0, mq[BP-1:BP-23]} : mq[BP-1:BP-52];
+        `LOGI($sformatf("manti:%h, rndup:%b", manti, rndup));
         if (rndup) begin
+          if (manti == `ONES(52)) begin
+            exp += 1;
+          end
           manti += 52'b1;
         end
         flags.nx = (G | R | S);
