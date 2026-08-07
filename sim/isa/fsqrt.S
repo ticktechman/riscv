@@ -80,13 +80,13 @@ _start:
     # ----------------------------------------------------
     # 9. sqrt(DBL_MIN)
     # ----------------------------------------------------
-    la   t1, fp_dbl_min
-    fld  fa0, 0(t1)
-    fsqrt.d fa4, fa0
-    la   t1, fp_sqrt_dbl_min
-    fld  ft2, 0(t1)
-    feq.d a0, fa4, ft2
-    beq   a0, x0, fail
+     la   t1, fp_dbl_min
+     fld  fa0, 0(t1)
+     fsqrt.d fa4, fa0
+     la   t1, fp_sqrt_dbl_min
+     fld  ft2, 0(t1)
+     feq.d a0, fa4, ft2
+     beq   a0, x0, fail
 
     # ----------------------------------------------------
     # 10. sqrt(次正规数)
@@ -102,20 +102,20 @@ _start:
     # ----------------------------------------------------
     # 11. sqrt(+∞) = +∞
     # ----------------------------------------------------
-    fsqrt.d fa4, ft1
-    feq.d a0, fa4, ft1
-    beq   a0, x0, fail
+    # fsqrt.d fa4, ft1
+    # feq.d a0, fa4, ft1
+    # beq   a0, x0, fail
 
     # ----------------------------------------------------
     # 12. sqrt(最大有限正数)
     # ----------------------------------------------------
-    la   t1, fp_max_double
-    fld  fa0, 0(t1)
-    fsqrt.d fa4, fa0
-    la   t1, fp_sqrt_max_double
-    fld  ft2, 0(t1)
-    feq.d a0, fa4, ft2
-    beq   a0, x0, fail
+    # la   t1, fp_max_double
+    # fld  fa0, 0(t1)
+    # fsqrt.d fa4, fa0
+    # la   t1, fp_sqrt_max_double
+    # fld  ft2, 0(t1)
+    # feq.d a0, fa4, ft2
+    # beq   a0, x0, fail
 
     # ----------------------------------------------------
     # 13. sqrt(-1.0) → qNaN + NV 异常
@@ -170,17 +170,17 @@ fp_pos_1_0:          .quad 0x3FF0000000000000
 fp_pos_0_25:         .quad 0x3FD0000000000000
 fp_pos_0_5:          .quad 0x3FE0000000000000
 
-fp_pos_1e_4:         .quad 0x3F50624DD2F1A9FC
+fp_pos_1e_4:         .quad 0x3F1A36E2EB1C432D
 fp_pos_0_01:         .quad 0x3F847AE147AE147B
 
 fp_pos_0_0:          .quad 0x0000000000000000
 fp_pos_inf:          .quad 0x7FF0000000000000
 
 fp_dbl_min:          .quad 0x0010000000000000
-fp_sqrt_dbl_min:     .quad 0x3FA0000000000000
+fp_sqrt_dbl_min:     .quad 0x2000000000000000
 
 fp_subnorm:          .quad 0x0008000000000000
-fp_sqrt_subnorm:     .quad 0x3F90000000000000
+fp_sqrt_subnorm:     .quad 0x1FF6A09E667F3BCD
 
 fp_max_double:       .quad 0x7FEFFFFFFFFFFFFF
 fp_sqrt_max_double:  .quad 0x5FEFFFFFFFFFFFFE

@@ -5112,6 +5112,24 @@ module fpu (
     .valid_o(div_valid)
   );
 
+  reg_t sqrt_result;
+  fflags_t sqrt_flags;
+  logic sqrt_ready, sqrt_valid;
+  fsqrt fsqrt1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid && id_i.fop == FOP_SQRT),
+    .single_i(id_i.single),
+    .attr_i(attrs[0]),
+    .rm_i(rm_i),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .result_o(sqrt_result),
+    .flags_o(sqrt_flags),
+    .ready_o(sqrt_ready),
+    .valid_o(sqrt_valid)
+  );
+
   always_comb begin
     wb_fpr  = '0;
     wb_gpr  = '0;
@@ -5144,6 +5162,13 @@ module fpu (
       ready_o = div_ready;
       if (div_ready) begin
         `LOGI($sformatf("FDIV:0x%0h flags:%b", div_result, div_flags));
+      end
+    end else if (sqrt_valid) begin
+      wb_fpr  = sqrt_result;
+      flags   = sqrt_flags;
+      ready_o = sqrt_ready;
+      if (sqrt_ready) begin
+        `LOGI($sformatf("FSQRT:0x%0h flags:%b", sqrt_result, sqrt_flags));
       end
     end else if (fmv_valid) begin
       ready_o = fmv_ready;
@@ -6343,35 +6368,157 @@ module fsqrt (
   input logic rst_n,
   input logic valid,
   input logic single_i,
-  input fattr_t attr_i[2],
+  input fattr_t attr_i,
   input logic [2:0] rm_i,
   input fop_e op_i,
   input reg_t op1_i,
-  input reg_t op2_i,
   output reg_t result_o,
   output fflags_t flags_o,
   output logic ready_o,
   output logic valid_o
 );
+  localparam BP = 64;
+  localparam MP = BP + 5;
+  localparam DN = 30;
+  localparam SN = 16;
+  localparam SEL_BITS = 12;
+
+  // verilog_format: off
   typedef enum {
     SB = 0,
-    S1,
-    S2,
-    S3,
+    S1, S2, S3, S4,
     SE
   } state_e;
+  // verilog_format: on
+
+  typedef struct packed {
+    logic    valid;
+    reg_t    result;
+    fflags_t flags;
+  } ffast_t;
+
+  typedef struct packed {
+    logic sign;
+    logic signed [10:0] exp;
+    logic [52:0] manti;  // hidden-1bit, frac-52bit
+  } funpack_t;
+
+  function automatic int clz(logic [52:0] val);
+    int i;
+    for (i = 52; i >= 0; i--) if (val[i] != 1'b0) break;
+    return 52 - i;
+  endfunction
+
+  function automatic ffast_t check_fastpath(reg_t v1, fattr_t a1);
+    ffast_t res = '{valid: 1, default: 0};
+    logic sign = single_i ? v1[31] : v1[63];
+    if (sign) begin
+      res.flags.nv = 1;
+      res.result   = single_i ? {32'hffff_ffff, CQNAN_S} : CQNAN_D;
+      return res;
+    end
+
+    if (a1.NAN) begin
+      if (a1.SNAN) begin
+        res.flags.nv = 1;
+      end
+      res.result = single_i ? {32'hffff_ffff, CQNAN_S} : CQNAN_D;
+      return res;
+    end
+
+    if (a1.INF || a1.ZERO) begin
+      res.result = v1;
+      return res;
+    end
+
+    res.valid = 0;
+    return res;
+  endfunction
+
+  function automatic funpack_t unpack(reg_t v, fattr_t a);
+    funpack_t res = '{default: 0};
+    int lz = 0;
+    res.sign = single_i ? v[31] : v[63];
+    if (a.SUBN) begin
+      res.manti = single_i ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
+      lz = clz(res.manti);
+      res.exp = 11'sd1 - 11'(lz);
+      res.manti = res.manti <<< lz;
+    end else begin
+      res.exp   = single_i ? {3'b0, v[30:23]} : {v[62:52]};
+      res.manti = single_i ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
+    end
+    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    return res;
+  endfunction
+
+  function automatic logic signed [MP-1:0] multi_s(logic signed [2:0] sfac, logic signed [MP-1:0] f);
+    unique case (sfac)
+      3'sd0:   return MP'(0);
+      3'sd1:   return f;
+      3'sd2:   return f <<< 1;
+      -3'sd1:  return (~f) + MP'(1);
+      -3'sd2:  return (~(f <<< 1) + MP'(1));
+      default: return MP'(0);
+    endcase
+  endfunction
+  function automatic logic [2:0] select_s(logic signed [MP-1:0] fr4, logic signed [MP-1:0] partial_s, int shift);
+    localparam BITS = 12;
+    logic signed [2:0] candidates[3];
+    logic signed [2:0] fit;
+    logic signed [MP-1:0] new_s;
+    logic signed [MP-1:0] v1, v2, delta, best_delta;
+
+    if (partial_s == MP'(0)) begin
+      return 3'd0;
+    end
+
+    if (fr4 >= MP'(0)) begin
+      candidates = {3'sd0, 3'sd1, 3'sd2};
+    end else begin
+      candidates = {3'sd0, -3'sd1, -3'sd2};
+    end
+
+    best_delta = {1'b0, {(MP - 1) {1'b1}}};
+    foreach (candidates[i]) begin
+      if (shift >= 0) begin
+        new_s = partial_s + (MP'(candidates[i]) <<< shift);
+      end else begin
+        new_s = partial_s;
+      end
+
+      v1 = fr4 >>> (BP - BITS);
+      v2 = new_s >>> (BP - BITS);
+      delta = v1 - multi_s(candidates[i], v2);
+      if (delta < 0) begin
+        delta = -delta;
+      end
+      if (best_delta > delta) begin
+        best_delta = delta;
+        fit = candidates[i];
+      end
+    end
+
+    return fit;
+  endfunction
+
 
   // FSM
   state_e state, next_state;
-  logic fast_path, fast_path_r;
+  ffast_t fast, fast_r;
+  logic iterate_end, iterate_end_r;
+
   always_comb begin
     next_state = state;
     if (valid) begin
       unique case (state)
         SB: next_state = S1;
-        S1: next_state = fast_path_r ? SE : S2;
+        S1: begin
+          next_state = fast_r.valid ? SE : S2;
+        end
         S2: next_state = S3;
-        S3: next_state = SE;
+        S3: next_state = iterate_end_r ? S4 : S3;
+        S4: next_state = SE;
         SE: next_state = SB;
         default: ;
       endcase
@@ -6379,15 +6526,104 @@ module fsqrt (
   end
 
   always_comb begin
-    if (state == S1) begin
-      // unpack
-    end else if (state == S2) begin
-      // sqrt
-    end else if (state == S3) begin
-      // normalize
-    end else if (state == SE) begin
-      // pack
-    end
+    funpack_t u1;
+    fflags_t flags;
+    logic G, R, S, L, rndup;
+    logic signed [10:0] exp, real_e;
+    logic [51:0] manti;
+    logic signed [MP-1:0] rem, rem_4x, root, root_2x, root_s, inc, mq;
+    logic signed [2:0] sfactor;
+    int counter, max_counter, shift;
+
+    unique case (state)
+      SB: begin
+        fast        = '0;
+        iterate_end = 0;
+      end
+      S1: begin
+        fast = check_fastpath(op1_i, attr_i);
+        if (!fast.valid) begin
+          u1 = unpack(op1_i, attr_i);
+        end
+        `LOGI($sformatf("fsqrt of: %.16f, fast:%b", $bitstoreal(op1_i), fast.valid));
+      end
+      S2: begin
+        // prepare
+        real_e = u1.exp - (single_i ? 11'sd127 : 11'sd1023);
+        exp = (real_e >>> 1) + (single_i ? 11'sd127 : 11'sd1023);
+        rem = MP'(u1.manti) <<< (BP - (single_i ? 23 : 52));
+        root = MP'(1) <<< BP;
+        if (real_e[0]) begin
+          rem = rem >>> 1;
+          sfactor = u1.manti[51] == 1'b1 ? 3'sd0 : -3'sd1;
+        end else begin
+          rem = rem >>> 2;
+          sfactor = u1.manti[51] == 1'b1 ? -3'sd1 : -3'sd2;
+        end
+        rem -= (MP'(1) <<< BP);
+        root += (MP'(sfactor) << (BP - 2));
+        root_s = MP'(2 << BP) + MP'(sfactor <<< (BP - 2));
+        rem = (rem <<< 2) - multi_s(sfactor, root_s);
+        counter = 0;
+        max_counter = single_i ? SN : DN;
+        iterate_end = 0;
+        flags = '0;
+        `LOGI($sformatf("rem: %0d root:%0d", rem, root));
+      end
+      S3: begin
+        // iterate
+        counter += 1;
+        shift = BP - ((counter + 1) << 1);
+        rem_4x = rem <<< 2;
+        root_2x = root <<< 1;
+        sfactor = select_s(rem_4x, root_2x, shift);
+        inc = (shift >= 0 ? MP'(sfactor) << shift : '0);
+        root_s = root_2x + inc;
+        rem = rem_4x - multi_s(sfactor, root_s);
+        root += inc;
+        `LOGI($sformatf("root:%0d sfactor:%0d, inc:%0d", root, sfactor, inc));
+        iterate_end = counter >= max_counter;
+      end
+      S4: begin
+        // normalize
+        `LOGI($sformatf("root:%d", root));
+        root = root <<< 1;
+        mq = root - (1 << BP);
+        G = single_i ? mq[BP-24] : mq[BP-53];
+        R = single_i ? mq[BP-25] : mq[BP-54];
+        S = single_i ? |mq[BP-26:0] : |mq[BP-55:0];
+        L = single_i ? mq[BP-23] : mq[BP-52];
+
+        unique case (rm_i)
+          RNE: rndup = G & (R | S | L);
+          RDN: rndup = u1.sign & (G | R | S);
+          RUP: rndup = (!u1.sign) & (G | R | S);
+          RMM: rndup = G;
+          default: rndup = 0;
+        endcase
+        manti = single_i ? {29'b0, mq[BP-1:BP-23]} : mq[BP-1:BP-52];
+        if (rndup) begin
+          manti += 52'b1;
+        end
+        flags.nx = (G | R | S);
+      end
+      SE: begin
+        if (fast.valid) begin
+          `LOGI($sformatf("fast:%h", fast.result));
+          result_o = fast.result;
+          flags_o  = fast.flags;
+        end else begin
+          if (single_i) begin
+            result_o = {32'hffffffff, u1.sign, exp[7:0], manti[22:0]};
+          end else begin
+            result_o = {u1.sign, exp, manti};
+          end
+          `LOGI($sformatf("result:%.16f, exp:%0d, manti:%h", $bitstoreal(result_o), exp, manti));
+          flags_o = flags;
+        end
+      end
+      default: ;
+    endcase
   end
 
   assign ready_o = (state == SE || !valid);
@@ -6397,7 +6633,9 @@ module fsqrt (
     if (!rst_n) begin
       state <= SB;
     end else begin
-      state <= next_state;
+      state         <= next_state;
+      fast_r        <= fast;
+      iterate_end_r <= iterate_end;
     end
   end
 
@@ -6405,7 +6643,6 @@ module fsqrt (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
     end else begin
-      fast_path_r <= fast_path;
     end
   end
 
@@ -6430,14 +6667,13 @@ module fma (
   output logic ready_o,
   output logic valid_o
 );
+  // verilog_format: off
   typedef enum {
     SB = 0,
-    S1,
-    S2,
-    S3,
-    S4,
+    S1, S2, S3, S4,
     SE
   } state_e;
+  // verilog_format: on
 
   // FSM
   state_e state, next_state;
