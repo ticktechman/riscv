@@ -52,7 +52,7 @@ package hawks;
   `define BU2R(r, a) {{56'b0}, r[a]}
   `define HU2R(r, a) {{48'b0}, r[a+1], r[a]}
   `define WU2R(r, a) {{32'b0}, r[a+3], r[a+2], r[a+1], r[a]}
-  `define FW2R(r, a) {{32'b1}, r[a+3], r[a+2], r[a+1], r[a]}
+  `define FW2R(r, a) {{32{1'b1}}, r[a+3], r[a+2], r[a+1], r[a]}
   `define WU2I(r, a) {r[a+3], r[a+2], r[a+1], r[a]}
   `define write_data(r, off, data, sz) for (idx_t i = 0; i < sz; i++) r[off+i] <= data[8*i+:8]
 
@@ -6380,7 +6380,7 @@ module fsqrt (
   localparam BP = 64;
   localparam MP = BP + 5;
   localparam DN = 30;
-  localparam SN = 16;
+  localparam SN = 24;
   localparam SEL_BITS = 12;
 
   // verilog_format: off
@@ -6551,7 +6551,7 @@ module fsqrt (
         // prepare
         real_e = u1.exp - (single_i ? 11'sd127 : 11'sd1023);
         exp = (real_e >>> 1) + (single_i ? 11'sd127 : 11'sd1023);
-        rem = MP'(u1.manti) <<< (BP - (single_i ? 23 : 52));
+        rem = MP'(u1.manti) <<< (BP - 52);
         root = MP'(1) <<< BP;
         if (real_e[0]) begin
           rem = rem >>> 1;
@@ -6568,7 +6568,7 @@ module fsqrt (
         max_counter = single_i ? SN : DN;
         iterate_end = 0;
         flags = '0;
-        `LOGI($sformatf("rem: %0d root:%0d", rem, root));
+        // `LOGI($sformatf("rem: %0d root:%0d", rem, root));
       end
       S3: begin
         // iterate
@@ -6586,7 +6586,6 @@ module fsqrt (
       end
       S4: begin
         // normalize
-        `LOGI($sformatf("root:%d", root));
         root = root <<< 1;
         mq = root - (1 << BP);
         G = single_i ? mq[BP-24] : mq[BP-53];
@@ -6602,7 +6601,6 @@ module fsqrt (
           default: rndup = 0;
         endcase
         manti = single_i ? {29'b0, mq[BP-1:BP-23]} : mq[BP-1:BP-52];
-        `LOGI($sformatf("manti:%h, rndup:%b", manti, rndup));
         if (rndup) begin
           if (manti == `ONES(52)) begin
             exp += 1;
