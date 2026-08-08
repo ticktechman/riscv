@@ -6504,26 +6504,9 @@ module fsqrt (
 
 
   // FSM
-  state_e state, next_state;
-  ffast_t fast, fast_r;
-  logic iterate_end, iterate_end_r;
-
-  always_comb begin
-    next_state = state;
-    if (valid) begin
-      unique case (state)
-        SB: next_state = S1;
-        S1: begin
-          next_state = fast_r.valid ? SE : S2;
-        end
-        S2: next_state = S3;
-        S3: next_state = iterate_end_r ? S4 : S3;
-        S4: next_state = SE;
-        SE: next_state = SB;
-        default: ;
-      endcase
-    end
-  end
+  state_e state;
+  ffast_t fast;
+  logic iterate_end;
 
   always_comb begin
     funpack_t u1;
@@ -6537,15 +6520,15 @@ module fsqrt (
 
     unique case (state)
       SB: begin
-        fast        = '0;
+        fast = '0;
         iterate_end = 0;
       end
       S1: begin
         fast = check_fastpath(op1_i, attr_i);
+        `LOGI($sformatf("fsqrt %.16f, fast:%b", $bitstoreal(op1_i), fast.valid));
         if (!fast.valid) begin
           u1 = unpack(op1_i, attr_i);
         end
-        `LOGI($sformatf("fsqrt of: %.16f, fast:%b", $bitstoreal(op1_i), fast.valid));
       end
       S2: begin
         // prepare
@@ -6620,7 +6603,7 @@ module fsqrt (
           end else begin
             result_o = {u1.sign, exp, manti};
           end
-          `LOGI($sformatf("result:%.16f, exp:%0d, manti:%h", $bitstoreal(result_o), exp, manti));
+          `LOGI($sformatf("result:%.16f, e:%0d, m:%h", $bitstoreal(result_o), exp, manti));
           flags_o = flags;
         end
       end
@@ -6635,16 +6618,16 @@ module fsqrt (
     if (!rst_n) begin
       state <= SB;
     end else begin
-      state         <= next_state;
-      fast_r        <= fast;
-      iterate_end_r <= iterate_end;
-    end
-  end
-
-  // fast path
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
+      if (valid) begin
+        unique case (state)
+          SB: state <= S1;
+          S1: state = fast.valid ? SE : S2;
+          S2: state = S3;
+          S3: state = iterate_end ? S4 : S3;
+          S4: state = SE;
+          SE: state = SB;
+        endcase
+      end
     end
   end
 
