@@ -13,9 +13,13 @@
 
 `timescale 1ns / 100ps
 
-`define LOGI(msg) $display("[I|%9t|%m] %s", $realtime, msg)
-`define LOGW(msg) $display("[W|%9t|%m] %s", $realtime, msg)
-`define LOGE(msg) $display("[E|%9t|%m] %s", $realtime, msg)
+`define COLOR_NONE "\033[0m"
+`define COLOR_RED "\033[31m"
+`define COLOR_GREEN "\033[32m"
+`define COLOR_YELLOW "\033[33m"
+`define LOGI(msg) $display("[I|%9t|%m.%0d] %s", $realtime, `__LINE__, msg)
+`define LOGW(msg) $display("%s[W|%9t|%m.%0d] %s%s", `COLOR_YELLOW, $realtime, `__LINE__, msg, `COLOR_NONE)
+`define LOGE(msg) $display("%s[E|%9t|%m.%0d] %s%s", `COLOR_RED, $realtime, `__LINE__, msg, `COLOR_NONE)
 
 //-------------------------------------
 // Testbench
@@ -70,13 +74,11 @@ module mini (
   input logic rst_n
 );
 
-  logic [31:0] r;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       `LOGW("reset");
     end else begin
       `LOGI("hello");
-      `LOGI($sformatf("%0h", r));
     end
   end
 
