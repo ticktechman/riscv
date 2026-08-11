@@ -750,7 +750,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(2000)
+    .COUNTER(6000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -5055,6 +5055,24 @@ module fpu (
     .valid_o(fmv_valid)
   );
 
+  reg_t fcvt_result;
+  fflags_t fcvt_flags;
+  logic fcvt_ready, fcvt_valid;
+  fcvt fcvt1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid),
+    .single_i(id_i.single),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .rm_i(rm_i),
+    .attr_i(attrs[0]),
+    .result_o(fcvt_result),
+    .flags_o(fcvt_flags),
+    .ready_o(fcvt_ready),
+    .valid_o(fcvt_valid)
+  );
+
   reg_t add_result;
   fflags_t add_flags;
   logic add_ready, add_valid;
@@ -5169,6 +5187,17 @@ module fpu (
       ready_o = sqrt_ready;
       if (sqrt_ready) begin
         `LOGI($sformatf("FSQRT:0x%0h flags:%b", sqrt_result, sqrt_flags));
+      end
+    end else if (fcvt_valid) begin
+      ready_o = fcvt_ready;
+      flags   = fcvt_flags;
+      if (id_i.fop inside {FOP_CVT_F_LU, FOP_CVT_F_WU, FOP_CVT_S_D, FOP_CVT_D_S}) begin
+        wb_fpr = fcvt_result;
+      end else begin
+        wb_gpr = fcvt_result;
+      end
+      if (sqrt_ready) begin
+        `LOGI($sformatf("FCVT:0x%0h flags:%b", fcvt_result, fcvt_flags));
       end
     end else if (fmv_valid) begin
       ready_o = fmv_ready;
@@ -6661,22 +6690,8 @@ module fma (
   // verilog_format: on
 
   // FSM
-  state_e state, next_state;
-  logic fast_path, fast_path_r;
-  always_comb begin
-    next_state = state;
-    if (valid) begin
-      unique case (state)
-        SB: next_state = S1;
-        S1: next_state = fast_path_r ? SE : S2;
-        S2: next_state = S3;
-        S3: next_state = S4;
-        S4: next_state = SE;
-        SE: next_state = SB;
-        default: ;
-      endcase
-    end
-  end
+  state_e state;
+  logic fast_path;
 
   always_comb begin
     if (state == S1) begin
@@ -6695,19 +6710,21 @@ module fma (
   assign ready_o = (state == SE || !valid);
   assign valid_o = valid;
 
+  // FSM
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state <= SB;
     end else begin
-      state <= next_state;
-    end
-  end
-
-  // fast path
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      fast_path_r <= fast_path;
+      if (valid) begin
+        unique case (state)
+          SB: state <= S1;
+          S1: state = fast.valid ? SE : S2;
+          S2: state = S3;
+          S3: state = iterate_end ? S4 : S3;
+          S4: state = SE;
+          SE: state = SB;
+        endcase
+      end
     end
   end
 
@@ -6745,9 +6762,285 @@ module fmv (
           result_o = single_i ? {32'hffff_ffff, op1_i[31:0]} : op1_i;
           valid_o  = 1;
         end
-        default: begin
-          valid_o = 0;
+        default: valid_o = 0;
+      endcase
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// convert
+//------------------------------------
+module fcvt (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input fattr_t attr_i,
+  input logic [2:0] rm_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+
+  typedef struct packed {
+    reg_t result;
+    fflags_t flags;
+  } fconvert_t;
+
+  function automatic int clz(logic [63:0] val, int effective_bits);
+    int i;
+    for (i = 63; i >= 64 - effective_bits; i--) begin
+      if (val[i]) break;
+    end
+    return 63 - i;
+  endfunction
+
+
+  function automatic fconvert_t s2d();
+    // INF, ZERO, NAN(QNaN, SNaN), SUBN
+    fconvert_t res = '{default: 0};
+    int lz = 0;
+    logic [22:0] frac;
+
+    if (attr_i.INF) begin
+      res.result = {op1_i[31], 11'h7FF, 52'b0};
+    end else if (attr_i.NAN) begin
+      if (attr_i.SNAN) begin
+        res.flags.nv = 1;
+        res.result   = {op1_i[31], 11'h7ff, 1'b1, op1_i[21:0], 29'b0};  // change to QNaN
+      end else begin
+        res.result = {op1_i[31], 11'h7ff, op1_i[22:0], 29'b0};
+      end
+    end else if (attr_i.ZERO) begin
+      res.result = {op1_i[31], 11'b0, 52'b0};
+    end else if (attr_i.SUBN) begin
+      // subnormal
+      lz = clz({op1_i[22:0], 41'b0}, 23);
+      frac = op1_i[22:0] << lz;
+      res.result = {op1_i[31], 11'd1024 - 11'(lz), frac, 29'b0};
+    end else begin
+      // normal
+      res.result = {op1_i[31], 11'(op1_i[30:23]) + 11'd896, {op1_i[22:0], 29'b0}};
+    end
+    return res;
+  endfunction
+
+  function automatic fconvert_t d2s();
+    fconvert_t res = '{default: 0};
+    logic signed [11:0] exp = {1'b0, op1_i[62:52]};
+    logic [22:0] frac = op1_i[51:29];
+    logic G, R, S, L, rndup;
+    exp -= 12'sd1023;
+
+    if (attr_i.INF) begin
+      res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
+    end else if (attr_i.ZERO) begin
+      res.result = {`ONES(32), op1_i[63], 8'h00, 23'b0};
+    end else if (attr_i.NAN) begin
+      if (attr_i.SNAN) begin
+        res.flags.nv = 1;
+        res.result   = {`ONES(32), op1_i[63], 8'hff, 1'b1, op1_i[50:29]};  // change to QNaN
+      end else begin
+        res.result = {`ONES(32), op1_i[63], 8'hff, op1_i[51:29]};
+      end
+    end else if (exp < -12'sd126) begin
+      res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
+    end else if (exp > 12'sd127) begin
+      res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
+    end else begin
+      //normal data
+      L = op1_i[29];
+      G = op1_i[28];
+      R = op1_i[27];
+      S = |op1_i[26:0];
+      exp += 12'd127;
+
+      unique case (rm_i)
+        RNE: rndup = G & (R | S | L);
+        RDN: rndup = op1_i[63] & (G | R | S);
+        RUP: rndup = (!op1_i[63]) & (G | R | S);
+        RMM: rndup = G;
+        default: rndup = 0;
+      endcase
+      if (rndup) begin
+        if (frac == `ONES(23)) begin
+          frac = '0;
+          exp += 1;
+        end else begin
+          frac += 23'd1;
         end
+      end
+      res.flags.nx = G | S;
+      res.result   = {`ONES(32), op1_i[63], exp[7:0], frac};
+    end
+    return res;
+  endfunction
+
+  function automatic fconvert_t w2d();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+  function automatic fconvert_t wu2d();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+  function automatic fconvert_t l2d();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+  function automatic fconvert_t lu2d();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+
+  localparam I64_MAX = 64'h7FFF_FFFF_FFFF_FFFF;
+  localparam I32_MAX = 64'h0000_0000_7FFF_FFFF;
+  localparam I64_MIN = 64'h8000_0000_0000_0000;
+  localparam I32_MIN = 64'hFFFF_FFFF_8000_0000;
+  localparam U64_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
+  localparam U32_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
+
+  function automatic fconvert_t d2i(logic isigned, logic l);
+    // INF, ZERO, NAN(QNaN, SNaN), SUBN
+    fconvert_t res = '{default: 0};
+    logic dsign = op1_i[63];
+    logic signed [11:0] exp = {1'b0, op1_i[62:52]}, shift;
+    logic signed [11:0] max_e = l ? (isigned ? 12'd63 : 12'd64) : (isigned ? 12'd31 : 12'd32);
+    reg_t ires;
+    logic G, R, S, L, rndup;
+
+    // integer(64bits) + frac(52bits) + GR
+    logic [65:0] data = {1'b0, 1'b1, op1_i[51:0], 10'b0, 2'b0};
+    exp -= 12'sd1023;
+
+    `LOGI($sformatf("e:%0d max_e:%0d", exp, max_e));
+    if (attr_i.ZERO) begin
+      if (!isigned && dsign) begin
+        res.flags = '{nv: 1'b1, nx: 1'b1, default: 0};
+      end
+    end else if (attr_i.NAN) begin
+      res.flags  = '{nv: 1'b1, default: 0};
+      res.result = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
+    end else if (attr_i.INF || exp >= max_e) begin
+      res.flags = '{nv: 1'b1, default: 0};
+      if (dsign) begin
+        res.result = l ? (isigned ? I64_MIN : 64'b0) : (isigned ? I32_MIN : 64'b0);
+      end else begin
+        res.result = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
+      end
+    end else begin
+      // normal data
+      shift = 12'd62 - exp;
+      `LOGI($sformatf("data:%h, shift:%0d exp:%0d", data, shift, exp));
+      S = |(data << (exp + 12'd2));
+      data = data >> shift;
+      ires = data[65:2];
+      L = data[2];
+      G = data[1];
+      R = data[0];
+      `LOGI($sformatf("G:%b R:%b S:%b", G, R, S));
+      unique case (rm_i)
+        RNE: rndup = G & (R | S | L);
+        RDN: rndup = dsign & (G | R | S);
+        RUP: rndup = (!dsign) & (G | R | S);
+        RMM: rndup = G;
+        default: rndup = 0;
+      endcase
+      res.flags.nx = G | R | S;
+
+      if (rndup) begin
+        ires += 1;
+      end
+      if (dsign && !isigned) begin
+        if (ires != 64'b0) begin
+          res.flags.nv = 1;
+        end
+      end
+      `LOGI($sformatf("ires:%h", ires));
+      res.result = dsign ? (isigned ? -ires : 64'b0) : ires;
+      if (!l) begin
+        res.result = {{32{res.result[31]}}, res.result[31:0]};
+      end
+    end
+
+    return res;
+  endfunction
+
+  function automatic fconvert_t d2w();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+  function automatic fconvert_t d2wu();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+  function automatic fconvert_t d2l();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+  function automatic fconvert_t d2lu();
+    fconvert_t res = '{default: 0};
+    return res;
+  endfunction
+
+  always_comb begin
+    ready_o = valid;
+  end
+
+  always_comb begin
+    fconvert_t res;
+    valid_o  = 0;
+    result_o = '0;
+    flags_o  = '0;
+    res      = '0;
+    if (valid) begin
+      unique case (op_i)
+        FOP_CVT_W_F: begin
+          res = d2i(1, 0);
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_WU_F: begin
+          res = d2i(0, 0);
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_L_F: begin
+          res = d2i(1, 1);
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_LU_F: begin
+          res = d2i(0, 1);
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_F_W: begin
+          res = w2d();
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_F_WU: begin
+          res = wu2d();
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_F_L: begin
+          res = l2d();
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_F_LU: begin
+          res = lu2d();
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_S_D: begin
+          res = d2s();
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        FOP_CVT_D_S: begin
+          res = s2d();
+          {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
+        end
+        default: valid_o = 0;
       endcase
     end
   end
