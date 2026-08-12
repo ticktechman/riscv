@@ -5080,6 +5080,23 @@ module fpu (
     .valid_o(fcvt_valid)
   );
 
+  reg_t fclass_result;
+  fflags_t fclass_flags;
+  logic fclass_ready, fclass_valid;
+  fclass fclass1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid),
+    .single_i(id_i.single),
+    .attr_i(attrs[0]),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .result_o(fclass_result),
+    .flags_o(fclass_flags),
+    .ready_o(fclass_ready),
+    .valid_o(fclass_valid)
+  );
+
   reg_t fmax_result;
   logic fmax_ready, fmax_valid;
   fflags_t fmax_flags;
@@ -5241,6 +5258,13 @@ module fpu (
       end
       if (fmv_ready) begin
         `LOGI($sformatf("FMV:0x%0h", fmv_result));
+      end
+    end else if (fclass_valid) begin
+      ready_o = fclass_ready;
+      flags   = '0;
+      wb_gpr  = fclass_result;
+      if (fclass_ready) begin
+        `LOGI($sformatf("FCLASS:0x%0h", fmv_result));
       end
     end else begin
       ready_o = 1;
@@ -7183,6 +7207,72 @@ module fmax (
     end
   end
 
+endmodule
+
+//------------------------------------
+// fclass
+//------------------------------------
+module fclass (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input fattr_t attr_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+
+  typedef struct packed {
+    logic qnan;
+    logic snan;
+    logic positive_inf;
+    logic positive_normal;
+    logic positive_subnormal;
+    logic positive_zero;
+    logic negative_zero;
+    logic negative_subnormal;
+    logic negative_normal;
+    logic negative_inf;
+  } fclassify_t;
+
+  always_comb begin
+    ready_o = valid;
+  end
+
+  function automatic fclassify_t classify();
+    fclassify_t res = '{default: 0};
+    res.qnan = attr_i.QNAN;
+    res.snan = attr_i.SNAN;
+    res.positive_inf = attr_i.INF && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
+    res.negative_inf = attr_i.INF && (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
+    res.positive_zero = attr_i.ZERO && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
+    res.negative_zero = attr_i.ZERO && (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
+    res.positive_subnormal = attr_i.SUBN && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
+    res.negative_subnormal = attr_i.SUBN && (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
+
+    if (res == 10'b0) begin
+      res.positive_normal = (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
+      res.negative_normal = (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
+    end
+
+    `LOGI($sformatf("fclass: %b", res));
+    return res;
+  endfunction
+
+  always_comb begin
+    valid_o  = valid && op_i inside {FOP_CLASS};
+    result_o = '0;
+    if (valid) begin
+      unique case (op_i)
+        FOP_CLASS: result_o = {54'b0, classify()};
+        default:   ;
+      endcase
+    end
+  end
 endmodule
 
 /******************************************************************************/
