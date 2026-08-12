@@ -2137,12 +2137,18 @@ module idu (
                   default:  ecause = EXC_ILLEGAL_INSTRUCTION;
                 endcase
               end
-              5'b10001: begin  // float <-> double
+              5'b01000: begin  // float <-> double
                 id_o.op_s2 = OP_SRC_NONE;
                 unique case (instr_i[24:20])
-                  5'b00000: id_o.fop = FOP_CVT_D_S;
-                  5'b00001: id_o.fop = FOP_CVT_S_D;
-                  default:  ecause = EXC_ILLEGAL_INSTRUCTION;
+                  5'b00000: begin
+                    id_o.fop = FOP_CVT_D_S;
+                    id_o.single = 1;
+                  end
+                  5'b00001: begin
+                    id_o.fop = FOP_CVT_S_D;
+                    id_o.single = 0;
+                  end
+                  default: ecause = EXC_ILLEGAL_INSTRUCTION;
                 endcase
               end
               5'b11100: begin  // move fpr to gpr
@@ -4941,7 +4947,7 @@ module scoreboard (
         if (mif.wd == 1) begin
           $write("%sPASS%s", `COLOR_GREEN, `COLOR_NONE);
         end else begin
-          $write("%sFAIL:%0d%s", `COLOR_RED, mif.wd, `COLOR_NONE);
+          $write("%sFAIL:%0d%s", `COLOR_RED, mif.wd[63:1], `COLOR_NONE);
         end
         $finish(0);
       end
@@ -5049,7 +5055,7 @@ module fpu (
     .valid(valid),
     .single_i(id_i.single),
     .op_i(id_i.fop),
-    .op1_i(fif.v1),
+    .op1_i(id_i.fop == FOP_MV_F_X ? rif.v1 : fif.v1),
     .result_o(fmv_result),
     .ready_o(fmv_ready),
     .valid_o(fmv_valid)
@@ -5058,15 +5064,16 @@ module fpu (
   reg_t fcvt_result;
   fflags_t fcvt_flags;
   logic fcvt_ready, fcvt_valid;
+  logic cvt_i2d = id_i.fop inside {FOP_CVT_F_W, FOP_CVT_F_L, FOP_CVT_F_WU, FOP_CVT_F_LU};
   fcvt fcvt1 (
     .clk(clk),
     .rst_n(rst_n),
     .valid(valid),
     .single_i(id_i.single),
-    .op_i(id_i.fop),
-    .op1_i(fif.v1),
-    .rm_i(rm_i),
     .attr_i(attrs[0]),
+    .op_i(id_i.fop),
+    .op1_i(cvt_i2d ? rif.v1 : fif.v1),
+    .rm_i(rm_i),
     .result_o(fcvt_result),
     .flags_o(fcvt_flags),
     .ready_o(fcvt_ready),
@@ -5191,7 +5198,7 @@ module fpu (
     end else if (fcvt_valid) begin
       ready_o = fcvt_ready;
       flags   = fcvt_flags;
-      if (id_i.fop inside {FOP_CVT_F_LU, FOP_CVT_F_WU, FOP_CVT_S_D, FOP_CVT_D_S}) begin
+      if (id_i.fop inside {FOP_CVT_F_LU, FOP_CVT_F_WU, FOP_CVT_F_L, FOP_CVT_F_W, FOP_CVT_S_D, FOP_CVT_D_S}) begin
         wb_fpr = fcvt_result;
       end else begin
         wb_gpr = fcvt_result;
@@ -5206,6 +5213,9 @@ module fpu (
         wb_fpr = fmv_result;
       end else begin
         wb_gpr = fmv_result;
+      end
+      if (fmv_ready) begin
+        `LOGI($sformatf("FMV:0x%0h", fmv_result));
       end
     end else begin
       ready_o = 1;
@@ -6755,10 +6765,12 @@ module fmv (
     if (valid) begin
       unique case (op_i)
         FOP_MV_X_F: begin
+          `LOGI($sformatf("f2x:0x%0h", op1_i));
           result_o = single_i ? {{32{op1_i[31]}}, op1_i[31:0]} : op1_i;
           valid_o  = 1;
         end
         FOP_MV_F_X: begin
+          `LOGI($sformatf("x2f:0x%0h", op1_i));
           result_o = single_i ? {32'hffff_ffff, op1_i[31:0]} : op1_i;
           valid_o  = 1;
         end
@@ -6807,6 +6819,8 @@ module fcvt (
     int lz = 0;
     logic [22:0] frac;
 
+    `LOGI($sformatf("s2d: %h attr:%b", op1_i, attr_i));
+
     if (attr_i.INF) begin
       res.result = {op1_i[31], 11'h7FF, 52'b0};
     end else if (attr_i.NAN) begin
@@ -6836,6 +6850,7 @@ module fcvt (
     logic [22:0] frac = op1_i[51:29];
     logic G, R, S, L, rndup;
     exp -= 12'sd1023;
+    `LOGI($sformatf("d2s: e:%0d %h attr:%b", exp, op1_i, attr_i));
 
     if (attr_i.INF) begin
       res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
@@ -6846,7 +6861,7 @@ module fcvt (
         res.flags.nv = 1;
         res.result   = {`ONES(32), op1_i[63], 8'hff, 1'b1, op1_i[50:29]};  // change to QNaN
       end else begin
-        res.result = {`ONES(32), op1_i[63], 8'hff, op1_i[51:29]};
+        res.result = {`ONES(32), op1_i[63], 8'hff, 1'b1, 22'b0};
       end
     end else if (exp < -12'sd126) begin
       res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
@@ -6877,24 +6892,52 @@ module fcvt (
       end
       res.flags.nx = G | S;
       res.result   = {`ONES(32), op1_i[63], exp[7:0], frac};
+      `LOGI($sformatf("e:%0d, f:%h", exp[7:0], frac));
     end
     return res;
   endfunction
 
-  function automatic fconvert_t w2d();
+  function automatic fconvert_t i2d(logic isigned, logic l);
     fconvert_t res = '{default: 0};
-    return res;
-  endfunction
-  function automatic fconvert_t wu2d();
-    fconvert_t res = '{default: 0};
-    return res;
-  endfunction
-  function automatic fconvert_t l2d();
-    fconvert_t res = '{default: 0};
-    return res;
-  endfunction
-  function automatic fconvert_t lu2d();
-    fconvert_t res = '{default: 0};
+    reg_t val;
+    logic sign, rndup, G, R, S, L;
+    int lz;
+    logic [10:0] exp;
+    val = (isigned && op1_i[63]) ? -op1_i : op1_i;
+    val = l ? val : {val[31:0], 32'b0};
+    lz  = clz(val, l ? 64 : 32);
+    exp = l ? 11'd63 - 11'(lz) : 11'd31 - 11'(lz);
+    exp += 11'd1023;
+
+    if (op1_i == 64'b0) begin
+      res.result = '0;
+    end else begin
+      sign = isigned ? op1_i[63] : 0;
+      val = val << (lz + 1);
+      L = val[12];
+      G = val[11];
+      R = val[10];
+      S = |val[9:0];
+      unique case (rm_i)
+        RNE: rndup = G & (R | S | L);
+        RDN: rndup = sign & (G | R | S);
+        RUP: rndup = (!sign) & (G | R | S);
+        RMM: rndup = G;
+        default: rndup = 0;
+      endcase
+      if (rndup) begin
+        if (val[63:12] == `ONES(52)) begin
+          val[63:12] = '0;
+          exp += 1;
+        end else begin
+          val[63:12] += 52'd1;
+        end
+      end
+      res.flags.nx = G | S;
+      res.result   = {sign, exp, val[63:12]};
+    end
+
+    `LOGI($sformatf("(%0d) s:%b e:%0d val:%h", op1_i, sign, exp, val[63:12]));
     return res;
   endfunction
 
@@ -6971,23 +7014,6 @@ module fcvt (
     return res;
   endfunction
 
-  function automatic fconvert_t d2w();
-    fconvert_t res = '{default: 0};
-    return res;
-  endfunction
-  function automatic fconvert_t d2wu();
-    fconvert_t res = '{default: 0};
-    return res;
-  endfunction
-  function automatic fconvert_t d2l();
-    fconvert_t res = '{default: 0};
-    return res;
-  endfunction
-  function automatic fconvert_t d2lu();
-    fconvert_t res = '{default: 0};
-    return res;
-  endfunction
-
   always_comb begin
     ready_o = valid;
   end
@@ -7017,19 +7043,19 @@ module fcvt (
           {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
         end
         FOP_CVT_F_W: begin
-          res = w2d();
+          res = i2d(1, 0);
           {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
         end
         FOP_CVT_F_WU: begin
-          res = wu2d();
+          res = i2d(0, 0);
           {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
         end
         FOP_CVT_F_L: begin
-          res = l2d();
+          res = i2d(1, 1);
           {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
         end
         FOP_CVT_F_LU: begin
-          res = lu2d();
+          res = i2d(0, 1);
           {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
         end
         FOP_CVT_S_D: begin
