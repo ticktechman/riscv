@@ -77,6 +77,7 @@ package hawks;
   `define FINF_S(s) {1'(s), 8'hff, 23'b0}
   `define FINF_D(s) {1'(s), 11'h7ff, 52'b0}
   `define ONES(n) {n{1'b1}}
+  `define BOXED_F32(v) (v[63:32] == 32'hffff_ffff)
 
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
@@ -750,7 +751,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(6000)
+    .COUNTER(10000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -5115,6 +5116,24 @@ module fpu (
     .valid_o(fmax_valid)
   );
 
+  reg_t fsgnj_result;
+  logic fsgnj_ready, fsgnj_valid;
+  fflags_t fsgnj_flags;
+  fsgnj fsgnj1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid && id_i.fop inside {FOP_SGNJ, FOP_SGNJX, FOP_SGNJN}),
+    .single_i(id_i.single),
+    .attr_i(attrs[0:1]),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .op2_i(fif.v2),
+    .result_o(fsgnj_result),
+    .flags_o(fsgnj_flags),
+    .ready_o(fsgnj_ready),
+    .valid_o(fsgnj_valid)
+  );
+
   reg_t add_result;
   fflags_t add_flags;
   logic add_ready, add_valid;
@@ -5230,6 +5249,13 @@ module fpu (
       if (div_ready) begin
         `LOGI($sformatf("FDIV:0x%0h flags:%b", div_result, div_flags));
       end
+    end else if (fsgnj_valid) begin
+      wb_fpr  = fsgnj_result;
+      flags   = fsgnj_flags;
+      ready_o = fsgnj_ready;
+      if (fsgnj_ready) begin
+        `LOGI($sformatf("FSGNJ:0x%0h flags:%b", fsgnj_result, fsgnj_flags));
+      end
     end else if (sqrt_valid) begin
       wb_fpr  = sqrt_result;
       flags   = sqrt_flags;
@@ -5343,6 +5369,9 @@ module fcmp (
       all_zero = attr_i[0].ZERO && attr_i[1].ZERO;
 
       if (single_i) begin
+        if (!`BOXED_F32(op1_i) || !`BOXED_F32(op2_i)) begin
+          nan = 1;
+        end
         sign = {op1_i[31], op2_i[31]};
         val1 = {32'b0, op1_i[30:0]};
         val2 = {32'b0, op2_i[30:0]};
@@ -7273,6 +7302,61 @@ module fclass (
       endcase
     end
   end
+endmodule
+
+//------------------------------------
+// fsgnj
+//------------------------------------
+module fsgnj (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  input fattr_t attr_i[2],
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+
+  always_comb begin
+    ready_o = valid;
+  end
+
+  always_comb begin
+    logic s1, s2, s;
+    reg_t v1, v2;
+    valid_o  = valid;
+    result_o = '0;
+    flags_o  = '0;
+
+    if (valid) begin
+      `LOGI($sformatf("sgnj: %h %h", op1_i, op2_i));
+      v1 = op1_i;
+      v2 = op2_i;
+      if (single_i) begin
+        if (!`BOXED_F32(op1_i)) begin
+          v1 = {`ONES(32), CQNAN_S};
+        end
+        if (!`BOXED_F32(op2_i)) begin
+          v2 = {`ONES(32), CQNAN_S};
+        end
+      end
+      s1 = single_i ? v1[31] : v1[63];
+      s2 = single_i ? v2[31] : v2[63];
+      unique case (op_i)
+        FOP_SGNJ:  s = s2;
+        FOP_SGNJX: s = s1 ^ s2;
+        FOP_SGNJN: s = ~s2;
+        default:   ;
+      endcase
+      result_o = single_i ? {`ONES(32), s, v1[30:0]} : {s, v1[62:0]};
+    end
+  end
+
 endmodule
 
 /******************************************************************************/
