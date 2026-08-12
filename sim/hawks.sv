@@ -5080,6 +5080,24 @@ module fpu (
     .valid_o(fcvt_valid)
   );
 
+  reg_t fmax_result;
+  logic fmax_ready, fmax_valid;
+  fflags_t fmax_flags;
+  fmax fmax1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .valid(valid && id_i.fop inside {FOP_MAX, FOP_MIN}),
+    .single_i(id_i.single),
+    .attr_i(attrs[0:1]),
+    .op_i(id_i.fop),
+    .op1_i(fif.v1),
+    .op2_i(fif.v2),
+    .result_o(fmax_result),
+    .flags_o(fmax_flags),
+    .ready_o(fmax_ready),
+    .valid_o(fmax_valid)
+  );
+
   reg_t add_result;
   fflags_t add_flags;
   logic add_ready, add_valid;
@@ -5166,6 +5184,13 @@ module fpu (
       ready_o = cmp_ready;
       if (cmp_ready) begin
         `LOGI($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
+      end
+    end else if (fmax_valid) begin
+      wb_fpr  = fmax_result;
+      flags   = fmax_flags;
+      ready_o = fmax_ready;
+      if (fmax_ready) begin
+        `LOGI($sformatf("FMAX:0x%0h", fmax_result));
       end
     end else if (add_valid) begin
       wb_fpr  = add_result;
@@ -6760,21 +6785,19 @@ module fmv (
   end
 
   always_comb begin
-    valid_o  = 0;
+    valid_o  = valid && op_i inside {FOP_MV_X_F, FOP_MV_F_X};
     result_o = '0;
     if (valid) begin
       unique case (op_i)
         FOP_MV_X_F: begin
           `LOGI($sformatf("f2x:0x%0h", op1_i));
           result_o = single_i ? {{32{op1_i[31]}}, op1_i[31:0]} : op1_i;
-          valid_o  = 1;
         end
         FOP_MV_F_X: begin
           `LOGI($sformatf("x2f:0x%0h", op1_i));
           result_o = single_i ? {32'hffff_ffff, op1_i[31:0]} : op1_i;
-          valid_o  = 1;
         end
-        default: valid_o = 0;
+        default: ;
       endcase
     end
   end
@@ -6979,14 +7002,12 @@ module fcvt (
     end else begin
       // normal data
       shift = 12'd62 - exp;
-      `LOGI($sformatf("data:%h, shift:%0d exp:%0d", data, shift, exp));
       S = |(data << (exp + 12'd2));
       data = data >> shift;
       ires = data[65:2];
       L = data[2];
       G = data[1];
       R = data[0];
-      `LOGI($sformatf("G:%b R:%b S:%b", G, R, S));
       unique case (rm_i)
         RNE: rndup = G & (R | S | L);
         RDN: rndup = dsign & (G | R | S);
@@ -7004,7 +7025,6 @@ module fcvt (
           res.flags.nv = 1;
         end
       end
-      `LOGI($sformatf("ires:%h", ires));
       res.result = dsign ? (isigned ? -ires : 64'b0) : ires;
       if (!l) begin
         res.result = {{32{res.result[31]}}, res.result[31:0]};
@@ -7067,6 +7087,98 @@ module fcvt (
           {result_o, flags_o, valid_o} = {res.result, res.flags, 1'b1};
         end
         default: valid_o = 0;
+      endcase
+    end
+  end
+
+endmodule
+
+//------------------------------------
+// min max
+//------------------------------------
+module fmax (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  input fattr_t attr_i[2],
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+
+  always_comb begin
+    ready_o = valid;
+  end
+
+  function automatic logic less_than();
+    // INF, ZERO, NAN(QNaN, SNaN), SUBN
+    logic res;
+    logic [1:0] sign = single_i ? {op1_i[31], op2_i[31]} : {op1_i[63], op2_i[63]};
+    logic [62:0] val1, val2;
+    val1 = single_i ? {32'b0, op1_i[30:0]} : op1_i[62:0];
+    val2 = single_i ? {32'b0, op2_i[30:0]} : op2_i[62:0];
+    unique case (sign)
+      2'b00:   res = (val1 < val2);
+      2'b11:   res = (val1 > val2);
+      2'b10:   res = 1;
+      2'b01:   res = 0;
+      default: res = 0;
+    endcase
+    `LOGI($sformatf("%h %h lessthan :%b", op1_i, op2_i, res));
+    return res;
+  endfunction
+
+  always_comb begin
+    logic idx, nan;
+    valid_o  = valid;
+    result_o = '0;
+    flags_o  = '0;
+    if (valid) begin
+      unique case (op_i)
+        FOP_MIN: begin
+          // flags_o.nv = attr_i[0].SNAN | attr_i[1].SNAN;
+          `LOGI($sformatf("fmin: %h %h", op1_i, op2_i));
+          nan = attr_i[0].NAN | attr_i[1].NAN;
+          if (nan) begin
+            `LOGI($sformatf("%b %b", attr_i[0].NAN, attr_i[1].NAN));
+            idx = attr_i[0].NAN ? 1 : 0;
+          end else begin
+            idx = ~less_than();
+          end
+          `LOGI($sformatf("fmin:%b", idx));
+          result_o = idx == 0 ? op1_i : op2_i;
+          if (attr_i[0].SNAN | attr_i[1].SNAN) begin
+            flags_o.nv = 1;
+          end
+          if (attr_i[0].NAN & attr_i[1].NAN) begin
+            result_o = single_i ? {`ONES(32), CQNAN_S} : CQNAN_D;
+          end
+        end
+        FOP_MAX: begin
+          `LOGI($sformatf("fax: %h %h", op1_i, op2_i));
+          nan = attr_i[0].NAN | attr_i[1].NAN;
+          if (nan) begin
+            `LOGI($sformatf("%b %b", attr_i[0].NAN, attr_i[1].NAN));
+            idx = attr_i[0].NAN ? 1 : 0;
+          end else begin
+            idx = less_than();
+          end
+
+          `LOGI($sformatf("fmax:%b sana:%b %b", idx, attr_i[0].SNAN, attr_i[1].SNAN));
+          result_o = idx == 0 ? op1_i : op2_i;
+          if (attr_i[0].SNAN | attr_i[1].SNAN) begin
+            flags_o.nv = 1;
+          end
+          if (attr_i[0].NAN & attr_i[1].NAN) begin
+            result_o = single_i ? {`ONES(32), CQNAN_S} : CQNAN_D;
+          end
+        end
+        default: ;
       endcase
     end
   end
