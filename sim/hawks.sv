@@ -6738,11 +6738,11 @@ module fsqrt (
       if (valid) begin
         unique case (state)
           SB: state <= S1;
-          S1: state = fast.valid ? SE : S2;
-          S2: state = S3;
-          S3: state = iterate_end ? S4 : S3;
-          S4: state = SE;
-          SE: state = SB;
+          S1: state <= fast.valid ? SE : S2;
+          S2: state <= S3;
+          S3: state <= iterate_end ? S4 : S3;
+          S4: state <= SE;
+          SE: state <= SB;
         endcase
       end
     end
