@@ -6920,14 +6920,14 @@ module fma (
 
     // align exponent of m and u3
     if (m.exp >= u3.exp) begin
+      diff = m.exp - u3.exp;
       m1 = {1'b0, m.manti[105:51]};
       u3.exp = m.exp;
-      diff = m.exp - u3.exp;
       m2 = {1'b0, u3.manti, 2'b0};
       m2 = m2 >> diff;
     end else begin
-      m2 = {1'b0, u3.manti, 2'b0};
       diff = u3.exp - m.exp;
+      m2 = {1'b0, u3.manti, 2'b0};
       m.exp = u3.exp;
       m1 = {1'b0, m.manti[105:51]};
       m1 = m1 >> diff;
