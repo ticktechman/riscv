@@ -3953,6 +3953,7 @@ module csr (
   `define MIE_MASK 64'h0aaa
   `define MIP_MASK 64'h0aaa
   `define MTVEC_MASK 64'hffff_ffff_ffff_fffc
+  `define FCSR_MASK 32'h0000_00ff
   `define TM(en) (which_i == TIME && !en.TM)
   `define CY(en) (which_i == CYCLE && !en.CY)
   `define IR(en) (which_i == INSTRET && !en.IR)
@@ -4169,7 +4170,7 @@ module csr (
               end
               MCOUNTEREN: mcounteren <= next[31:0];
               SCOUNTEREN: mcounteren <= next[31:0];
-              FCSR: fcsr <= next[31:0];
+              FCSR: fcsr <= next[31:0] & `FCSR_MASK;
               FRM: fcsr.frm <= next[2:0];
               FFLAGS: fcsr.fflags <= next[4:0];
               default: ;
