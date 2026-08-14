@@ -7339,22 +7339,32 @@ module fcvt (
   localparam U64_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
   localparam U32_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
 
+  `define f_sign(f, single) (single ? f[31] : f[63])
+  `define f_exp(f, single, N) (single ? N'(f[30:23]) : N'(f[62:52]))
+  `define f_bias(single, N) (single ? N'd127 : N'd1023)
+
+  // s|d -> u32|u64|i32|i64
   function automatic fconvert_t d2i(logic isigned, logic l);
     // INF, ZERO, NAN(QNaN, SNaN), SUBN
     fconvert_t res = '{default: 0};
-    logic dsign = op1_i[63];
-    logic signed [11:0] exp = {1'b0, op1_i[62:52]}, shift;
+    logic fsign = `f_sign(op1_i, single_i);
+    logic signed [11:0] exp = `f_exp(op1_i, single_i, 12), shift;
     logic signed [11:0] max_e = l ? (isigned ? 12'd63 : 12'd64) : (isigned ? 12'd31 : 12'd32);
     reg_t ires;
     logic G, R, S, L, rndup;
 
     // integer(64bits) + frac(52bits) + GR
-    logic [65:0] data = {1'b0, 1'b1, op1_i[51:0], 10'b0, 2'b0};
-    exp -= 12'sd1023;
+    logic [65:0] data = '0;
+    if (single_i) begin
+      data = {1'b0, 1'b1, op1_i[22:0], 29'b0, 10'b0, 2'b0};
+    end else begin
+      data = {1'b0, 1'b1, op1_i[51:0], 10'b0, 2'b0};
+    end
+    exp -= `f_bias(single_i, 12);
 
     `LOGI($sformatf("e:%0d max_e:%0d", exp, max_e));
     if (attr_i.ZERO) begin
-      if (!isigned && dsign) begin
+      if (!isigned && fsign) begin
         res.flags = '{nv: 1'b1, nx: 1'b1, default: 0};
       end
     end else if (attr_i.NAN) begin
@@ -7362,7 +7372,7 @@ module fcvt (
       res.result = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
     end else if (attr_i.INF || exp >= max_e) begin
       res.flags = '{nv: 1'b1, default: 0};
-      if (dsign) begin
+      if (fsign) begin
         res.result = l ? (isigned ? I64_MIN : 64'b0) : (isigned ? I32_MIN : 64'b0);
       end else begin
         res.result = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
@@ -7378,8 +7388,8 @@ module fcvt (
       R = data[0];
       unique case (rm_i)
         RNE: rndup = G & (R | S | L);
-        RDN: rndup = dsign & (G | R | S);
-        RUP: rndup = (!dsign) & (G | R | S);
+        RDN: rndup = fsign & (G | R | S);
+        RUP: rndup = (!fsign) & (G | R | S);
         RMM: rndup = G;
         default: rndup = 0;
       endcase
@@ -7388,12 +7398,12 @@ module fcvt (
       if (rndup) begin
         ires += 1;
       end
-      if (dsign && !isigned) begin
+      if (fsign && !isigned) begin
         if (ires != 64'b0) begin
           res.flags.nv = 1;
         end
       end
-      res.result = dsign ? (isigned ? -ires : 64'b0) : ires;
+      res.result = fsign ? (isigned ? -ires : 64'b0) : ires;
       if (!l) begin
         res.result = {{32{res.result[31]}}, res.result[31:0]};
       end
