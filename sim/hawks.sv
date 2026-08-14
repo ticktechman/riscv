@@ -111,12 +111,12 @@ package hawks;
   };
 
   typedef enum {
-    S8,
+    S8,    // 0
     U8,
     S16,
     U16,
     S32,
-    U32,
+    U32,   // 5
     F32,
     US64,
     F64
@@ -1987,6 +1987,7 @@ module idu (
             id_o.op_s1 = OP_SRC_REG;
             id_o.op_s2 = OP_SRC_IMM;
             rif.r1 = instr_i[19:15];
+            fif.r2 = instr_i[24:20];
             unique case (instr_i[14:12])
               3'b010: begin
                 id_o.sd_op  = SD_SFW;
