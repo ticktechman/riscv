@@ -7142,12 +7142,12 @@ module fmv (
     if (valid) begin
       unique case (op_i)
         FOP_MV_X_F: begin
-          `LOGI($sformatf("f2x:0x%0h", op1_i));
+          `LOGI($sformatf("f2x:0x%0h single:%b", op1_i, single_i));
           result_o = single_i ? {{32{op1_i[31]}}, op1_i[31:0]} : op1_i;
         end
         FOP_MV_F_X: begin
-          `LOGI($sformatf("x2f:0x%0h", op1_i));
-          result_o = single_i ? {32'hffff_ffff, op1_i[31:0]} : op1_i;
+          `LOGI($sformatf("x2f:0x%0h single:%b", op1_i, single_i));
+          result_o = single_i ? {`ONES(32), op1_i[31:0]} : op1_i;
         end
         default: ;
       endcase
@@ -7272,27 +7272,40 @@ module fcvt (
     return res;
   endfunction
 
+  // i32|i64|u32|u64 -> s|d
   function automatic fconvert_t i2d(logic isigned, logic l);
     fconvert_t res = '{default: 0};
     reg_t val;
     logic sign, rndup, G, R, S, L;
     int lz;
     logic [10:0] exp;
-    val = (isigned && op1_i[63]) ? -op1_i : op1_i;
-    val = l ? val : {val[31:0], 32'b0};
-    lz  = clz(val, l ? 64 : 32);
-    exp = l ? 11'd63 - 11'(lz) : 11'd31 - 11'(lz);
-    exp += 11'd1023;
+    logic [51:0] frac;
+
+    sign = isigned ? op1_i[63] : 0;
+    val  = (isigned && op1_i[63]) ? -op1_i : op1_i;
+    val  = l ? val : {val[31:0], 32'b0};
+    lz   = clz(val, l ? 64 : 32);
+    exp  = l ? 11'd63 - 11'(lz) : 11'd31 - 11'(lz);
+    exp += (single_i ? 11'd127 : 11'd1023);
 
     if (op1_i == 64'b0) begin
       res.result = '0;
     end else begin
-      sign = isigned ? op1_i[63] : 0;
       val = val << (lz + 1);
-      L = val[12];
-      G = val[11];
-      R = val[10];
-      S = |val[9:0];
+      if (single_i) begin
+        frac = {`ONES(29), val[63:41]};
+        L = val[41];
+        G = val[40];
+        R = val[39];
+        S = |val[38:0];
+      end else begin
+        frac = val[63:12];
+        L = val[12];
+        G = val[11];
+        R = val[10];
+        S = |val[9:0];
+      end
+
       unique case (rm_i)
         RNE: rndup = G & (R | S | L);
         RDN: rndup = sign & (G | R | S);
@@ -7301,18 +7314,21 @@ module fcvt (
         default: rndup = 0;
       endcase
       if (rndup) begin
-        if (val[63:12] == `ONES(52)) begin
-          val[63:12] = '0;
+        if (frac == `ONES(52)) begin
+          frac = '0;
           exp += 1;
         end else begin
-          val[63:12] += 52'd1;
+          frac += 52'd1;
         end
       end
+      if (single_i) begin
+        frac = {29'b0, frac[22:0]};
+      end
       res.flags.nx = G | S;
-      res.result   = {sign, exp, val[63:12]};
+      res.result   = single_i ? {`ONES(32), sign, exp[7:0], frac[22:0]} : {sign, exp, frac};
     end
 
-    `LOGI($sformatf("(%0d) s:%b e:%0d val:%h", op1_i, sign, exp, val[63:12]));
+    `LOGI($sformatf("isgn:%b (%0d) s:%b e:%0d f:%h", isigned, $signed(op1_i), sign, exp, frac));
     return res;
   endfunction
 
