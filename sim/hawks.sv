@@ -5999,21 +5999,9 @@ module fdiv (
   output logic ready_o,
   output logic valid_o
 );
-  typedef enum {
-    SB = 0,
-    S1,
-    S2,
-    S3,
-    S4,
-    SE
-  } state_e;
-
-  typedef enum {
-    DIV_IDLE,
-    DIV_WORK,
-    DIV_PACK,
-    DIV_DONE
-  } dstate_e;
+  // verilog_format: off
+  typedef enum { SB, S1, S2, S3, S4, SE } state_e;
+  // verilog_format: on
 
   typedef struct packed {
     logic    valid;
@@ -6181,128 +6169,93 @@ module fdiv (
   endfunction
 
   // FSM
-  state_e state, next_state;
-  dstate_e dstate, next_dstate;
-  ffast_t fast, fast_r;
-  funpack_t u1, u2, p1, p2, u1_r, u2_r, p1_r, p2_r;
-  fdiv_t norm, norm_r;
-  fpacked_t pcked;
-  logic do_div;
+  state_e state;
+  ffast_t fast;
+  logic iterate_end;
+
   always_comb begin
-    next_state = state;
+    funpack_t u1, u2, p1, p2;
+    fdiv_t norm;
+    fpacked_t pcked;
+
+    // div
+    logic [106:0] holder;
+    logic [53:0] sub, divisor;
+    logic [54:0] quotient;
+    logic gotone;
+    logic [11:0] lz;
+    int cnt;
+    fdiv_t dres;
+
+
     if (valid) begin
       unique case (state)
-        SB: next_state = S1;
-        S1: next_state = fast_r.valid ? SE : S2;
-        S2: next_state = S3;
-        S3: next_state = dstate == DIV_DONE ? S4 : S3;
-        S4: next_state = SE;
-        SE: next_state = SB;
-        default: ;
-      endcase
-    end
-  end
-
-  always_comb begin
-    fast     = fast_r;
-    u1       = u1_r;
-    u2       = u2_r;
-    p1       = p1_r;
-    p2       = p2_r;
-    norm     = norm_r;
-    do_div   = 0;
-    pcked    = '0;
-    result_o = '0;
-    flags_o  = '0;
-    if (state == S1) begin
-      fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
-      if (!fast.valid) begin
-        u1 = unpack(op1_i, attr_i[0]);
-        u2 = unpack(op2_i, attr_i[1]);
-      end
-    end else if (state == S2) begin
-      // clz && prenormalize
-      p1 = prenormalize(u1, attr_i[0]);
-      p2 = prenormalize(u2, attr_i[1]);
-    end else if (state == S3) begin
-      do_div = (dstate != DIV_DONE);
-    end else if (state == S4) begin
-      norm = normalize(dres_r);
-    end else if (state == SE) begin
-      if (fast.valid) begin
-        result_o = fast.result;
-        flags_o  = fast.flags;
-      end else begin
-        pcked = pack(norm);
-        result_o = pcked.result;
-        flags_o = pcked.flags;
-      end
-    end
-  end
-
-  // div
-  logic [106:0] holder, holder_r;
-  logic [53:0] sub, divisor;
-  logic [54:0] quotient, quotient_r;
-  logic gotone, gotone_r;
-  logic [11:0] lz, lz_r;
-  int cnt, cnt_r;
-  fdiv_t dres, dres_r;
-
-  assign sub = holder_r[106:53] - divisor;
-  assign divisor = {1'b0, p2_r.manti};
-  always_comb begin
-    if (do_div) begin
-      dres = dres_r;
-      // `LOGI($sformatf("dstate: %0d", dstate));
-      unique case (dstate)
-        DIV_IDLE: begin
-          dres = '0;
-          holder = {1'b0, p1_r.manti, 53'b0};
-          cnt = single_i ? 32'd26 : 32'd55;
-          next_dstate = DIV_WORK;
-          quotient = '0;
-          gotone = 0;
-          lz = 0;
+        SB: begin
+          fast = '0;
+          iterate_end = 0;
         end
-        DIV_WORK: begin
-          gotone = gotone_r;
-          lz = lz_r;
-          if (holder_r[106:53] >= divisor) begin
-            holder   = {sub[52:0], holder_r[52:0], 1'b0};
-            quotient = {quotient_r[53:0], 1'b1};
+        S1: begin
+          fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
+          if (!fast.valid) begin
+            u1 = unpack(op1_i, attr_i[0]);
+            u2 = unpack(op2_i, attr_i[1]);
+          end
+        end
+        S2: begin
+          // clz && prenormalize
+          p1       = prenormalize(u1, attr_i[0]);
+          p2       = prenormalize(u2, attr_i[1]);
+
+          // prepare for div iteration
+          dres     = '0;
+          holder   = {1'b0, p1.manti, 53'b0};
+          cnt      = single_i ? 32'd26 : 32'd55;
+          quotient = '0;
+          gotone   = 0;
+          lz       = 0;
+        end
+        S3: begin
+          divisor = {1'b0, p2.manti};
+          sub = holder[106:53] - divisor;
+          if (holder[106:53] >= divisor) begin
+            holder   = {sub[52:0], holder[52:0], 1'b0};
+            quotient = {quotient[53:0], 1'b1};
             gotone   = 1;
           end else begin
-            holder   = {holder_r[105:0], 1'b0};
-            quotient = {quotient_r[53:0], 1'b0};
+            holder   = {holder[105:0], 1'b0};
+            quotient = {quotient[53:0], 1'b0};
             if (!gotone) begin
-              lz = lz_r + 12'd1;
+              lz++;
             end
           end
           if (gotone) begin
-            cnt = cnt_r - 32'd1;
+            cnt--;
           end
           // `LOGI($sformatf("cnt:%0d got:%b %h-%h q:%h", cnt, gotone, holder_r[105:53], divisor, quotient));
-          if (cnt <= 0) begin
-            next_dstate = DIV_PACK;
+          iterate_end = (cnt <= 0);
+        end
+        S4: begin
+          dres.sign  = p1.sign ^ p2.sign;
+          dres.exp   = p1.exp - p2.exp + (single_i ? 12'd127 : 12'd1023) - lz;
+          dres.manti = quotient[54:2];
+          dres.grs.G = quotient[1];
+          dres.grs.R = quotient[0];
+          dres.grs.S = (|holder);
+          `LOGI($sformatf("div done >> s:%b e:%0d m:%h", dres.sign, dres.exp, dres.manti));
+          norm = normalize(dres);
+        end
+        SE: begin
+          if (fast.valid) begin
+            result_o = fast.result;
+            flags_o  = fast.flags;
+          end else begin
+            pcked    = pack(norm);
+            result_o = pcked.result;
+            flags_o  = pcked.flags;
           end
         end
-        DIV_PACK: begin
-          dres.sign   = p1_r.sign ^ p2_r.sign;
-          dres.exp    = p1_r.exp - p2_r.exp + (single_i ? 12'd127 : 12'd1023) - lz_r;
-          dres.manti  = quotient_r[54:2];
-          dres.grs.G  = quotient_r[1];
-          dres.grs.R  = quotient_r[0];
-          dres.grs.S  = (|holder_r);
-          next_dstate = DIV_DONE;
-          `LOGI($sformatf("div done >> s:%b e:%0d m:%h", dres.sign, dres.exp, dres.manti));
-        end
-        DIV_DONE: begin
-          next_dstate = DIV_IDLE;
-        end
+        default: ;
       endcase
-    end else begin
-      next_dstate = DIV_IDLE;
     end
   end
 
@@ -6313,38 +6266,19 @@ module fdiv (
     if (!rst_n) begin
       state <= SB;
     end else begin
-      state <= next_state;
+      if (valid) begin
+        unique case (state)
+          SB: state <= S1;
+          S1: state <= fast.valid ? SE : S2;
+          S2: state <= S3;
+          S3: state <= iterate_end ? S4 : S3;
+          S4: state <= SE;
+          SE: state <= SB;
+          default: ;
+        endcase
+      end
     end
   end
-
-  // for divide FSM
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      dstate <= DIV_IDLE;
-    end else begin
-      dstate     <= next_dstate;
-      cnt_r      <= cnt;
-      holder_r   <= holder;
-      quotient_r <= quotient;
-      gotone_r   <= gotone;
-      dres_r     <= dres;
-      lz_r       <= lz;
-    end
-  end
-
-  // fast path
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      fast_r <= fast;
-      u1_r   <= u1;
-      u2_r   <= u2;
-      p1_r   <= p1;
-      p2_r   <= p2;
-      norm_r <= norm;
-    end
-  end
-
 endmodule
 
 //------------------------------------
