@@ -4299,7 +4299,6 @@ module csr (
     end else begin
       if (commit_i) begin
         mstatus <= status;
-        `LOGI($sformatf("fflags:%b csr:%b", fflags_i, fcsr.fflags));
         fcsr.fflags <= fcsr.fflags | fflags_i;
         if (exc_i.fired) begin
           if (strap) begin
@@ -5381,11 +5380,7 @@ module fadd (
 );
 
   // verilog_format: off
-  typedef enum {
-    SB,
-    S1, S2, S3,
-    SE
-  } state_e;
+  typedef enum { SB, S1, S2, S3, SE } state_e;
   // verilog_format: on
 
   typedef struct packed {
@@ -5669,7 +5664,6 @@ module fadd (
 
     res.flags.uf = (res.flags.nx && exp == 0);
 
-    `LOGI($sformatf("flags:%b", res.flags));
     // pack
     if (single_i) begin
       res.result = {32'hffff_ffff, norm.sign, exp[7:0], final_manti[22:0]};
@@ -5679,57 +5673,37 @@ module fadd (
     return res;
   endfunction
 
-  logic fast_path_r;
-  state_e state, next_state;
-  ffast_t fast, fast_r;
-  faligned_t aligned, aligned_r, normed, normed_r;
-  funpack_t unpacked[2], unpacked_r[2];
-  fpacked_t pcked;
 
-  // FSM
+  ffast_t fast;
+  state_e state;
   always_comb begin
-    next_state = state;
+    faligned_t aligned, normed;
+    funpack_t unpacked[2];
+    fpacked_t pcked;
     if (valid) begin
       unique case (state)
-        SB: next_state = S1;
-        S1: next_state = fast_path_r ? SE : S2;
-        S2: next_state = S3;
-        S3: next_state = SE;
-        SE: next_state = SB;
+        SB: fast = '0;
+        S1: begin
+          fast = check_fastpath();
+          if (!fast.valid) begin
+            unpacked[0] = unpack(op1_i, attr_i[0]);
+            unpacked[1] = unpack(op2_i, attr_i[1]);
+          end
+        end
+        S2: aligned = alignment(unpacked[0], unpacked[1]);
+        S3: normed = normalize(aligned);
+        SE: begin
+          if (fast.valid) begin
+            result_o = fast.result;
+            flags_o  = fast.flags;
+          end else begin
+            pcked = pack(normed, frm_e'(rm_i));
+            result_o = pcked.result;
+            flags_o = pcked.flags;
+          end
+        end
         default: ;
       endcase
-    end
-  end
-
-  always_comb begin
-    fast        = fast_r;
-    unpacked[0] = unpacked_r[0];
-    unpacked[1] = unpacked_r[1];
-    aligned     = aligned_r;
-    normed      = normed_r;
-    result_o    = '0;
-    flags_o     = '0;
-    pcked       = '0;
-    if (state == S1) begin
-      // unpack
-      fast = check_fastpath();
-      if (!fast.valid) begin
-        unpacked[0] = unpack(op1_i, attr_i[0]);
-        unpacked[1] = unpack(op2_i, attr_i[1]);
-      end
-    end else if (state == S2) begin
-      aligned = alignment(unpacked_r[0], unpacked_r[1]);
-    end else if (state == S3) begin
-      normed = normalize(aligned_r);
-    end else if (state == SE) begin
-      if (fast_r.valid) begin
-        result_o = fast_r.result;
-        flags_o  = fast_r.flags;
-      end else begin
-        pcked = pack(normed, frm_e'(rm_i));
-        result_o = pcked.result;
-        flags_o = pcked.flags;
-      end
     end
   end
 
@@ -5744,25 +5718,18 @@ module fadd (
     if (!rst_n) begin
       state <= SB;
     end else begin
-      state <= next_state;
+      if (valid) begin
+        unique case (state)
+          SB: state <= S1;
+          S1: state <= fast.valid ? SE : S2;
+          S2: state <= S3;
+          S3: state <= SE;
+          SE: state <= SB;
+        endcase
+      end
     end
   end
-
-  // fast path
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      fast_path_r   <= fast.valid;
-      fast_r        <= fast;
-      aligned_r     <= aligned;
-      normed_r      <= normed;
-      unpacked_r[0] <= unpacked[0];
-      unpacked_r[1] <= unpacked[1];
-    end
-  end
-
 endmodule
-
 
 //------------------------------------
 // FPU multiply
@@ -5782,13 +5749,10 @@ module fmul (
   output logic ready_o,
   output logic valid_o
 );
-  typedef enum {
-    SB = 0,
-    S1,
-    S2,
-    S3,
-    SE
-  } state_e;
+
+  // verilog_format: off
+  typedef enum { SB, S1, S2, S3, SE } state_e;
+  // verilog_format: on
 
   typedef struct packed {
     logic    valid;
@@ -5962,60 +5926,37 @@ module fmul (
   endfunction
 
   // FSM
-  state_e state, next_state;
-  ffast_t fast, fast_r;
-  funpack_t u1, u2, u1_r, u2_r;
-  fmul_t mult, mult_r, norm, norm_r;
-  fpacked_t pcked;
-  always_comb begin
-    next_state = state;
-    if (valid) begin
-      `LOGI($sformatf("state:%0d", state));
-      unique case (state)
-        SB: next_state = S1;
-        S1: next_state = fast_r.valid ? SE : S2;
-        S2: next_state = S3;
-        S3: next_state = SE;
-        SE: next_state = SB;
-        default: ;
-      endcase
-    end
-  end
+  state_e state;
+  ffast_t fast;
 
   always_comb begin
-    fast     = fast_r;
-    u1       = u1_r;
-    u2       = u2_r;
-    mult     = mult_r;
-    norm     = norm_r;
-    result_o = '0;
-    flags_o  = '0;
-    pcked    = '0;
-    if (state == SB) begin
-      fast = '0;
-    end else if (state == S1) begin
-      `LOGI($sformatf("fmul(single:%b):%h * %h", single_i, op1_i, op2_i));
-      fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
-      if (!fast.valid) begin
-        u1 = unpack(op1_i, attr_i[0]);
-        u2 = unpack(op2_i, attr_i[1]);
-      end
-    end else if (state == S2) begin
-      // multiply
-      mult = multiply(u1, u2);
-    end else if (state == S3) begin
-      // normalize
-      norm = normalize(mult);
-    end else if (state == SE) begin
-      // pack
-      pcked = pack(norm);
-      if (fast.valid) begin
-        result_o = fast.result;
-        flags_o  = fast.flags;
-      end else begin
-        result_o = pcked.result;
-        flags_o  = pcked.flags;
-      end
+    funpack_t u1, u2;
+    fmul_t mult, norm;
+    fpacked_t pcked;
+    if (valid) begin
+      unique case (state)
+        SB: fast = '0;
+        S1: begin
+          fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
+          if (!fast.valid) begin
+            u1 = unpack(op1_i, attr_i[0]);
+            u2 = unpack(op2_i, attr_i[1]);
+          end
+        end
+        S2: mult = multiply(u1, u2);
+        S3: norm = normalize(mult);
+        SE: begin
+          pcked = pack(norm);
+          if (fast.valid) begin
+            result_o = fast.result;
+            flags_o  = fast.flags;
+          end else begin
+            result_o = pcked.result;
+            flags_o  = pcked.flags;
+          end
+        end
+        default: ;
+      endcase
     end
   end
 
@@ -6026,19 +5967,15 @@ module fmul (
     if (!rst_n) begin
       state <= SB;
     end else begin
-      state <= next_state;
-    end
-  end
-
-  // fast path
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      fast_r <= fast;
-      u1_r   <= u1;
-      u2_r   <= u2;
-      mult_r <= mult;
-      norm_r <= norm;
+      if (valid) begin
+        unique case (state)
+          SB: state <= S1;
+          S1: state <= fast.valid ? SE : S2;
+          S2: state <= S3;
+          S3: state <= SE;
+          SE: state <= SB;
+        endcase
+      end
     end
   end
 
