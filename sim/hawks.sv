@@ -711,7 +711,7 @@ package hawks;
   localparam CQNAN_D = 64'h7FF8000000000000;
   localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
 
-  function automatic funpack_t unpack(logic single, reg_t v, fattr_t a);
+  function automatic funpack_t funpack(logic single, reg_t v, fattr_t a);
     funpack_t res;
     res = '0;
     res.sign = single ? v[31] : v[63];
@@ -5931,8 +5931,8 @@ module fmul (
         S1: begin
           fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
           if (!fast.valid) begin
-            u1 = unpack(single_i, op1_i, attr_i[0]);
-            u2 = unpack(single_i, op2_i, attr_i[1]);
+            u1 = funpack(single_i, op1_i, attr_i[0]);
+            u2 = funpack(single_i, op2_i, attr_i[1]);
           end
         end
         S2: mult = multiply(u1, u2);
@@ -6149,8 +6149,8 @@ module fdiv (
         S1: begin
           fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
           if (!fast.valid) begin
-            u1 = unpack(single_i, op1_i, attr_i[0]);
-            u2 = unpack(single_i, op2_i, attr_i[1]);
+            u1 = funpack(single_i, op1_i, attr_i[0]);
+            u2 = funpack(single_i, op2_i, attr_i[1]);
           end
         end
         S2: begin
@@ -6731,9 +6731,9 @@ module fma (
         fast = check_fastpath();
         `LOGI($sformatf("fast.valid: %d", fast.valid));
         if (!fast.valid) begin
-          u1 = unpack(single_i, op1_i, attr_i[0]);
-          u2 = unpack(single_i, op2_i, attr_i[1]);
-          u3 = unpack(single_i, op3_i, attr_i[2]);
+          u1 = funpack(single_i, op1_i, attr_i[0]);
+          u2 = funpack(single_i, op2_i, attr_i[1]);
+          u3 = funpack(single_i, op3_i, attr_i[2]);
         end
       end
       S2: mul = multiply(u1, u2);
@@ -6800,7 +6800,7 @@ module fmv (
   end
 
   always_comb begin
-    valid_o  = valid && op_i inside {FOP_MV_X_F, FOP_MV_F_X};
+    valid_o  = valid;
     result_o = '0;
     if (valid) begin
       unique case (op_i)
