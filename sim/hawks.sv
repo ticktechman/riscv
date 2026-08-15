@@ -598,17 +598,17 @@ package hawks;
   typedef struct packed {
     logic        cached;
     pagesize_e   PGSIZE;  // page size
-    logic [15:0] ASID;    // 地址空间标识符
-    logic [26:0] VPN;     // 虚拟页号
-    logic [43:0] PPN;     // 物理页号
-    logic        V;       // 有效位 (Valid)
-    logic        G;       // 全局位 (Global)
-    logic        U;       // 用户态权限 (User)
-    logic        X;       // 可执行权限 (Execute)
-    logic        W;       // 可写权限 (Write)
-    logic        R;       // 可读权限 (Read)
-    logic        D;       // 脏位 (Dirty)
-    logic        A;       // 已访问位 (Accessed)
+    logic [15:0] ASID;    // address space ID
+    logic [26:0] VPN;     // virtual page number
+    logic [43:0] PPN;     // physical page number
+    logic        V;       // valid
+    logic        G;       // global
+    logic        U;       // permission user
+    logic        X;       // permission execution
+    logic        W;       // permission write
+    logic        R;       // permission read
+    logic        D;       // dirty
+    logic        A;       // accessed
   } tlb_entry_t;
 
 
@@ -616,24 +616,24 @@ package hawks;
   // rv64fd related data defination
   //------------------------------------
   typedef struct packed {
-    logic nv;  // Bit 4: 无效运算 (Invalid Operation) -> 如 0/0, Inf-Inf, 负数开根
-    logic dz;  // Bit 3: 除以零 (Divide by Zero)     -> 如 1.0 / 0.0
-    logic of;  // Bit 2: 溢出 (Overflow)             -> 结果超出当前精度最大表达范围
-    logic uf;  // Bit 1: 下溢 (Underflow)            -> 结果太小，变为次正规数或0
-    logic nx;  // Bit 0: 不精确 (Inexact)             -> 舍入带来精度丢失（最常见）
+    logic nv;  // invalid operation
+    logic dz;  // divide zero
+    logic of;  // overflow
+    logic uf;  // underflow
+    logic nx;  // inexact
   } fflags_t;
 
   typedef enum logic [2:0] {
-    RNE = 3'b000,  // Round to Nearest, ties to Even (最近偶数，默认)
-    RTZ = 3'b001,  // Round towards Zero (向零舍入/截断)
-    RDN = 3'b010,  // Round Down, towards -Infinity (向下舍入)
-    RUP = 3'b011,  // Round Up, towards +Infinity (向上舍入)
-    RMM = 3'b100,  // Round to Nearest, ties to Max Magnitude (最近最大值)
-    DYN = 3'b111   // Dynamic Rounding Mode (使用 fcsr.frm 中的动态配置)
+    RNE = 3'b000,  // Round to Nearest, ties to Even (default mode)
+    RTZ = 3'b001,  // Round towards Zero
+    RDN = 3'b010,  // Round Down, towards -Infinity
+    RUP = 3'b011,  // Round Up, towards +Infinity
+    RMM = 3'b100,  // Round to Nearest, ties to Max Magnitude
+    DYN = 3'b111   // Dynamic Rounding Mode
   } frm_e;
 
   typedef struct packed {
-    logic [23:0] reserved;  // Bits [31:8]: 预留，只读固定为 0
+    logic [23:0] reserved;  // Bits [31:8] reserved
     logic [2:0]  frm;       // Bits [7:5] : Dynamic Rounding Mode
     fflags_t     fflags;    // Bits [4:0] : Accrued Exceptions
   } fcsr_t;
@@ -5362,121 +5362,6 @@ module fpu (
 endmodule
 
 //------------------------------------
-// float compare
-//------------------------------------
-module fcmp (
-  input logic clk,
-  input logic rst_n,
-  input logic valid,
-  input logic single_i,
-  input fattr_t attr_i[2],
-  input fop_e op_i,
-  input reg_t op1_i,
-  input reg_t op2_i,
-  output reg_t result_o,
-  output fflags_t flags_o,
-  output logic ready_o,
-  output logic valid_o
-);
-
-  always_comb begin
-    ready_o = 1;
-  end
-
-  logic rst;
-  logic nan, snan, all_zero;
-
-  logic [1:0] sign;
-  logic [62:0] val1, val2;
-
-  always_comb begin
-    valid_o = 0;
-    if (valid) begin
-      valid_o = 1;
-      flags_o = '0;
-      rst = 0;
-
-      nan = attr_i[0].NAN | attr_i[1].NAN;
-      snan = attr_i[0].SNAN | attr_i[1].SNAN;
-      all_zero = attr_i[0].ZERO && attr_i[1].ZERO;
-
-      if (single_i) begin
-        if (!`BOXED_F32(op1_i) || !`BOXED_F32(op2_i)) begin
-          nan = 1;
-        end
-        sign = {op1_i[31], op2_i[31]};
-        val1 = {32'b0, op1_i[30:0]};
-        val2 = {32'b0, op2_i[30:0]};
-      end else begin
-        sign = {op1_i[63], op2_i[63]};
-        val1 = op1_i[62:0];
-        val2 = op2_i[62:0];
-      end
-
-      unique case (op_i)
-        FOP_CMP_EQ: begin
-          `LOGI($sformatf("feq(single:%b):%h %h", single_i, op1_i, op2_i));
-          if (nan) begin
-            rst = 0;
-            if (snan) flags_o.nv = 1;
-          end else begin
-            if (single_i) begin
-              rst = (op1_i[31:0] == op2_i[31:0]) | all_zero;
-            end else begin
-              rst = (op1_i == op2_i) | all_zero;
-            end
-          end
-        end
-
-        FOP_CMP_LE: begin
-          `LOGI($sformatf("fle:%h %h", op1_i, op2_i));
-          if (nan) begin
-            rst = 0;
-            flags_o.nv = 1;
-          end else if (all_zero) begin
-            rst = 1;
-          end else begin
-            unique case (sign)
-              2'b00:   rst = (val1 <= val2);
-              2'b11:   rst = (val1 >= val2);
-              2'b10:   rst = 1;
-              2'b01:   rst = 0;
-              default: rst = 0;
-            endcase
-          end
-        end
-
-        FOP_CMP_LT: begin
-          `LOGI($sformatf("flt:%h %h", op1_i, op2_i));
-          if (nan) begin
-            rst = 0;
-            flags_o.nv = 1;
-          end else if (all_zero) begin
-            rst = 0;
-          end else begin
-            unique case (sign)
-              2'b00:   rst = (val1 < val2);
-              2'b11:   rst = (val1 > val2);
-              2'b10:   rst = 1;
-              2'b01:   rst = 0;
-              default: rst = 0;
-            endcase
-          end
-        end
-
-        default: begin
-          valid_o = 0;
-          rst = 0;
-        end
-      endcase
-    end
-
-    result_o = {63'b0, rst};
-  end
-
-endmodule
-
-//------------------------------------
 // fadd and fsub
 //------------------------------------
 module fadd (
@@ -7718,6 +7603,121 @@ module fsgnj (
       endcase
       result_o = single_i ? {`ONES(32), s, v1[30:0]} : {s, v1[62:0]};
     end
+  end
+
+endmodule
+
+//------------------------------------
+// float compare
+//------------------------------------
+module fcmp (
+  input logic clk,
+  input logic rst_n,
+  input logic valid,
+  input logic single_i,
+  input fattr_t attr_i[2],
+  input fop_e op_i,
+  input reg_t op1_i,
+  input reg_t op2_i,
+  output reg_t result_o,
+  output fflags_t flags_o,
+  output logic ready_o,
+  output logic valid_o
+);
+
+  always_comb begin
+    ready_o = 1;
+  end
+
+  logic rst;
+  logic nan, snan, all_zero;
+
+  logic [1:0] sign;
+  logic [62:0] val1, val2;
+
+  always_comb begin
+    valid_o = 0;
+    if (valid) begin
+      valid_o = 1;
+      flags_o = '0;
+      rst = 0;
+
+      nan = attr_i[0].NAN | attr_i[1].NAN;
+      snan = attr_i[0].SNAN | attr_i[1].SNAN;
+      all_zero = attr_i[0].ZERO && attr_i[1].ZERO;
+
+      if (single_i) begin
+        if (!`BOXED_F32(op1_i) || !`BOXED_F32(op2_i)) begin
+          nan = 1;
+        end
+        sign = {op1_i[31], op2_i[31]};
+        val1 = {32'b0, op1_i[30:0]};
+        val2 = {32'b0, op2_i[30:0]};
+      end else begin
+        sign = {op1_i[63], op2_i[63]};
+        val1 = op1_i[62:0];
+        val2 = op2_i[62:0];
+      end
+
+      unique case (op_i)
+        FOP_CMP_EQ: begin
+          `LOGI($sformatf("feq(single:%b):%h %h", single_i, op1_i, op2_i));
+          if (nan) begin
+            rst = 0;
+            if (snan) flags_o.nv = 1;
+          end else begin
+            if (single_i) begin
+              rst = (op1_i[31:0] == op2_i[31:0]) | all_zero;
+            end else begin
+              rst = (op1_i == op2_i) | all_zero;
+            end
+          end
+        end
+
+        FOP_CMP_LE: begin
+          `LOGI($sformatf("fle:%h %h", op1_i, op2_i));
+          if (nan) begin
+            rst = 0;
+            flags_o.nv = 1;
+          end else if (all_zero) begin
+            rst = 1;
+          end else begin
+            unique case (sign)
+              2'b00:   rst = (val1 <= val2);
+              2'b11:   rst = (val1 >= val2);
+              2'b10:   rst = 1;
+              2'b01:   rst = 0;
+              default: rst = 0;
+            endcase
+          end
+        end
+
+        FOP_CMP_LT: begin
+          `LOGI($sformatf("flt:%h %h", op1_i, op2_i));
+          if (nan) begin
+            rst = 0;
+            flags_o.nv = 1;
+          end else if (all_zero) begin
+            rst = 0;
+          end else begin
+            unique case (sign)
+              2'b00:   rst = (val1 < val2);
+              2'b11:   rst = (val1 > val2);
+              2'b10:   rst = 1;
+              2'b01:   rst = 0;
+              default: rst = 0;
+            endcase
+          end
+        end
+
+        default: begin
+          valid_o = 0;
+          rst = 0;
+        end
+      endcase
+    end
+
+    result_o = {63'b0, rst};
   end
 
 endmodule
