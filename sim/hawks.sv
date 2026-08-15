@@ -78,6 +78,8 @@ package hawks;
   `define FINF_D(s) {1'(s), 11'h7ff, 52'b0}
   `define ONES(n) {n{1'b1}}
   `define BOXED_F32(v) (v[63:32] == 32'hffff_ffff)
+  `define MASK(N, n) ((N'(1) << n) - 1)
+  `define OR_NBITS(val, n) (|(val & `MASK($bits(val), n)))
 
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
@@ -5411,9 +5413,9 @@ module fcmp (
         val2 = op2_i[62:0];
       end
 
-      `LOGI($sformatf("fcmp:%h %h", op1_i, op2_i));
       unique case (op_i)
         FOP_CMP_EQ: begin
+          `LOGI($sformatf("feq(single:%b):%h %h", single_i, op1_i, op2_i));
           if (nan) begin
             rst = 0;
             if (snan) flags_o.nv = 1;
@@ -5427,6 +5429,7 @@ module fcmp (
         end
 
         FOP_CMP_LE: begin
+          `LOGI($sformatf("fle:%h %h", op1_i, op2_i));
           if (nan) begin
             rst = 0;
             flags_o.nv = 1;
@@ -5444,6 +5447,7 @@ module fcmp (
         end
 
         FOP_CMP_LT: begin
+          `LOGI($sformatf("flt:%h %h", op1_i, op2_i));
           if (nan) begin
             rst = 0;
             flags_o.nv = 1;
@@ -5921,7 +5925,7 @@ module fmul (
   typedef struct packed {
     logic sign;
     logic [11:0] exp;
-    logic [105:0] manti;
+    logic [105:0] manti;  // HH.FF....F
     fflags_t flags;
   } fmul_t;
 
@@ -5987,8 +5991,7 @@ module fmul (
     logic [11:0] exp, exp2;
     logic [105:0] manti;
     int lz = clz(v.manti);
-    exp = v.exp - 12'(lz) + 12'd1;
-    `LOGI($sformatf("exp:%0d manti:%h lz:%0d", exp, v.manti, lz));
+    exp   = v.exp - 12'(lz) + 12'd1;
     manti = v.manti << lz;
     if (single_i) begin
       L = manti[82];
@@ -6012,13 +6015,23 @@ module fmul (
     endcase
 
     res.exp = exp;
-    exp2 = exp;
     if (rndup) begin
-      if (manti[105:53] == `ONES(53)) begin
-        res.manti = {1'b1, 105'b0};
-        exp2 = exp + 12'd1;
-        res.exp = exp2;
+      if (single_i) begin
+        if (manti[105:82] == `ONES(24)) begin
+          res.manti = {1'b1, 105'b0};
+          res.exp += 12'd1;
+        end else begin
+          manti[105:82] += 1;
+          res.manti = manti;
+        end
       end else begin
+        if (manti[105:53] == `ONES(53)) begin
+          res.manti = {1'b1, 105'b0};
+          res.exp += 12'd1;
+        end else begin
+          manti[105:82] += 1;
+          res.manti = manti;
+        end
       end
     end else begin
       res.manti = manti;
@@ -6027,24 +6040,24 @@ module fmul (
     // flags
     res.flags.nx = (G | R | S);
     if (single_i) begin
-      if ($signed(exp2) >= 12'd255) begin
+      if ($signed(res.exp) >= 12'd255) begin
         res.flags.of = 1;
         res.flags.nx = 1;
         res.exp = 12'h0ff;
         res.manti = '0;
-      end else if ($signed(exp2) <= 0) begin
+      end else if ($signed(res.exp) <= 0) begin
         res.flags.uf = 1;
         res.flags.nx = 1;
         res.exp = 12'b0;
         res.manti = '0;
       end
     end else begin
-      if ($signed(exp2) >= 12'd2047) begin
+      if ($signed(res.exp) >= 12'd2047) begin
         res.flags.of = 1;
         res.flags.nx = 1;
         res.exp = 12'h7ff;
         res.manti = '0;
-      end else if ($signed(exp2) <= 0) begin
+      end else if ($signed(res.exp) <= 0) begin
         res.flags.uf = 1;
         res.flags.nx = 1;
         res.exp = 12'b0;
@@ -6072,6 +6085,7 @@ module fmul (
   always_comb begin
     next_state = state;
     if (valid) begin
+      `LOGI($sformatf("state:%0d", state));
       unique case (state)
         SB: next_state = S1;
         S1: next_state = fast_r.valid ? SE : S2;
@@ -6092,7 +6106,10 @@ module fmul (
     result_o = '0;
     flags_o  = '0;
     pcked    = '0;
-    if (state == S1) begin
+    if (state == SB) begin
+      fast = '0;
+    end else if (state == S1) begin
+      `LOGI($sformatf("fmul(single:%b):%h * %h", single_i, op1_i, op2_i));
       fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
       if (!fast.valid) begin
         u1 = unpack(op1_i, attr_i[0]);
@@ -6930,8 +6947,6 @@ module fma (
     endcase
     // verilog_format: on
 
-    `define MASK(N, n) ((N'(1) << n) - 1)
-    `define OR_NBITS(val, n) (|(val & `MASK($bits(val), n)))
 
     // align exponent of m and u3
     if (m.exp >= u3.exp) begin
@@ -7224,7 +7239,8 @@ module fcvt (
     fconvert_t res = '{default: 0};
     logic signed [11:0] exp = {1'b0, op1_i[62:52]};
     logic [22:0] frac = op1_i[51:29];
-    logic G, R, S, L, rndup;
+    logic [52:0] manti = {1'b1, op1_i[51:0]};
+    logic G, R, S, L, rndup, s;
     exp -= 12'sd1023;
     `LOGI($sformatf("d2s: e:%0d %h attr:%b", exp, op1_i, attr_i));
 
@@ -7240,7 +7256,28 @@ module fcvt (
         res.result = {`ONES(32), op1_i[63], 8'hff, 1'b1, 22'b0};
       end
     end else if (exp < -12'sd126) begin
-      res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
+      // TODO
+      exp = -12'sd127 - exp;
+      s = `OR_NBITS(manti, exp);
+      manti = manti >> exp;
+      L = manti[30];
+      G = manti[29];
+      R = manti[28];
+      S = |manti[27:0];
+      S = S | s;
+
+      unique case (rm_i)
+        RNE: rndup = G & (R | S | L);
+        RDN: rndup = op1_i[63] & (G | R | S);
+        RUP: rndup = (!op1_i[63]) & (G | R | S);
+        RMM: rndup = G;
+        default: rndup = 0;
+      endcase
+      if (rndup) begin
+        manti[52:30] += 1;
+      end
+      res.flags.nx = G | S;
+      res.result   = {`ONES(32), op1_i[63], 8'h00, manti[52:30]};
     end else if (exp > 12'sd127) begin
       res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
     end else begin
@@ -7290,7 +7327,7 @@ module fcvt (
     exp += (single_i ? 11'd127 : 11'd1023);
 
     if (op1_i == 64'b0) begin
-      res.result = '0;
+      res.result = single_i ? {`ONES(32), 32'b0} : '0;
     end else begin
       val = val << (lz + 1);
       if (single_i) begin
