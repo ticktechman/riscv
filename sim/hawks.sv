@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -724,6 +724,18 @@ package hawks;
     end
     `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
     return res;
+  endfunction
+
+  function automatic logic frndup(logic G, R, S, L, sign, frm_e mode);
+    logic rndup;
+    unique case (mode)
+      RNE: rndup = G & (R | S | L);
+      RDN: rndup = sign & (G | R | S);
+      RUP: rndup = (!sign) & (G | R | S);
+      RMM: rndup = G;
+      default: rndup = 0;
+    endcase
+    return rndup;
   endfunction
 
   function automatic logic check_file_exist(string name);
@@ -5842,15 +5854,7 @@ module fmul (
       S = |manti[50:0];
     end
 
-    // round up
-    unique case (rm_i)
-      RNE: rndup = G & (R | S | L);
-      RDN: rndup = v.sign & (G | R | S);
-      RUP: rndup = (!v.sign) & (G | R | S);
-      RMM: rndup = G;
-      default: rndup = 0;
-    endcase
-
+    rndup   = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
     res.exp = exp;
     if (rndup) begin
       if (single_i) begin
@@ -6062,15 +6066,7 @@ module fdiv (
     R = v.grs.R;
     S = v.grs.S;
 
-    // round up
-    unique case (rm_i)
-      RNE: rndup = G & (R | S | L);
-      RDN: rndup = v.sign & (G | R | S);
-      RUP: rndup = (!v.sign) & (G | R | S);
-      RMM: rndup = G;
-      default: rndup = 0;
-    endcase
-
+    rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
     exp = v.exp;
     res.exp = v.exp;
     manti = v.manti;
@@ -6443,13 +6439,7 @@ module fsqrt (
         S = single_i ? |mq[BP-26:0] : |mq[BP-55:0];
         L = single_i ? mq[BP-23] : mq[BP-52];
 
-        unique case (rm_i)
-          RNE: rndup = G & (R | S | L);
-          RDN: rndup = u1.sign & (G | R | S);
-          RUP: rndup = (!u1.sign) & (G | R | S);
-          RMM: rndup = G;
-          default: rndup = 0;
-        endcase
+        rndup = frndup(G, R, S, L, u1.sign, frm_e'(rm_i));
         manti = single_i ? {29'b0, mq[BP-1:BP-23]} : mq[BP-1:BP-52];
         if (rndup) begin
           if (manti == `ONES(52)) begin
@@ -6691,13 +6681,7 @@ module fma (
         S = s | (|v.manti[51:0]);
       end
 
-      unique case (rm_i)
-        RNE: rndup = G & (R | S | L);
-        RDN: rndup = v.sign & (G | R | S);
-        RUP: rndup = (!v.sign) & (G | R | S);
-        RMM: rndup = G;
-        default: rndup = 0;
-      endcase
+      rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
 
       res.flags.nx = G | R | S;
       res.sign = v.sign;
@@ -6929,13 +6913,7 @@ module fcvt (
       S = |manti[27:0];
       S = S | s;
 
-      unique case (rm_i)
-        RNE: rndup = G & (R | S | L);
-        RDN: rndup = op1_i[63] & (G | R | S);
-        RUP: rndup = (!op1_i[63]) & (G | R | S);
-        RMM: rndup = G;
-        default: rndup = 0;
-      endcase
+      rndup = frndup(G, R, S, L, op1_i[63], frm_e'(rm_i));
       if (rndup) begin
         manti[52:30] += 1;
       end
@@ -6951,13 +6929,7 @@ module fcvt (
       S = |op1_i[26:0];
       exp += 12'd127;
 
-      unique case (rm_i)
-        RNE: rndup = G & (R | S | L);
-        RDN: rndup = op1_i[63] & (G | R | S);
-        RUP: rndup = (!op1_i[63]) & (G | R | S);
-        RMM: rndup = G;
-        default: rndup = 0;
-      endcase
+      rndup = frndup(G, R, S, L, op1_i[63], frm_e'(rm_i));
       if (rndup) begin
         if (frac == `ONES(23)) begin
           frac = '0;
@@ -7007,13 +6979,7 @@ module fcvt (
         S = |val[9:0];
       end
 
-      unique case (rm_i)
-        RNE: rndup = G & (R | S | L);
-        RDN: rndup = sign & (G | R | S);
-        RUP: rndup = (!sign) & (G | R | S);
-        RMM: rndup = G;
-        default: rndup = 0;
-      endcase
+      rndup = frndup(G, R, S, L, sign, frm_e'(rm_i));
       if (rndup) begin
         if (frac == `ONES(52)) begin
           frac = '0;
@@ -7087,13 +7053,8 @@ module fcvt (
       L = data[2];
       G = data[1];
       R = data[0];
-      unique case (rm_i)
-        RNE: rndup = G & (R | S | L);
-        RDN: rndup = fsign & (G | R | S);
-        RUP: rndup = (!fsign) & (G | R | S);
-        RMM: rndup = G;
-        default: rndup = 0;
-      endcase
+
+      rndup = frndup(G, R, S, L, fsign, frm_e'(rm_i));
       res.flags.nx = G | R | S;
 
       if (rndup) begin
