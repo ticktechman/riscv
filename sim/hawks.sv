@@ -10,8 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -691,9 +690,41 @@ package hawks;
     FOP_MV_F_X   = 7'b11_10110   // FMV.D.X = mv integer to double / single
   } fop_e;
 
+  typedef struct packed {
+    logic    valid;
+    reg_t    result;
+    fflags_t flags;
+  } ffast_t;
+
+  typedef struct packed {
+    logic sign;
+    logic [11:0] exp;
+    logic [52:0] manti;  // hidden-1bit, frac-52bit
+  } funpack_t;
+
+  typedef struct packed {
+    reg_t result;
+    fflags_t flags;
+  } fpacked_t;
+
   // canonical qNaN
   localparam CQNAN_D = 64'h7FF8000000000000;
   localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
+
+  function automatic funpack_t unpack(logic single, reg_t v, fattr_t a);
+    funpack_t res;
+    res = '0;
+    res.sign = single ? v[31] : v[63];
+    if (a.SUBN) begin
+      res.exp   = 12'd1;
+      res.manti = single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
+    end else begin
+      res.exp   = single ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
+      res.manti = single ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
+    end
+    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    return res;
+  endfunction
 
   function automatic logic check_file_exist(string name);
     int fd = $fopen(name, "r");
@@ -5384,12 +5415,6 @@ module fadd (
   // verilog_format: on
 
   typedef struct packed {
-    logic    valid;
-    reg_t    result;
-    fflags_t flags;
-  } ffast_t;
-
-  typedef struct packed {
     logic sign;
     logic [11:0] exp;
     logic [54:0] manti;  // hidden-1bit, frac-52bit, GR(2bit)
@@ -5400,11 +5425,6 @@ module fadd (
     logic [11:0] exp;
     logic [55:0] manti;  // {carry, funpack_t.manti}
   } faligned_t;
-
-  typedef struct packed {
-    reg_t result;
-    fflags_t flags;
-  } fpacked_t;
 
   `define BUILD_INF_S(s) {1'(s), 8'hff, 23'b0}
   `define BUILD_INF_D(s) {1'(s), 11'h7ff, 52'b0}
@@ -5755,23 +5775,6 @@ module fmul (
   // verilog_format: on
 
   typedef struct packed {
-    logic    valid;
-    reg_t    result;
-    fflags_t flags;
-  } ffast_t;
-
-  typedef struct packed {
-    logic sign;
-    logic [11:0] exp;
-    logic [52:0] manti;  // hidden-1bit, frac-52bit
-  } funpack_t;
-
-  typedef struct packed {
-    reg_t result;
-    fflags_t flags;
-  } fpacked_t;
-
-  typedef struct packed {
     logic sign;
     logic [11:0] exp;
     logic [105:0] manti;  // HH.FF....F
@@ -5808,21 +5811,6 @@ module fmul (
       return res;
     end
     res.valid = 0;
-    return res;
-  endfunction
-
-  function automatic funpack_t unpack(reg_t v, fattr_t a);
-    funpack_t res;
-    res = '0;
-    res.sign = single_i ? v[31] : v[63];
-    if (a.SUBN) begin
-      res.exp   = 12'd1;
-      res.manti = single_i ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
-    end else begin
-      res.exp   = single_i ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
-      res.manti = single_i ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
-    end
-    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
     return res;
   endfunction
 
@@ -5939,8 +5927,8 @@ module fmul (
         S1: begin
           fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
           if (!fast.valid) begin
-            u1 = unpack(op1_i, attr_i[0]);
-            u2 = unpack(op2_i, attr_i[1]);
+            u1 = unpack(single_i, op1_i, attr_i[0]);
+            u2 = unpack(single_i, op2_i, attr_i[1]);
           end
         end
         S2: mult = multiply(u1, u2);
@@ -6004,23 +5992,6 @@ module fdiv (
   // verilog_format: on
 
   typedef struct packed {
-    logic    valid;
-    reg_t    result;
-    fflags_t flags;
-  } ffast_t;
-
-  typedef struct packed {
-    logic sign;
-    logic [11:0] exp;
-    logic [52:0] manti;  // hidden-1bit, frac-52bit
-  } funpack_t;
-
-  typedef struct packed {
-    reg_t result;
-    fflags_t flags;
-  } fpacked_t;
-
-  typedef struct packed {
     logic sign;
     logic [11:0] exp;
     logic [52:0] manti;
@@ -6063,21 +6034,6 @@ module fdiv (
       return res;
     end
     res.valid = 0;
-    return res;
-  endfunction
-
-  function automatic funpack_t unpack(reg_t v, fattr_t a);
-    funpack_t res;
-    res = '0;
-    res.sign = single_i ? v[31] : v[63];
-    if (a.SUBN) begin
-      res.exp   = 12'd1;
-      res.manti = single_i ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
-    end else begin
-      res.exp   = single_i ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
-      res.manti = single_i ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
-    end
-    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
     return res;
   endfunction
 
@@ -6197,8 +6153,8 @@ module fdiv (
         S1: begin
           fast = check_fastpath(op1_i, op2_i, attr_i[0], attr_i[1]);
           if (!fast.valid) begin
-            u1 = unpack(op1_i, attr_i[0]);
-            u2 = unpack(op2_i, attr_i[1]);
+            u1 = unpack(single_i, op1_i, attr_i[0]);
+            u2 = unpack(single_i, op2_i, attr_i[1]);
           end
         end
         S2: begin
@@ -6305,18 +6261,8 @@ module fsqrt (
   localparam SEL_BITS = 12;
 
   // verilog_format: off
-  typedef enum {
-    SB = 0,
-    S1, S2, S3, S4,
-    SE
-  } state_e;
+  typedef enum { SB, S1, S2, S3, S4, SE } state_e;
   // verilog_format: on
-
-  typedef struct packed {
-    logic    valid;
-    reg_t    result;
-    fflags_t flags;
-  } ffast_t;
 
   typedef struct packed {
     logic sign;
@@ -6574,23 +6520,8 @@ module fma (
   output logic valid_o
 );
   // verilog_format: off
-  typedef enum {
-    SB = 0,
-    S1, S2, S3, S4,
-    SE
-  } state_e;
+  typedef enum { SB, S1, S2, S3, S4, SE } state_e;
   // verilog_format: on
-  typedef struct packed {
-    logic valid;
-    reg_t result;
-    fflags_t flags;
-  } ffast_t;
-
-  typedef struct packed {
-    logic sign;
-    logic [11:0] exp;
-    logic [52:0] manti;  // hidden-1bit, frac-52bit
-  } funpack_t;
 
   typedef struct packed {
     logic sign;
@@ -6610,11 +6541,6 @@ module fma (
     logic [51:0] frac;
     fflags_t flags;
   } fnorm_t;
-
-  typedef struct packed {
-    reg_t result;
-    fflags_t flags;
-  } fpacked_t;
 
   // fastcheck: INF, ZERO, NAN(SNAN, QNAN), SUBN
   // fastpath > unpack > multiply > alignment > add > roundup > normalize > pack
@@ -6656,25 +6582,6 @@ module fma (
       end
     end
     return s;
-  endfunction
-
-  function automatic funpack_t unpack(reg_t v, fattr_t a);
-    funpack_t res = '{default: 0};
-    int lz = 0;
-    res.sign = single_i ? v[31] : v[63];
-    if (!a.ZERO) begin
-      if (a.SUBN) begin
-        res.manti = single_i ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
-        lz = clz(res.manti);
-        res.exp = 12'd1 - 12'(lz);
-        res.manti = res.manti <<< lz;
-      end else begin
-        res.exp   = single_i ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
-        res.manti = single_i ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
-      end
-    end
-    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
-    return res;
   endfunction
 
   function automatic fmul_t multiply(funpack_t u1, u2);
@@ -6840,9 +6747,9 @@ module fma (
         fast = check_fastpath();
         `LOGI($sformatf("fast.valid: %d", fast.valid));
         if (!fast.valid) begin
-          u1 = unpack(op1_i, attr_i[0]);
-          u2 = unpack(op2_i, attr_i[1]);
-          u3 = unpack(op3_i, attr_i[2]);
+          u1 = unpack(single_i, op1_i, attr_i[0]);
+          u2 = unpack(single_i, op2_i, attr_i[1]);
+          u3 = unpack(single_i, op3_i, attr_i[2]);
         end
       end
       S2: mul = multiply(u1, u2);
