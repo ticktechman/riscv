@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -691,6 +691,25 @@ package hawks;
   } fop_e;
 
   typedef struct packed {
+    logic        s;
+    logic [7:0]  e;
+    logic [22:0] f;
+  } f32_t;
+
+  typedef struct packed {
+    logic [31:0] box;
+    logic        s;
+    logic [7:0]  e;
+    logic [22:0] f;
+  } f32_boxed_t;
+
+  typedef struct packed {
+    logic        s;
+    logic [10:0] e;
+    logic [51:0] f;
+  } f64_t;
+
+  typedef struct packed {
     logic    valid;
     reg_t    result;
     fflags_t flags;
@@ -707,20 +726,28 @@ package hawks;
     fflags_t flags;
   } fpacked_t;
 
+  `define fp_sign(single, v) (single ? v[31] : v[63])
+  `define fp_exp(single, v, N) (single ? N'(v[30:23]) : N'(v[62:52]))
+  `define fp_frac(single, v) (single ? v[22:0] : v[51:0])
+  `define fp_manti(single, v) (single ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]})
+  `define fp_sub_manti(single, v) (single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]})
+  `define fp_bias(single, N) (single ? N'd127 : N'd1023)
+
   // canonical qNaN
   localparam CQNAN_D = 64'h7FF8000000000000;
   localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
+  `define FP_CQNAN(single) (single ? CQNAN_S : CQNAN_D)
 
   function automatic funpack_t funpack(logic single, reg_t v, fattr_t a);
     funpack_t res;
     res = '0;
-    res.sign = single ? v[31] : v[63];
+    res.sign = `fp_sign(single, v);
     if (a.SUBN) begin
       res.exp   = 12'd1;
-      res.manti = single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]};
+      res.manti = `fp_sub_manti(single, v);
     end else begin
-      res.exp   = single ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
-      res.manti = single ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
+      res.exp   = `fp_exp(single, v, 12);
+      res.manti = `fp_manti(single, v);
     end
     `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
     return res;
@@ -796,7 +823,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(10000)
+    .COUNTER(60000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -5438,6 +5465,7 @@ module fadd (
     logic [55:0] manti;  // {carry, funpack_t.manti}
   } faligned_t;
 
+
   `define BUILD_INF_S(s) {1'(s), 8'hff, 23'b0}
   `define BUILD_INF_D(s) {1'(s), 11'h7ff, 52'b0}
   `define EXP_INF_S 8'hff
@@ -5466,7 +5494,7 @@ module fadd (
 
     // NaN + [NaN]
     if (nan) begin
-      res.result   = single_i ? CQNAN_S : CQNAN_D;
+      res.result   = `FP_CQNAN(single_i);
       res.flags.nv = 1;
       return res;
     end
@@ -5476,7 +5504,7 @@ module fadd (
       if (both_infi) begin
         // same sign
         if (s1 != s2) begin
-          res.result   = single_i ? CQNAN_S : CQNAN_D;
+          res.result   = `FP_CQNAN(single_i);
           res.flags.nv = 1;
         end else begin
           res.result = single_i ? 64'(`BUILD_INF_S(s1)) : `BUILD_INF_D(s1);
@@ -5808,7 +5836,7 @@ module fmul (
     sign = single_i ? v1[31] ^ v2[31] : v1[63] ^ v2[63];
 
     if (a1.SNAN || a2.SNAN || (a1.INF && a2.ZERO) || (a1.ZERO && a2.INF)) begin
-      res.result   = single_i ? CQNAN_S : CQNAN_D;
+      res.result   = `FP_CQNAN(single_i);
       res.flags.nv = 1;
     end
     if (a1.QNAN || a2.QNAN) begin
@@ -5829,7 +5857,7 @@ module fmul (
   function automatic fmul_t multiply(funpack_t u1, funpack_t u2);
     fmul_t res;
     res.sign  = u1.sign ^ u2.sign;
-    res.exp   = u1.exp + u2.exp - (single_i ? 12'd127 : 12'd1023);
+    res.exp   = u1.exp + u2.exp - `fp_bias(single_i, 12);
     res.manti = u1.manti * u2.manti;
     return res;
   endfunction
@@ -6016,12 +6044,12 @@ module fdiv (
       if (a1.SNAN || a2.SNAN) begin
         res.flags.nv = 1;
       end
-      res.result = single_i ? CQNAN_S : CQNAN_D;
+      res.result = `FP_CQNAN(single_i);
       return res;
     end
     if ((a1.INF && a2.INF) || (a1.ZERO && a2.ZERO)) begin
       res.flags.nv = 1;
-      res.result   = single_i ? CQNAN_S : CQNAN_D;
+      res.result   = `FP_CQNAN(single_i);
       return res;
     end
     if (a2.ZERO) begin
@@ -6277,7 +6305,7 @@ module fsqrt (
     logic sign = single_i ? v1[31] : v1[63];
     if (sign) begin
       res.flags.nv = 1;
-      res.result   = single_i ? CQNAN_S : CQNAN_D;
+      res.result   = `FP_CQNAN(single_i);
       return res;
     end
 
@@ -6285,7 +6313,7 @@ module fsqrt (
       if (a1.SNAN) begin
         res.flags.nv = 1;
       end
-      res.result = single_i ? CQNAN_S : CQNAN_D;
+      res.result = `FP_CQNAN(single_i);
       return res;
     end
 
@@ -6545,7 +6573,7 @@ module fma (
     logic snan = attr_i[0].SNAN | attr_i[1].SNAN | attr_i[2].SNAN;
 
     if (nan) begin
-      res.result = single_i ? CQNAN_S : CQNAN_D;
+      res.result = `FP_CQNAN(single_i);
       if (snan) begin
         res.flags.nv = 1;
       end
@@ -7006,28 +7034,20 @@ module fcvt (
   localparam U64_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
   localparam U32_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
 
-  `define f_sign(f, single) (single ? f[31] : f[63])
-  `define f_exp(f, single, N) (single ? N'(f[30:23]) : N'(f[62:52]))
-  `define f_bias(single, N) (single ? N'd127 : N'd1023)
-
   // s|d -> u32|u64|i32|i64
   function automatic fconvert_t d2i(logic isigned, logic l);
     // INF, ZERO, NAN(QNaN, SNaN), SUBN
     fconvert_t res = '{default: 0};
-    logic fsign = `f_sign(op1_i, single_i);
-    logic signed [11:0] exp = `f_exp(op1_i, single_i, 12), shift;
+    logic fsign = `fp_sign(single_i, op1_i);
+    logic signed [11:0] exp = `fp_exp(single_i, op1_i, 12), shift;
     logic signed [11:0] max_e = l ? (isigned ? 12'd63 : 12'd64) : (isigned ? 12'd31 : 12'd32);
     reg_t ires;
     logic G, R, S, L, rndup;
 
     // integer(64bits) + frac(52bits) + GR
     logic [65:0] data = '0;
-    if (single_i) begin
-      data = {1'b0, 1'b1, op1_i[22:0], 29'b0, 10'b0, 2'b0};
-    end else begin
-      data = {1'b0, 1'b1, op1_i[51:0], 10'b0, 2'b0};
-    end
-    exp -= `f_bias(single_i, 12);
+    data = {1'b0, `fp_manti(single_i, op1_i), 10'b0, 2'b0};
+    exp -= `fp_bias(single_i, 12);
 
     `LOGI($sformatf("e:%0d max_e:%0d", exp, max_e));
     if (attr_i.ZERO) begin
@@ -7196,7 +7216,7 @@ module fmax (
             flags_o.nv = 1;
           end
           if (attr_i[0].NAN & attr_i[1].NAN) begin
-            result_o = single_i ? CQNAN_S : CQNAN_D;
+            result_o = `FP_CQNAN(single_i);
           end
         end
         FOP_MAX: begin
@@ -7215,7 +7235,7 @@ module fmax (
             flags_o.nv = 1;
           end
           if (attr_i[0].NAN & attr_i[1].NAN) begin
-            result_o = single_i ? CQNAN_S : CQNAN_D;
+            result_o = `FP_CQNAN(single_i);
           end
         end
         default: ;
@@ -7261,18 +7281,20 @@ module fclass (
 
   function automatic fclassify_t classify();
     fclassify_t res = '{default: 0};
+    logic sign = `fp_sign(single_i, op1_i);
     res.qnan = attr_i.QNAN;
     res.snan = attr_i.SNAN;
-    res.positive_inf = attr_i.INF && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
-    res.negative_inf = attr_i.INF && (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
-    res.positive_zero = attr_i.ZERO && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
-    res.negative_zero = attr_i.ZERO && (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
-    res.positive_subnormal = attr_i.SUBN && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
-    res.negative_subnormal = attr_i.SUBN && (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
+    // res.positive_inf = attr_i.INF && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
+    res.positive_inf = attr_i.INF && sign == 0;
+    res.negative_inf = attr_i.INF && sign == 1;
+    res.positive_zero = attr_i.ZERO && sign == 0;
+    res.negative_zero = attr_i.ZERO && sign == 1;
+    res.positive_subnormal = attr_i.SUBN && sign == 0;
+    res.negative_subnormal = attr_i.SUBN && sign == 1;
 
     if (res == 10'b0) begin
-      res.positive_normal = (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
-      res.negative_normal = (single_i ? op1_i[31] == 1 : op1_i[63] == 1);
+      res.positive_normal = sign == 0;
+      res.negative_normal = sign == 1;
     end
 
     `LOGI($sformatf("fclass: %b", res));
@@ -7280,7 +7302,7 @@ module fclass (
   endfunction
 
   always_comb begin
-    valid_o  = valid && op_i inside {FOP_CLASS};
+    valid_o  = valid;
     result_o = '0;
     if (valid) begin
       unique case (op_i)
@@ -7332,8 +7354,8 @@ module fsgnj (
           v2 = CQNAN_S;
         end
       end
-      s1 = single_i ? v1[31] : v1[63];
-      s2 = single_i ? v2[31] : v2[63];
+      s1 = `fp_sign(single_i, v1);
+      s2 = `fp_sign(single_i, v2);
       unique case (op_i)
         FOP_SGNJ:  s = s2;
         FOP_SGNJX: s = s1 ^ s2;
