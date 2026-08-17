@@ -73,8 +73,6 @@ package hawks;
       end \
     end\
 
-  `define FINF_S(s) {1'(s), 8'hff, 23'b0}
-  `define FINF_D(s) {1'(s), 11'h7ff, 52'b0}
   `define ONES(n) {n{1'b1}}
   `define BOXED_F32(v) (v[63:32] == 32'hffff_ffff)
   `define MASK(N, n) ((N'(1) << n) - 1)
@@ -726,16 +724,22 @@ package hawks;
     fflags_t flags;
   } fpacked_t;
 
+  // canonical qNaN
+  localparam CQNAN_D = 64'h7FF8000000000000;
+  localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
+
   `define fp_sign(single, v) (single ? v[31] : v[63])
   `define fp_exp(single, v, N) (single ? N'(v[30:23]) : N'(v[62:52]))
   `define fp_frac(single, v) (single ? v[22:0] : v[51:0])
   `define fp_manti(single, v) (single ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]})
-  `define fp_sub_manti(single, v) (single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]})
+  `define fp_subn_manti(single, v) (single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]})
   `define fp_bias(single, N) (single ? N'd127 : N'd1023)
+  `define fp_abs(single, v) (single ? v[30:0] : v[62:0])
+  `define fp_abs64(single, v) (single ? {33'b0, v[30:0]} : {1'b0, v[62:0]})
+  `define fp_pack(single, s, e, m) (single ? {32'hffff_ffff, s, e[7:0], m[22:0]} : {s, e[10:0], m[51:0]})
+  `define fp_zero(single, s) (single ? {32'hffff_ffff, s, 31'b0} : {s, 63'b0})
+  `define fp_inf(single, s) (single ? {32'hffff_ffff, s, 8'hff, 23'b0} : {s, 11'h7ff, 52'b0})
 
-  // canonical qNaN
-  localparam CQNAN_D = 64'h7FF8000000000000;
-  localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
   `define FP_CQNAN(single) (single ? CQNAN_S : CQNAN_D)
 
   function automatic funpack_t funpack(logic single, reg_t v, fattr_t a);
@@ -744,7 +748,7 @@ package hawks;
     res.sign = `fp_sign(single, v);
     if (a.SUBN) begin
       res.exp   = 12'd1;
-      res.manti = `fp_sub_manti(single, v);
+      res.manti = `fp_subn_manti(single, v);
     end else begin
       res.exp   = `fp_exp(single, v, 12);
       res.manti = `fp_manti(single, v);
@@ -5411,20 +5415,22 @@ module fpu (
 
   function automatic fattr_t calc_attr(reg_t v, logic single);
     fattr_t attr = '{default: 0};
+    f32_t f32 = v[31:0];
+    f64_t f64 = v;
     if (single) begin
-      attr.NAN  = v[30:23] == 8'hff && v[22:0] != 23'h0;
-      attr.SNAN = v[30:23] == 8'hff && v[22:0] != 23'h0 && v[22] == 0;
-      attr.QNAN = v[30:23] == 8'hff && v[22:0] != 23'h0 && v[22] == 1;
-      attr.INF  = v[30:23] == 8'hff && v[22:0] == 23'h0;
-      attr.ZERO = v[30:23] == 8'h00 && v[22:0] == 23'h0;
-      attr.SUBN = v[30:23] == 8'h00 && v[22:0] != 23'h0;
+      attr.NAN  = f32.e == 8'hff && f32.f != 23'h0;
+      attr.SNAN = f32.e == 8'hff && f32.f != 23'h0 && f32.f[22] == 0;
+      attr.QNAN = f32.e == 8'hff && f32.f != 23'h0 && f32.f[22] == 1;
+      attr.INF  = f32.e == 8'hff && f32.f == 23'h0;
+      attr.ZERO = f32.e == 8'h00 && f32.f == 23'h0;
+      attr.SUBN = f32.e == 8'h00 && f32.f != 23'h0;
     end else begin
-      attr.NAN  = v[62:52] == 11'h7ff && v[51:0] != 52'h0;
-      attr.SNAN = v[62:52] == 11'h7ff && v[51:0] != 52'h0 && v[51] == 0;
-      attr.QNAN = v[62:52] == 11'h7ff && v[51:0] != 52'h0 && v[51] == 1;
-      attr.INF  = v[62:52] == 11'h7ff && v[51:0] == 52'h0;
-      attr.ZERO = v[62:52] == 11'h000 && v[51:0] == 52'h0;
-      attr.SUBN = v[62:52] == 11'h000 && v[51:0] != 52'h0;
+      attr.NAN  = f64.e == 11'h7ff && f64.f != 52'h0;
+      attr.SNAN = f64.e == 11'h7ff && f64.f != 52'h0 && f64.f[51] == 0;
+      attr.QNAN = f64.e == 11'h7ff && f64.f != 52'h0 && f64.f[51] == 1;
+      attr.INF  = f64.e == 11'h7ff && f64.f == 52'h0;
+      attr.ZERO = f64.e == 11'h000 && f64.f == 52'h0;
+      attr.SUBN = f64.e == 11'h000 && f64.f != 52'h0;
     end
     return attr;
   endfunction
@@ -5466,8 +5472,6 @@ module fadd (
   } faligned_t;
 
 
-  `define BUILD_INF_S(s) {1'(s), 8'hff, 23'b0}
-  `define BUILD_INF_D(s) {1'(s), 11'h7ff, 52'b0}
   `define EXP_INF_S 8'hff
   `define EXP_INF_D 11'h7ff
   `define EXP_MAX_S 8'hfe
@@ -5507,7 +5511,7 @@ module fadd (
           res.result   = `FP_CQNAN(single_i);
           res.flags.nv = 1;
         end else begin
-          res.result = single_i ? 64'(`BUILD_INF_S(s1)) : `BUILD_INF_D(s1);
+          res.result = `fp_inf(single_i, s1);
         end
         return res;
       end
@@ -5530,19 +5534,6 @@ module fadd (
 
     res.valid = 0;
     return res;
-  endfunction
-
-  function automatic logic sticky(logic [54:0] manti, logic [11:0] shift, logic single);
-    logic s;
-    s = 0;
-    if (shift >= 12'd3) begin
-      if (shift >= 12'd55) begin
-        s = |manti;
-      end else begin
-        s = |(manti << (12'd55 - shift));
-      end
-    end
-    return s;
   endfunction
 
   function automatic int lzc(logic [54:0] val);
@@ -5582,14 +5573,14 @@ module fadd (
       a2.sign = u2.sign ^ (op_i == FOP_SUB);
       a2.exp = u1.exp;
       a2.manti = u2.manti >> diff;
-      s = sticky(u2.manti, diff, single_i);
+      s = `OR_NBITS(u2.manti, diff);
     end else begin
       diff = u2.exp - u1.exp;
       a2 = '{sign: u2.sign ^ (op_i == FOP_SUB), exp: u2.exp, manti: u2.manti};
       a1.sign = u1.sign;
       a1.exp = u2.exp;
       a1.manti = u1.manti >> diff;
-      s = sticky(u1.manti, diff, single_i);
+      s = `OR_NBITS(u1.manti, diff);
     end
 
     // sub
@@ -5723,13 +5714,7 @@ module fadd (
     end
 
     res.flags.uf = (res.flags.nx && exp == 0);
-
-    // pack
-    if (single_i) begin
-      res.result = {32'hffff_ffff, norm.sign, exp[7:0], final_manti[22:0]};
-    end else begin
-      res.result = {norm.sign, exp[10:0], final_manti[51:0]};
-    end
+    res.result   = `fp_pack(single_i, norm.sign, exp, final_manti);
     return res;
   endfunction
 
@@ -5738,7 +5723,7 @@ module fadd (
   state_e state;
   always_comb begin
     faligned_t aligned, normed;
-    funpack_t unpacked[2];
+    funpack_t u1, u2;
     fpacked_t pcked;
     if (valid) begin
       unique case (state)
@@ -5746,20 +5731,18 @@ module fadd (
         S1: begin
           fast = check_fastpath();
           if (!fast.valid) begin
-            unpacked[0] = unpack(op1_i, attr_i[0]);
-            unpacked[1] = unpack(op2_i, attr_i[1]);
+            u1 = unpack(op1_i, attr_i[0]);
+            u2 = unpack(op2_i, attr_i[1]);
           end
         end
-        S2: aligned = alignment(unpacked[0], unpacked[1]);
+        S2: aligned = alignment(u1, u2);
         S3: normed = normalize(aligned);
         SE: begin
           if (fast.valid) begin
-            result_o = fast.result;
-            flags_o  = fast.flags;
+            {result_o, flags_o} = {fast.result, fast.flags};
           end else begin
             pcked = pack(normed, frm_e'(rm_i));
-            result_o = pcked.result;
-            flags_o = pcked.flags;
+            {result_o, flags_o} = {pcked.result, pcked.flags};
           end
         end
         default: ;
@@ -5843,11 +5826,11 @@ module fmul (
       res.result = a1.QNAN ? v1 : v2;
     end
     if (a1.ZERO || a2.ZERO) begin
-      res.result = single_i ? {32'hffff_ffff, sign, 31'b0} : {sign, 63'b0};
+      res.result = `fp_zero(single_i, sign);
       return res;
     end
     if (a1.INF || a2.INF) begin
-      res.result = single_i ? {32'hffff_ffff, sign, 8'hff, 23'b0} : {sign, 11'h7ff, 52'b0};
+      res.result = `fp_inf(single_i, sign);
       return res;
     end
     res.valid = 0;
@@ -6054,11 +6037,11 @@ module fdiv (
     end
     if (a2.ZERO) begin
       res.flags.dz = 1;
-      res.result   = single_i ? {`ONES(32), `FINF_S(sign)} : `FINF_D(sign);
+      res.result   = `fp_inf(single_i, sign);
       return res;
     end
     if (a1.INF) begin
-      res.result = single_i ? {`ONES(32), `FINF_S(sign)} : `FINF_D(sign);
+      res.result = `fp_inf(single_i, sign);
       return res;
     end
     if (a2.INF || a1.ZERO) begin
@@ -6143,7 +6126,7 @@ module fdiv (
 
   function automatic fpacked_t pack(fdiv_t v);
     fpacked_t res = '{default: 0};
-    res.result = single_i ? {32'hffff_ffff, v.sign, v.exp[7:0], v.manti[22:0]} : {v.sign, v.exp[10:0], v.manti[51:0]};
+    res.result = `fp_pack(single_i, v.sign, v.exp, v.manti);
     res.flags  = v.flags;
     return res;
   endfunction
@@ -6211,12 +6194,11 @@ module fdiv (
           if (gotone) begin
             cnt--;
           end
-          // `LOGI($sformatf("cnt:%0d got:%b %h-%h q:%h", cnt, gotone, holder_r[105:53], divisor, quotient));
           iterate_end = (cnt <= 0);
         end
         S4: begin
           dres.sign  = p1.sign ^ p2.sign;
-          dres.exp   = p1.exp - p2.exp + (single_i ? 12'd127 : 12'd1023) - lz;
+          dres.exp   = p1.exp - p2.exp + `fp_bias(single_i, 12) - lz;
           dres.manti = quotient[54:2];
           dres.grs.G = quotient[1];
           dres.grs.R = quotient[0];
@@ -6560,13 +6542,13 @@ module fma (
     fflags_t flags;
   } fnorm_t;
 
-  // fastcheck: INF, ZERO, NAN(SNAN, QNAN), SUBN
   // fastpath > unpack > multiply > alignment > add > roundup > normalize > pack
 
   // FSM
   state_e state;
   ffast_t fast;
 
+  // fastcheck: INF, ZERO, NAN(SNAN, QNAN), SUBN
   function automatic ffast_t check_fastpath();
     ffast_t res = '{valid: 1, default: 0};
     logic nan = attr_i[0].NAN | attr_i[1].NAN | attr_i[2].NAN;
@@ -6587,19 +6569,6 @@ module fma (
     int i;
     for (i = 52; i >= 0; i--) if (val[i] != 1'b0) break;
     return 52 - i;
-  endfunction
-
-  function automatic logic sticky(logic [54:0] manti, logic [11:0] shift);
-    logic s;
-    s = 0;
-    if (shift >= 12'd3) begin
-      if (shift >= 12'd55) begin
-        s = |manti;
-      end else begin
-        s = |(manti << (12'd55 - shift));
-      end
-    end
-    return s;
   endfunction
 
   function automatic fmul_t multiply(funpack_t u1, u2);
@@ -6627,7 +6596,6 @@ module fma (
       default: ;
     endcase
     // verilog_format: on
-
 
     // align exponent of m and u3
     if (m.exp >= u3.exp) begin
@@ -6877,7 +6845,6 @@ module fcvt (
     end
     return 63 - i;
   endfunction
-
 
   function automatic fconvert_t s2d();
     // INF, ZERO, NAN(QNaN, SNaN), SUBN
@@ -7178,10 +7145,10 @@ module fmax (
   function automatic logic less_than();
     // INF, ZERO, NAN(QNaN, SNaN), SUBN
     logic res;
-    logic [1:0] sign = single_i ? {op1_i[31], op2_i[31]} : {op1_i[63], op2_i[63]};
-    logic [62:0] val1, val2;
-    val1 = single_i ? {32'b0, op1_i[30:0]} : op1_i[62:0];
-    val2 = single_i ? {32'b0, op2_i[30:0]} : op2_i[62:0];
+    logic [1:0] sign = {`fp_sign(single_i, op1_i), `fp_sign(single_i, op2_i)};
+    reg_t val1, val2;
+    val1 = `fp_abs64(single_i, op1_i);
+    val2 = `fp_abs64(single_i, op2_i);
     unique case (sign)
       2'b00:   res = (val1 < val2);
       2'b11:   res = (val1 > val2);
@@ -7284,7 +7251,6 @@ module fclass (
     logic sign = `fp_sign(single_i, op1_i);
     res.qnan = attr_i.QNAN;
     res.snan = attr_i.SNAN;
-    // res.positive_inf = attr_i.INF && (single_i ? op1_i[31] == 0 : op1_i[63] == 0);
     res.positive_inf = attr_i.INF && sign == 0;
     res.negative_inf = attr_i.INF && sign == 1;
     res.positive_zero = attr_i.ZERO && sign == 0;
@@ -7338,9 +7304,7 @@ module fsgnj (
   always_comb begin
     logic s1, s2, s;
     reg_t v1, v2;
-    valid_o  = valid;
-    result_o = '0;
-    flags_o  = '0;
+    valid_o = valid;
 
     if (valid) begin
       `LOGI($sformatf("sgnj: %h %h", op1_i, op2_i));
@@ -7363,6 +7327,7 @@ module fsgnj (
         default:   ;
       endcase
       result_o = single_i ? {`ONES(32), s, v1[30:0]} : {s, v1[62:0]};
+      flags_o  = '0;
     end
   end
 
@@ -7394,7 +7359,7 @@ module fcmp (
   logic nan, snan, all_zero;
 
   logic [1:0] sign;
-  logic [62:0] val1, val2;
+  reg_t val1, val2;
 
   always_comb begin
     valid_o = 0;
@@ -7411,14 +7376,10 @@ module fcmp (
         if (!`BOXED_F32(op1_i) || !`BOXED_F32(op2_i)) begin
           nan = 1;
         end
-        sign = {op1_i[31], op2_i[31]};
-        val1 = {32'b0, op1_i[30:0]};
-        val2 = {32'b0, op2_i[30:0]};
-      end else begin
-        sign = {op1_i[63], op2_i[63]};
-        val1 = op1_i[62:0];
-        val2 = op2_i[62:0];
       end
+      sign = {`fp_sign(single_i, op1_i), `fp_sign(single_i, op2_i)};
+      val1 = `fp_abs64(single_i, op1_i);
+      val2 = `fp_abs64(single_i, op2_i);
 
       unique case (op_i)
         FOP_CMP_EQ: begin
@@ -7427,11 +7388,7 @@ module fcmp (
             rst = 0;
             if (snan) flags_o.nv = 1;
           end else begin
-            if (single_i) begin
-              rst = (op1_i[31:0] == op2_i[31:0]) | all_zero;
-            end else begin
-              rst = (op1_i == op2_i) | all_zero;
-            end
+            rst = (val1 == val2 | all_zero);
           end
         end
 
@@ -7476,9 +7433,8 @@ module fcmp (
           rst = 0;
         end
       endcase
+      result_o = {63'b0, rst};
     end
-
-    result_o = {63'b0, rst};
   end
 
 endmodule
