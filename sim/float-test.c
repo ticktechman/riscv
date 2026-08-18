@@ -68,20 +68,20 @@ typedef struct {
 } specials_t;
 
 speciald_t sd = {
-  .pos_max  = 0x7fefffffffffffffULL,
-  .neg_min  = 0xffefffffffffffffULL,
-  .pos_min  = 0x0010000000000000ULL,
-  .neg_max  = 0x8010000000000000ULL,
-  .pos_inf  = 0x7ff0000000000000ULL,
-  .neg_inf  = 0xfff0000000000000ULL,
-  .pos_zero = 0x0000000000000000ULL,
-  .neg_zero = 0x8000000000000000ULL,
-  .pos_subn = 0x0000000000000001ULL,
-  .neg_subn = 0x8000000000000001ULL,
-  .snan     = 0x7ff0000000000001ULL,
-  .qnan     = 0x7ff8000000000000ULL,
-  .pos_1_0  = 0x3ff0000000000000ULL,
-  .neg_1_0  = 0xbff0000000000000ULL,
+  .pos_max  = 0x7fefffffffffffff,
+  .neg_min  = 0xffefffffffffffff,
+  .pos_min  = 0x0010000000000000,
+  .neg_max  = 0x8010000000000000,
+  .pos_inf  = 0x7ff0000000000000,
+  .neg_inf  = 0xfff0000000000000,
+  .pos_zero = 0x0000000000000000,
+  .neg_zero = 0x8000000000000000,
+  .pos_subn = 0x0000000000000001,
+  .neg_subn = 0x8000000000000001,
+  .snan     = 0x7ff0000000000001,
+  .qnan     = 0x7ff8000000000000,
+  .pos_1_0  = 0x3ff0000000000000,
+  .neg_1_0  = 0xbff0000000000000,
 };
 
 specials_t ss = {

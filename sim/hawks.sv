@@ -6398,7 +6398,7 @@ module fsqrt (
       end
       S1: begin
         fast = check_fastpath(op1_i, attr_i);
-        `LOGI($sformatf("fsqrt %.16f, fast:%b", $bitstoreal(op1_i), fast.valid));
+        `LOGI($sformatf("fsqrt %.16e, fast:%b", $bitstoreal(op1_i), fast.valid));
         if (!fast.valid) begin
           u1 = unpack(op1_i, attr_i);
         end
@@ -6470,7 +6470,7 @@ module fsqrt (
           end else begin
             result_o = {u1.sign, exp, manti};
           end
-          `LOGI($sformatf("result:%.16f, e:%0d, m:%h", $bitstoreal(result_o), exp, manti));
+          `LOGI($sformatf("result:%.16e, e:%0d, m:%h", $bitstoreal(result_o), exp, manti));
           flags_o = flags;
         end
       end
