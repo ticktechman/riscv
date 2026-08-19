@@ -120,6 +120,12 @@ void roundup(RND rnd) { fesetround(rnd); }
 
 int main(int argc, char *argv[]) {
   roundup(RNE);
+  double_u d1, d2, d3;
+  d1.hex = 0x7FFC0001FFFFFFFF;
+  d2.hex = 0xFFFC000004000000;
+  d3.r   = d1.r + d2.r;
+  print_float64(d3.hex);
+  print_double(d3);
 
   return 0;
 }

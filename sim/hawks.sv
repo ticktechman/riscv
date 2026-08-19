@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -99,14 +99,25 @@ package hawks;
   // };
 
   // for normal dev and test
+  // parameter mmap_t mapping[SLAVE_CNT] = '{
+  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
+  //     '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
+  //     '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
+  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
+  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
+  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
+  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+  // };
+
+  // fpu-test
   parameter mmap_t mapping[SLAVE_CNT] = '{
-      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
-      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
-      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
-      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
-      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
-      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},  // rom
+      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},  // tohost
+      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8fff_ffff)},  // sram
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
   };
 
   typedef enum {
@@ -827,7 +838,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(60000)
+    .COUNTER(80000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -3559,7 +3570,7 @@ endmodule
 //------------------------------------
 module sram #(
   parameter logic DATAONLY = 0,
-  parameter int unsigned CAPS_IN_BYTES = 256 * KB
+  parameter int unsigned CAPS_IN_BYTES = 8 * MB
 ) (
   input logic clk,
   input logic rst_n,
@@ -5460,15 +5471,9 @@ module fadd (
   // verilog_format: on
 
   typedef struct packed {
-    logic sign;
-    logic [11:0] exp;
-    logic [54:0] manti;  // hidden-1bit, frac-52bit, GR(2bit)
-  } funpack_t;
-
-  typedef struct packed {
     logic sign, sticky;
     logic [11:0] exp;
-    logic [55:0] manti;  // {carry, funpack_t.manti}
+    logic [64:0] manti;  // {funpack_t.manti, }
   } faligned_t;
 
 
@@ -5498,8 +5503,12 @@ module fadd (
 
     // NaN + [NaN]
     if (nan) begin
-      res.result   = `FP_CQNAN(single_i);
-      res.flags.nv = 1;
+      res.result = attr_i[0].NAN ? op1_i : op2_i;
+      if (attr_i[0].SNAN | attr_i[1].SNAN) begin
+        // make it QNaN
+        res.result[51] = 1'b1;
+        res.flags.nv   = 1;
+      end
       return res;
     end
     // INF + [INF]
@@ -5527,7 +5536,7 @@ module fadd (
       if (both_zero) begin
         res.result = (s1 == s2 ? op1_i : {1'b0, 63'b0});
       end else begin
-        res.result = (attr_i[0].ZERO ? op1_i : op2_i);
+        res.result = (attr_i[0].ZERO ? op2_i : op1_i);
       end
       return res;
     end
@@ -5536,70 +5545,60 @@ module fadd (
     return res;
   endfunction
 
-  function automatic int lzc(logic [54:0] val);
+  function automatic int lzc(logic [63:0] val);
     int i;
-    for (i = 54; i >= 0; i--) begin
+    for (i = 63; i >= 0; i--) begin
       if (val[i] != 1'b0) begin
         break;
       end
     end
-    return 54 - i;
-  endfunction
-
-  function automatic funpack_t unpack(reg_t op, fattr_t attr);
-    funpack_t res;
-    res = '0;
-    res.sign = single_i ? op[31] : op[63];
-    if (attr.SUBN) begin
-      res.exp   = 12'd1;
-      res.manti = single_i ? {1'b0, op[22:0], 31'b0} : {1'b0, op[51:0], 2'b00};
-    end else begin
-      res.exp   = single_i ? 12'(op[30:23]) : 12'(op[62:52]);
-      res.manti = single_i ? {1'b1, op[22:0], 31'b0} : {1'b1, op[51:0], 2'b00};
-    end
-    `LOGI($sformatf("exp:%0d manti:%0h", res.exp, res.manti));
-    return res;
+    return 63 - i;
   endfunction
 
   function automatic faligned_t alignment(funpack_t u1, funpack_t u2);
-    logic [11:0] diff;
-    logic s;
-    funpack_t a1, a2;
+    logic [11:0] diff, exp;
+    logic sticky, s1, s2, carry;
+    reg_t m1, m2;
     faligned_t res;
+
+    m1 = {u1.manti, 11'b0};
+    m2 = {u2.manti, 11'b0};
+    s1 = u1.sign;
+    s2 = op_i == FOP_SUB ^ u2.sign;
+    sticky = 1'b0;
 
     if (u1.exp >= u2.exp) begin
       diff = u1.exp - u2.exp;
-      a1 = u1;
-      a2.sign = u2.sign ^ (op_i == FOP_SUB);
-      a2.exp = u1.exp;
-      a2.manti = u2.manti >> diff;
-      s = `OR_NBITS(u2.manti, diff);
+      exp  = u1.exp;
+      if (diff > 12'd11) begin
+        sticky = `OR_NBITS(m2, diff - 12'd11);
+      end
+      m2 = m2 >> diff;
     end else begin
       diff = u2.exp - u1.exp;
-      a2 = '{sign: u2.sign ^ (op_i == FOP_SUB), exp: u2.exp, manti: u2.manti};
-      a1.sign = u1.sign;
-      a1.exp = u2.exp;
-      a1.manti = u1.manti >> diff;
-      s = `OR_NBITS(u1.manti, diff);
+      exp  = u2.exp;
+      if (diff > 12'd11) begin
+        sticky = `OR_NBITS(m1, diff - 12'd11);
+      end
+      m1 = m1 >> diff;
     end
 
     // sub
-    if (a1.sign ^ a2.sign) begin
-      if (a1.manti >= a2.manti) begin
-        res.sign  = a1.sign;
-        res.exp   = a1.exp;
-        res.manti = {1'b0, a1.manti} - {1'b0, a2.manti};
+    if (s1 ^ s2) begin
+      res.exp = exp;
+      if (m1 >= m2) begin
+        res.sign  = s1;
+        res.manti = m1 - m2;
       end else begin
-        res.exp   = a2.exp;
-        res.sign  = a2.sign;
-        res.manti = {1'b0, a2.manti} - {1'b0, a1.manti};
+        res.sign  = s2;
+        res.manti = m2 - m1;
       end
     end else begin
-      res.exp   = a1.exp;
-      res.sign  = a1.sign;
-      res.manti = {1'b0, a1.manti} + {1'b0, a2.manti};
+      res.exp   = exp;
+      res.sign  = s1;
+      res.manti = {1'b0, m1} + {1'b0, m2};
     end
-    res.sticky = s;
+    res.sticky = sticky;
     `LOGI($sformatf("s:%b e:%0d m:0x%0h stick:%b", res.sign, res.exp, res.manti, res.sticky));
     return res;
   endfunction
@@ -5612,13 +5611,12 @@ module fadd (
     if (ali.manti == '0) begin
       res.exp   = '0;
       res.manti = '0;
-    end else if (ali.manti[55] != 0) begin
-      res.manti  = ali.manti >> 1;
-      res.exp    = ali.exp + 12'd1;
-      res.sticky = (single_i ? ali.manti[29] : ali.manti[0]) | ali.sticky;
+    end else if (ali.manti[64]) begin
+      res.exp   = ali.exp + 1;
+      res.manti = ali.manti >> 1;
     end else begin
-      lz = lzc(ali.manti[54:0]);
-      `LOGI($sformatf("lz:%0d", lz));
+      lz = lzc(ali.manti[63:0]);
+      `LOGI($sformatf("lz:%0d manti:%h", lz, ali.manti));
       if (ali.exp > 12'(lz)) begin
         res.manti = ali.manti << lz;
         res.exp   = ali.exp - 12'(lz);
@@ -5633,7 +5631,7 @@ module fadd (
 
   function automatic fpacked_t pack(faligned_t norm, frm_e rm);
     // do round
-    logic [55:0] manti, final_manti;
+    logic [51:0] frac;
     logic [11:0] exp;
     logic overflow;
     logic G, R, S, L;
@@ -5643,14 +5641,15 @@ module fadd (
     rnd = 0;
     S   = norm.sticky;
     if (single_i) begin
-      L = norm.manti[31];
-      G = norm.manti[30];
-      R = norm.manti[29];
-      S = (|norm.manti[28:0]) | norm.sticky;
+      L = norm.manti[40];
+      G = norm.manti[39];
+      R = norm.manti[38];
+      S = (|norm.manti[37:0]) | norm.sticky;
     end else begin
-      L = norm.manti[2];
-      G = norm.manti[1];
-      R = norm.manti[0];
+      L = norm.manti[11];
+      G = norm.manti[10];
+      R = norm.manti[9];
+      S = (|norm.manti[8:0]) | norm.sticky;
     end
 
     unique case (rm)
@@ -5661,60 +5660,61 @@ module fadd (
       RMM: rnd = G;
       default: ;
     endcase
-    `LOGI($sformatf("G:%b R:%b S:%b", G, R, S));
+    `LOGI($sformatf("G:%b R:%b S:%b L:%b rnd:%b", G, R, S, L, rnd));
     res.flags.nx = G | R | S;
 
-    manti = single_i ? 56'({1'b0, norm.manti[55:31]}) : 56'({1'b0, norm.manti[55:2]});
+    frac = single_i ? {29'b0, norm.manti[62:40]} : norm.manti[62:11];
     exp = norm.exp;
-    final_manti = manti;
+    `LOGI($sformatf("frac:%h norm:%h", frac, norm.manti));
 
     if (rnd) begin
       res.flags.nx = 1;
-      manti = manti + 55'd1;
-      overflow = single_i ? manti[24] : manti[53];
+      overflow = single_i ? frac[22:0] == `ONES(23) : frac == `ONES(52);
       if (overflow) begin
-        exp = exp + 11'd1;
-        final_manti = manti >> 1;
+        exp  = exp + 11'd1;
+        frac = '0;
       end else begin
-        final_manti = manti;
+        frac += 1;
       end
     end
+
     if (norm.exp > `max_exp(single_i)) begin
       res.flags.of = 1;
       res.flags.nx = 1;
       unique case (rm)
         RNE, RMM: begin
-          exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
-          final_manti = '0;
+          exp  = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+          frac = '0;
         end
         RTZ: begin
-          exp = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
-          final_manti = '1;
+          exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
+          frac = '1;
         end
         RDN: begin
           if (norm.sign) begin
-            exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
-            final_manti = '0;
+            exp  = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+            frac = '0;
           end else begin
-            exp = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
-            final_manti = '1;
+            exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
+            frac = '1;
           end
         end
         RUP: begin
           if (norm.sign) begin
-            exp = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
-            final_manti = '1;
+            exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
+            frac = '1;
           end else begin
-            exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
-            final_manti = '0;
+            exp  = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+            frac = '0;
           end
         end
         default: ;
       endcase
     end
 
+    `LOGI($sformatf("s:%b e:%0d f:%h", norm.sign, exp, frac));
     res.flags.uf = (res.flags.nx && exp == 0);
-    res.result   = `fp_pack(single_i, norm.sign, exp, final_manti);
+    res.result   = `fp_pack(single_i, norm.sign, exp, frac);
     return res;
   endfunction
 
@@ -5731,8 +5731,8 @@ module fadd (
         S1: begin
           fast = check_fastpath();
           if (!fast.valid) begin
-            u1 = unpack(op1_i, attr_i[0]);
-            u2 = unpack(op2_i, attr_i[1]);
+            u1 = funpack(single_i, op1_i, attr_i[0]);
+            u2 = funpack(single_i, op2_i, attr_i[1]);
           end
         end
         S2: aligned = alignment(u1, u2);
