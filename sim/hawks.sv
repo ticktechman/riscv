@@ -750,6 +750,7 @@ package hawks;
   `define fp_pack(single, s, e, m) (single ? {32'hffff_ffff, s, e[7:0], m[22:0]} : {s, e[10:0], m[51:0]})
   `define fp_zero(single, s) (single ? {32'hffff_ffff, s, 31'b0} : {s, 63'b0})
   `define fp_inf(single, s) (single ? {32'hffff_ffff, s, 8'hff, 23'b0} : {s, 11'h7ff, 52'b0})
+  `define fp_mkval(single, sign, v) (single ? {v[63:32], sign, v[30:0]}: {sign, v[62:0]})
 
   `define FP_CQNAN(single) (single ? CQNAN_S : CQNAN_D)
 
@@ -5527,7 +5528,7 @@ module fadd (
       end
       // INF + X
       if (!nan) begin
-        res.result = attr_i[0].INF ? op1_i : op2_i;
+        res.result = attr_i[0].INF ? op1_i : `fp_mkval(single_i, s2, op2_i);
         return res;
       end
     end
@@ -5537,7 +5538,7 @@ module fadd (
       if (both_zero) begin
         res.result = (s1 == s2 ? op1_i : {1'b0, 63'b0});
       end else begin
-        res.result = (attr_i[0].ZERO ? op2_i : op1_i);
+        res.result = (attr_i[0].ZERO ? `fp_mkval(single_i, s2, op2_i) : `fp_mkval(single_i, s1, op1_i));
       end
       return res;
     end
@@ -5570,16 +5571,18 @@ module fadd (
 
     if (u1.exp >= u2.exp) begin
       diff = u1.exp - u2.exp;
-      exp  = u1.exp;
-      m2[0] |= `OR_NBITS(m2, diff);
+      exp = u1.exp;
+      sticky = `OR_NBITS(m2, diff);
       m2 = m2 >> diff;
       m2[0] |= sticky;
     end else begin
       diff = u2.exp - u1.exp;
-      exp  = u2.exp;
-      m1[0] |= `OR_NBITS(m1, diff);
+      exp = u2.exp;
+      sticky = `OR_NBITS(m1, diff);
       m1 = m1 >> diff;
+      m1[0] |= sticky;
     end
+    res.sticky = sticky;
 
     // sub
     if (s1 ^ s2) begin
@@ -5596,7 +5599,7 @@ module fadd (
       res.sign  = s1;
       res.manti = {1'b0, m1} + {1'b0, m2};
     end
-    `LOGI($sformatf("s:%b e:%0d m:0x%0h stick:%b", res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:0x%0h", res.sign, res.exp, res.manti));
     return res;
   endfunction
 
