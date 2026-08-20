@@ -5508,7 +5508,11 @@ module fadd (
       if (attr_i[0].SNAN | attr_i[1].SNAN) begin
         // make it QNaN
         res.result = attr_i[0].SNAN ? op1_i : op2_i;
-        res.result[51] = 1'b1;
+        if (single_i) begin
+          res.result[22] = 1'b1;
+        end else begin
+          res.result[51] = 1'b1;
+        end
         res.flags.nv = 1;
       end
       return res;
@@ -5549,11 +5553,7 @@ module fadd (
 
   function automatic int lzc(logic [63:0] val);
     int i;
-    for (i = 63; i >= 0; i--) begin
-      if (val[i] != 1'b0) begin
-        break;
-      end
-    end
+    for (i = 63; i >= 0; i--) if (val[i] != 1'b0) break;
     return 63 - i;
   endfunction
 
@@ -5681,13 +5681,14 @@ module fadd (
       end
     end
 
-    if (norm.exp > `max_exp(single_i)) begin
+    if (exp > `max_exp(single_i)) begin
       res.flags.of = 1;
       res.flags.nx = 1;
       unique case (rm)
         RNE, RMM: begin
-          exp  = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+          exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
           frac = '0;
+          res.flags.of = 1;
         end
         RTZ: begin
           exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
@@ -5695,8 +5696,9 @@ module fadd (
         end
         RDN: begin
           if (norm.sign) begin
-            exp  = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+            exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
             frac = '0;
+            res.flags.of = 1;
           end else begin
             exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
             frac = '1;
@@ -5707,8 +5709,9 @@ module fadd (
             exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
             frac = '1;
           end else begin
-            exp  = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+            exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
             frac = '0;
+            res.flags.of = 1;
           end
         end
         default: ;

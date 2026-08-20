@@ -33,7 +33,7 @@ all: $(SIM)
 hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="fpu-test/testcases/f64_add"
+	@$< +verilator+quiet +elf="fpu-test/testcases/f32_add"
 
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
