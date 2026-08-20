@@ -114,18 +114,32 @@ void print_float(float_u f) {
 void print_float32(uint32_t s) { printf("0x%08x\n", s); }
 void print_float64(uint64_t v) { printf("0x%016llx\n", v); }
 
+void print_exceptions() {
+  int raised = fetestexcept(FE_ALL_EXCEPT);
+  printf("flags:");
+  if (raised & FE_INVALID) printf(" NX");
+  if (raised & FE_OVERFLOW) printf(" OF");
+  if (raised & FE_UNDERFLOW) printf(" UF");
+  if (raised & FE_INEXACT) printf(" NX");
+  if (raised & FE_DIVBYZERO) printf(" DZ");
+  if (raised == 0) printf(" (none)");
+  printf("\n");
+  feclearexcept(FE_ALL_EXCEPT);
+}
+
 typedef enum { RNE = FE_TONEAREST, RTZ = FE_TOWARDZERO, RDN = FE_DOWNWARD, RUP = FE_UPWARD } RND;
 
 void roundup(RND rnd) { fesetround(rnd); }
 
 int main(int argc, char *argv[]) {
   roundup(RNE);
+  feclearexcept(FE_ALL_EXCEPT);
   double_u d1, d2, d3;
-  d1.hex = 0x7FFC0001FFFFFFFF;
-  d2.hex = 0xFFFC000004000000;
+  d1.hex = 0x3FF0000000FFDFFF;
+  d2.hex = 0xC34FFFFFFFFFFFFF;
   d3.r   = d1.r + d2.r;
-  print_float64(d3.hex);
   print_double(d3);
+  print_exceptions();
 
   return 0;
 }

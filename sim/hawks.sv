@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -838,7 +838,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(80000)
+    .COUNTER(8880000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -5506,8 +5506,9 @@ module fadd (
       res.result = attr_i[0].NAN ? op1_i : op2_i;
       if (attr_i[0].SNAN | attr_i[1].SNAN) begin
         // make it QNaN
+        res.result = attr_i[0].SNAN ? op1_i : op2_i;
         res.result[51] = 1'b1;
-        res.flags.nv   = 1;
+        res.flags.nv = 1;
       end
       return res;
     end
@@ -5559,7 +5560,7 @@ module fadd (
     logic [11:0] diff, exp;
     logic sticky, s1, s2, carry;
     reg_t m1, m2;
-    faligned_t res;
+    faligned_t res = '{default: 0};
 
     m1 = {u1.manti, 11'b0};
     m2 = {u2.manti, 11'b0};
@@ -5570,16 +5571,13 @@ module fadd (
     if (u1.exp >= u2.exp) begin
       diff = u1.exp - u2.exp;
       exp  = u1.exp;
-      if (diff > 12'd11) begin
-        sticky = `OR_NBITS(m2, diff - 12'd11);
-      end
+      m2[0] |= `OR_NBITS(m2, diff);
       m2 = m2 >> diff;
+      m2[0] |= sticky;
     end else begin
       diff = u2.exp - u1.exp;
       exp  = u2.exp;
-      if (diff > 12'd11) begin
-        sticky = `OR_NBITS(m1, diff - 12'd11);
-      end
+      m1[0] |= `OR_NBITS(m1, diff);
       m1 = m1 >> diff;
     end
 
@@ -5587,7 +5585,7 @@ module fadd (
     if (s1 ^ s2) begin
       res.exp = exp;
       if (m1 >= m2) begin
-        res.sign  = s1;
+        res.sign  = m1 == m2 ? 0 : s1;
         res.manti = m1 - m2;
       end else begin
         res.sign  = s2;
@@ -5598,8 +5596,7 @@ module fadd (
       res.sign  = s1;
       res.manti = {1'b0, m1} + {1'b0, m2};
     end
-    res.sticky = sticky;
-    `LOGI($sformatf("s:%b e:%0d m:0x%0h stick:%b", res.sign, res.exp, res.manti, res.sticky));
+    `LOGI($sformatf("s:%b e:%0d m:0x%0h stick:%b", res.sign, res.exp, res.manti));
     return res;
   endfunction
 
@@ -5612,7 +5609,10 @@ module fadd (
       res.exp   = '0;
       res.manti = '0;
     end else if (ali.manti[64]) begin
-      res.exp   = ali.exp + 1;
+      res.exp = ali.exp + 1;
+      if (ali.manti[0]) begin
+        res.sticky = 1;
+      end
       res.manti = ali.manti >> 1;
     end else begin
       lz = lzc(ali.manti[63:0]);
@@ -5625,7 +5625,7 @@ module fadd (
         res.manti = ali.manti << (ali.exp > 0 ? ali.exp - 1 : 0);
       end
     end
-    `LOGI($sformatf("s:%b e:%0d m:0x%0h", res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:0x%h", res.sign, res.exp, res.manti));
     return res;
   endfunction
 
