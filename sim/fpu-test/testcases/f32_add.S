@@ -90,5 +90,5 @@ tohost:
 .align 4
 
 test_data:
-.include "./data/f32_add.txt.S"
+.include "./golden/f32_add.txt.S"
 test_data_end:

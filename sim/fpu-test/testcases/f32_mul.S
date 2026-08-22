@@ -16,37 +16,37 @@ loop:
     bgeu    s2, s3, pass
 
     /* load from current pointer */
-    fld     f0, 0(s2)              /* a        @ +0  */
-    fld     f1, 8(s2)              /* b        @ +8  */
-    ld      a2, 16(s2)             /* gold     @ +16 */
-    lw      a3, 24(s2)             /* flags    @ +24 */
-    lw      t0, 28(s2)             /* TESTNUM  @ +28 */
+    flw     f0, 0(s2)              /* a        @ +0  */
+    flw     f1, 4(s2)              /* b        @ +4  */
+    lw      a2, 8(s2)              /* gold     @ +8  */
+    lw      a3, 12(s2)             /* flags    @ +12 */
+    lw      t0, 16(s2)             /* TESTNUM  @ +16 */
 
     /* clear fcsr */
     csrw    fcsr, zero
 
-    /* execute fadd.d */
-    fadd.d  f3, f0, f1
-    fmv.x.d a4, f3                 /* DUT result -> GPR */
+    /* execute fadd.s */
+    fmul.s  f3, f0, f1
+    fmv.x.s a4, f3                 /* DUT result -> GPR */
 
     /* read fflags */
     csrr    a5, fcsr
     andi    a5, a5, 0x1f
 
     /* NaN-aware check: test if gold is NaN (exp=all1, mantissa!=0) */
-    srli    t3, a2, 52
-    li      t4, 0x7ff
+    srli    t3, a2, 23             /* f32 exp 在 bit[30:23] */
+    li      t4, 0xff
     bne     t3, t4, normal_cmp
 
-    li      t4, 0x000fffffffffffff
+    li      t4, 0x007fffff
     and     t4, a2, t4
     beqz    t4, normal_cmp         /* mantissa=0 -> is INF -> normal compare */
 
     /* gold is NaN -> DUT must also be NaN, only compare fflags */
-    srli    t3, a4, 52
-    li      t4, 0x7ff
+    srli    t3, a4, 23
+    li      t4, 0xff
     bne     t3, t4, do_fail        /* DUT exp != all1 -> fail */
-    li      t4, 0x000fffffffffffff
+    li      t4, 0x007fffff
     and     t4, a4, t4
     beqz    t4, do_fail            /* DUT mantissa=0 -> is INF -> fail */
     bne     a5, a3, do_fail        /* fflags mismatch -> fail */
@@ -57,7 +57,7 @@ normal_cmp:
     bne     a5, a3, do_fail        /* fflags mismatch */
 
 do_pass:
-    addi    s2, s2, 32             /* advance pointer 32 bytes */
+    addi    s2, s2, 20             /* advance pointer 20 bytes (5×4) */
     j       loop
 
 do_fail:
@@ -69,26 +69,26 @@ do_fail:
 pass:
     li      t0, TOHOST_BASE
     li      t1, 1
-    sd      t1, 0(t0)              /* write 1 = ALL PASS */
+    sw      t1, 0(t0)              /* write 1 = ALL PASS (sw 够用了) */
     j       end
 
 fail:
     li      t0, TOHOST_BASE
-    sd      t1, 0(t0)              /* write testnum<<1 = FAIL */
+    sw      t1, 0(t0)              /* write testnum<<1 = FAIL */
     j       end
 
 end:
-    ebreak                         /* absolute execution wall */
+    ebreak
 
 /* ============ data section ============ */
 .pushsection .tohost
 tohost:
-.align 8
-   .dword 0
+  .align 8
+  .dword 0
 
 .section .data
-.align 8
+  .align 4
 
 test_data:
-.include "./golden/f64_add.txt.S"
+.include "./golden/f32_mul.txt.S"
 test_data_end:

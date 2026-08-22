@@ -90,5 +90,5 @@ tohost:
 .align 8
 
 test_data:
-.include "./data/f64_sub.txt.S"
+.include "./golden/f64_sub.txt.S"
 test_data_end:
