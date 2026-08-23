@@ -1,4 +1,11 @@
 
+  /* TESTNUM=2227 */
+  .word 0x00800000
+  .word 0x3F7FFFFF
+  .word 0x00800000
+  .word 0x03
+  .word 2227
+
   /* TESTNUM=2 */
   .word 0xDE7F8006
   .word 0xBC27FFFF
@@ -15559,13 +15566,6 @@
   .word 0x4269AAAB
   .word 0x01
   .word 2226
-
-  /* TESTNUM=2227 */
-  .word 0x00800000
-  .word 0x3F7FFFFF
-  .word 0x00800000
-  .word 0x03
-  .word 2227
 
   /* TESTNUM=2228 */
   .word 0xCE9FFFF7

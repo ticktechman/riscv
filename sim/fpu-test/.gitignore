@@ -2,3 +2,4 @@ f32*.txt
 f64*.txt
 SoftFloat-3e*
 TestFloat-3e*
+testcases/build/*

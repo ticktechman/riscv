@@ -109,7 +109,7 @@ void print_double(double_u d) {
   printf("(%.16f)s:%d e:%d f:0x%llx (0x%llx)\n", d.r, d.bits.s, d.bits.e, d.bits.f, d.hex);
 }
 void print_float(float_u f) {
-  printf("(%.16f) s:%d e:%d f:0x%08x (0x%08x)\n", f.r, f.bits.s, f.bits.e, f.bits.f, f.hex);
+  printf("(%.10f) s:%d e:%d f:0x%08x (0x%08x)\n", f.r, f.bits.s, f.bits.e, f.bits.f, f.hex);
 }
 void print_float32(uint32_t s) { printf("0x%08x\n", s); }
 void print_float64(uint64_t v) { printf("0x%016llx\n", v); }
@@ -134,11 +134,11 @@ void roundup(RND rnd) { fesetround(rnd); }
 int main(int argc, char *argv[]) {
   roundup(RNE);
   feclearexcept(FE_ALL_EXCEPT);
-  double_u d1, d2, d3;
-  d1.hex = 0x3FF0000000FFDFFF;
-  d2.hex = 0xC34FFFFFFFFFFFFF;
-  d3.r   = d1.r + d2.r;
-  print_double(d3);
+  float_u f1, f2, f3;
+  f1.hex = 0x00800000;
+  f2.hex = 0x3F7FFFFF;
+  f3.r   = f1.r * f2.r;
+  print_float(f3);
   print_exceptions();
 
   return 0;

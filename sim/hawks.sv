@@ -77,10 +77,21 @@ package hawks;
   `define BOXED_F32(v) (v[63:32] == 32'hffff_ffff)
   `define MASK(N, n) ((N'(1) << n) - 1)
   `define OR_NBITS(val, n) (|(val & `MASK($bits(val), n)))
+  `define min(a, b) (a < b ? a : b)
+  `define max(a, b) (a > b ? a : b)
 
   typedef logic [63:0] reg_t;
   typedef logic [63:0] addr_t;
   typedef logic [31:0] instr_t;
+
+
+  // basic data types
+  typedef logic [63:0] u64_t;
+  typedef logic [31:0] u32_t;
+  typedef logic [15:0] u16_t;
+  typedef logic signed [63:0] i64_t;
+  typedef logic signed [31:0] i32_t;
+  typedef logic signed [15:0] i16_t;
 
   typedef struct packed {
     longint unsigned BASE;
@@ -5805,7 +5816,7 @@ module fmul (
 
   typedef struct packed {
     logic sign;
-    logic [11:0] exp;
+    logic [12:0] exp;
     logic [105:0] manti;  // HH.FF....F
     fflags_t flags;
   } fmul_t;
@@ -5824,12 +5835,23 @@ module fmul (
     res.valid = 1;
     sign = single_i ? v1[31] ^ v2[31] : v1[63] ^ v2[63];
 
-    if (a1.SNAN || a2.SNAN || (a1.INF && a2.ZERO) || (a1.ZERO && a2.INF)) begin
+    `LOGW($sformatf("a1:%b a2:%b", a1, a2));
+    if (a1.SNAN || a2.SNAN) begin
+      // choose the SNAN one and make it QNAN
+      res.result   = a1.SNAN ? v1 : v2;
+      res.result   = res.result | (single_i ? 64'(1 << 22) : 64'(1 << 51));
+      res.flags.nv = 1;
+      return res;
+    end
+    if ((a1.INF && a2.ZERO) || (a1.ZERO && a2.INF)) begin
+      `LOGW($sformatf("result: %h", res.result));
       res.result   = `FP_CQNAN(single_i);
       res.flags.nv = 1;
+      return res;
     end
     if (a1.QNAN || a2.QNAN) begin
       res.result = a1.QNAN ? v1 : v2;
+      return res;
     end
     if (a1.ZERO || a2.ZERO) begin
       res.result = `fp_zero(single_i, sign);
@@ -5846,79 +5868,94 @@ module fmul (
   function automatic fmul_t multiply(funpack_t u1, funpack_t u2);
     fmul_t res;
     res.sign  = u1.sign ^ u2.sign;
-    res.exp   = u1.exp + u2.exp - `fp_bias(single_i, 12);
     res.manti = u1.manti * u2.manti;
+    res.exp   = u1.exp + u2.exp + 13'd1 - `fp_bias(single_i, 13);  // +1 to make int part to MSB
+    `LOGI($sformatf("exp:%0d manti:%h", res.exp, res.manti));
     return res;
   endfunction
 
   function automatic fmul_t normalize(fmul_t v);
     fmul_t res;
-    logic L, G, R, S, rndup;
-    logic [11:0] exp, exp2;
+    logic L, G, R, S, rndup, tiny;
+    logic [12:0] exp;
     logic [105:0] manti;
     int lz = clz(v.manti);
-    exp   = v.exp - 12'(lz) + 12'd1;
+    exp = 13'(v.exp) - 13'(lz);
     manti = v.manti << lz;
+    S = 0;
+    tiny = 0;
+    if ($signed(exp) <= 0) begin
+      if ($signed(exp) < -106) begin
+        S = |manti;
+        manti = '0;
+        exp = '0;
+      end else if ($signed(exp) <= 0) begin
+        exp = exp - 1;
+        S = `OR_NBITS(manti, (-$signed(exp)));
+        tiny = single_i ? manti[104:81] != `ONES(24) : manti[104:52] != `ONES(53);
+        manti = manti >> -$signed(exp);
+        manti[0] |= S;
+        exp = '0;
+      end
+    end
+
     if (single_i) begin
       L = manti[82];
       G = manti[81];
       R = manti[80];
-      S = |manti[79:0];
+      S = (|manti[79:0]) | S;
     end else begin
       L = manti[53];
       G = manti[52];
       R = manti[51];
-      S = |manti[50:0];
+      S = (|manti[50:0]) | S;
     end
 
-    rndup   = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
     res.exp = exp;
+    res.sign = v.sign;
+    rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
+    res.flags.nx = (G | R | S);
+    if (tiny && res.flags.nx) begin
+      res.flags.uf = 1;
+    end
     if (rndup) begin
       if (single_i) begin
-        if (manti[105:82] == `ONES(24)) begin
+        if (manti[104:82] == `ONES(23)) begin
           res.manti = {1'b1, 105'b0};
-          res.exp += 12'd1;
+          res.exp += 13'd1;
         end else begin
           manti[105:82] += 1;
           res.manti = manti;
         end
       end else begin
-        if (manti[105:53] == `ONES(53)) begin
+        if (manti[104:53] == `ONES(52)) begin
           res.manti = {1'b1, 105'b0};
-          res.exp += 12'd1;
+          res.exp += 13'd1;
         end else begin
-          manti[105:82] += 1;
+          manti[105:53] += 1;
           res.manti = manti;
         end
       end
     end else begin
       res.manti = manti;
     end
+    if (res.exp == 13'd0) begin
+      res.flags.uf = G | R | S;
+    end
 
     // flags
-    res.flags.nx = (G | R | S);
     if (single_i) begin
-      if ($signed(res.exp) >= 12'd255) begin
+      if ($signed(res.exp) >= 13'sd255) begin
         res.flags.of = 1;
         res.flags.nx = 1;
-        res.exp = 12'h0ff;
-        res.manti = '0;
-      end else if ($signed(res.exp) <= 0) begin
-        res.flags.uf = 1;
-        res.flags.nx = 1;
-        res.exp = 12'b0;
+        res.exp = 13'h0ff;
         res.manti = '0;
       end
     end else begin
-      if ($signed(res.exp) >= 12'd2047) begin
+      if ($signed(res.exp) >= 13'sd2047) begin
         res.flags.of = 1;
         res.flags.nx = 1;
-        res.exp = 12'h7ff;
-        res.manti = '0;
-      end else if ($signed(res.exp) <= 0) begin
-        res.flags.uf = 1;
-        res.flags.nx = 1;
-        res.exp = 12'b0;
+        res.exp = 13'h7ff;
         res.manti = '0;
       end
     end
