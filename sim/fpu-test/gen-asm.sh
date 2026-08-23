@@ -104,9 +104,9 @@ gen_one() {
 }
 
 # f32="f32_add.txt f32_div.txt f32_mul.txt f32_mulAdd.txt f32_rem.txt f32_sqrt.txt f32_sub.txt"
-f32=""
+f32="f32_div.txt"
 # f64="f64_add.txt f64_div.txt f64_mul.txt f64_mulAdd.txt f64_rem.txt f64_sqrt.txt f64_sub.txt"
-f64="f64_mul.txt"
+f64=""
 
 for one in $f32; do
   gen_one $one

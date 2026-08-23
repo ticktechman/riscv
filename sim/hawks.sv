@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -6066,11 +6066,15 @@ module fdiv (
   function automatic ffast_t check_fastpath(reg_t v1, v2, fattr_t a1, a2);
     ffast_t res = '{valid: 1, default: 0};
     logic sign = single_i ? v1[31] ^ v2[31] : v1[63] ^ v2[63];
-    if (a1.NAN || a2.NAN) begin
-      if (a1.SNAN || a2.SNAN) begin
-        res.flags.nv = 1;
-      end
-      res.result = `FP_CQNAN(single_i);
+    if (a1.SNAN || a2.SNAN) begin
+      // choose the SNAN one and make it QNAN
+      res.result   = a1.SNAN ? v1 : v2;
+      res.result   = res.result | (single_i ? 64'(1 << 22) : 64'(1 << 51));
+      res.flags.nv = 1;
+      return res;
+    end
+    if (a1.QNAN || a2.QNAN) begin
+      res.result = a1.QNAN ? v1 : v2;
       return res;
     end
     if ((a1.INF && a2.INF) || (a1.ZERO && a2.ZERO)) begin
@@ -6138,16 +6142,14 @@ module fdiv (
 
     // flags
     res.flags.nx = (G | R | S);
+    if (res.exp == 0) begin
+      res.flags.uf = res.flags.nx;
+    end
     if (single_i) begin
       if ($signed(exp) >= 12'd255) begin
         res.flags.of = 1;
         res.flags.nx = 1;
         res.exp = 12'h0ff;
-        res.manti = '0;
-      end else if ($signed(exp) <= 0) begin
-        res.flags.uf = 1;
-        res.flags.nx = 1;
-        res.exp = 12'b0;
         res.manti = '0;
       end
     end else begin
@@ -6156,14 +6158,9 @@ module fdiv (
         res.flags.nx = 1;
         res.exp = 12'h7ff;
         res.manti = '0;
-      end else if ($signed(exp) <= 0) begin
-        res.flags.uf = 1;
-        res.flags.nx = 1;
-        res.exp = 12'b0;
-        res.manti = '0;
       end
     end
-    `LOGI($sformatf("rnd:%b s:%b e:%0d m:%0h", rndup, res.sign, res.exp, res.manti));
+    `LOGI($sformatf("rnd:%b s:%b e:%0d m:%h", rndup, res.sign, res.exp, res.manti));
     return res;
   endfunction
 
@@ -6188,7 +6185,7 @@ module fdiv (
     logic [106:0] holder;
     logic [53:0] sub, divisor;
     logic [54:0] quotient;
-    logic gotone;
+    logic gotone, sticky;
     logic [11:0] lz;
     int cnt;
     fdiv_t dres;
@@ -6240,13 +6237,24 @@ module fdiv (
           iterate_end = (cnt <= 0);
         end
         S4: begin
-          dres.sign  = p1.sign ^ p2.sign;
-          dres.exp   = p1.exp - p2.exp + `fp_bias(single_i, 12) - lz;
+          dres.sign = p1.sign ^ p2.sign;
+          dres.exp = p1.exp - p2.exp + `fp_bias(single_i, 12) - lz;
+          sticky = |holder;
+          `LOGW($sformatf("exp:%0d, quotient:%h", $signed(dres.exp), quotient));
+          if ($signed(dres.exp) <= -52) begin
+            sticky |= (|quotient);
+            quotient = '0;
+            dres.exp = '0;
+          end else if ($signed(dres.exp) <= 0) begin
+            sticky |= `OR_NBITS(quotient[54:2], -$signed(dres.exp));
+            quotient = quotient >> -($signed(dres.exp) - 1);
+            dres.exp = '0;
+          end
           dres.manti = quotient[54:2];
           dres.grs.G = quotient[1];
           dres.grs.R = quotient[0];
-          dres.grs.S = (|holder);
-          `LOGI($sformatf("div done >> s:%b e:%0d m:%h", dres.sign, dres.exp, dres.manti));
+          dres.grs.S = sticky;
+          `LOGI($sformatf("div done >> s:%b e:%0d m:%h", dres.sign, $signed(dres.exp), dres.manti));
           norm = normalize(dres);
         end
         SE: begin
