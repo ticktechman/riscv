@@ -6346,22 +6346,24 @@ module fsqrt (
   function automatic ffast_t check_fastpath(reg_t v1, fattr_t a1);
     ffast_t res = '{valid: 1, default: 0};
     logic sign = single_i ? v1[31] : v1[63];
-    if (sign) begin
-      res.flags.nv = 1;
-      res.result   = `FP_CQNAN(single_i);
-      return res;
-    end
+    `LOGI($sformatf("v:%h a:%b", v1, a1));
 
     if (a1.NAN) begin
       if (a1.SNAN) begin
         res.flags.nv = 1;
       end
-      res.result = `FP_CQNAN(single_i);
+      res.result = v1 | (64'b1 << (single_i ? 22 : 51));
       return res;
     end
 
-    if (a1.INF || a1.ZERO) begin
+    if ((a1.INF && !sign) || a1.ZERO) begin
       res.result = v1;
+      return res;
+    end
+
+    if (sign) begin
+      res.flags.nv = 1;
+      res.result   = `FP_CQNAN(single_i);
       return res;
     end
 
@@ -6445,7 +6447,7 @@ module fsqrt (
   always_comb begin
     funpack_t u1;
     fflags_t flags;
-    logic G, R, S, L, rndup;
+    logic G, R, S, L, rndup, root_adj;
     logic signed [11:0] exp, real_e;
     logic [51:0] manti;
     logic signed [MP-1:0] rem, rem_4x, root, root_2x, root_s, inc, mq;
@@ -6456,6 +6458,7 @@ module fsqrt (
       SB: begin
         fast = '0;
         iterate_end = 0;
+        root_adj = 0;
       end
       S1: begin
         fast = check_fastpath(op1_i, attr_i);
@@ -6502,6 +6505,13 @@ module fsqrt (
         iterate_end = counter >= max_counter;
       end
       S4: begin
+        // adjustment root
+        if (rem[MP-1]) begin
+          root = root - (MP'(1) << 4);
+          `LOGW($sformatf("adjust root to:%h", root));
+          root_adj = 1;
+        end
+
         // normalize
         root = root <<< 1;
         mq = root - (1 << BP);
@@ -6511,7 +6521,7 @@ module fsqrt (
         L = single_i ? mq[BP-23] : mq[BP-52];
 
         rndup = frndup(G, R, S, L, u1.sign, frm_e'(rm_i));
-        `LOGW($sformatf("mq:%h", mq));
+        `LOGW($sformatf("mq:%h rem:%h", mq, rem));
         manti = single_i ? {29'b0, mq[BP-1:BP-23]} : mq[BP-1:BP-52];
         if (rndup) begin
           if (manti == `ONES(52)) begin
@@ -6519,7 +6529,7 @@ module fsqrt (
           end
           manti += 52'b1;
         end
-        flags.nx = (G | R | S);
+        flags.nx = (G | R | S | root_adj | rem != '0);
       end
       SE: begin
         if (fast.valid) begin
