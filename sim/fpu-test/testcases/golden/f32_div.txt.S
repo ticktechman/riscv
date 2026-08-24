@@ -1,11 +1,4 @@
 
-  /* TESTNUM=3319 */
-  .word 0x00FFFFFF
-  .word 0x40000000
-  .word 0x00800000
-  .word 0x03
-  .word 3319
-
   /* TESTNUM=2 */
   .word 0xDE7F8006
   .word 0xBC27FFFF
@@ -23224,6 +23217,13 @@
   .word 0xD61224FA
   .word 0x01
   .word 3318
+
+  /* TESTNUM=3319 */
+  .word 0x00FFFFFF
+  .word 0x40000000
+  .word 0x00800000
+  .word 0x03
+  .word 3319
 
   /* TESTNUM=3320 */
   .word 0xCFFF0002

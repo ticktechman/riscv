@@ -135,9 +135,9 @@ int main(int argc, char *argv[]) {
   roundup(RNE);
   feclearexcept(FE_ALL_EXCEPT);
   float_u f1, f2, f3;
-  f1.hex = 0x00800000;
-  f2.hex = 0x3F7FFFFF;
-  f3.r   = f1.r * f2.r;
+  f1.hex = 0x00FFFFFF;
+  f2.hex = 0x40000000;
+  f3.r   = f1.r / f2.r;
   print_float(f3);
   print_exceptions();
 

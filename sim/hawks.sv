@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -850,7 +850,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(8880000)
+    .COUNTER(18880000)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -6050,8 +6050,8 @@ module fdiv (
   // verilog_format: on
 
   typedef struct packed {
-    logic sign;
-    logic [11:0] exp;
+    logic sign, tiny;
+    logic [12:0] exp;
     logic [52:0] manti;
     grs_t grs;
     fflags_t flags;
@@ -6066,6 +6066,8 @@ module fdiv (
   function automatic ffast_t check_fastpath(reg_t v1, v2, fattr_t a1, a2);
     ffast_t res = '{valid: 1, default: 0};
     logic sign = single_i ? v1[31] ^ v2[31] : v1[63] ^ v2[63];
+
+    `LOGI($sformatf("v1:%h v2:%h a1:%b a2:%b", v1, v2, a1, a2));
     if (a1.SNAN || a2.SNAN) begin
       // choose the SNAN one and make it QNAN
       res.result   = a1.SNAN ? v1 : v2;
@@ -6082,13 +6084,13 @@ module fdiv (
       res.result   = `FP_CQNAN(single_i);
       return res;
     end
+    if (a1.INF) begin
+      res.result = `fp_inf(single_i, sign);
+      return res;
+    end
     if (a2.ZERO) begin
       res.flags.dz = 1;
       res.result   = `fp_inf(single_i, sign);
-      return res;
-    end
-    if (a1.INF) begin
-      res.result = `fp_inf(single_i, sign);
       return res;
     end
     if (a2.INF || a1.ZERO) begin
@@ -6109,32 +6111,36 @@ module fdiv (
         res.exp   = 12'd1 - 12'(lz);
       end
     end
-    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, $signed(res.exp), res.manti));
     return res;
   endfunction
 
   function automatic fdiv_t normalize(fdiv_t v);
     fdiv_t res = '{default: 0, sign: v.sign};
     logic [52:0] manti;
-    logic G, R, S, L;
+    logic G, R, S, L, overflow, tiny;
     logic rndup;
-    logic [11:0] exp;
+    logic [12:0] exp;
+
     L = v.manti[0];
     G = v.grs.G;
     R = v.grs.R;
     S = v.grs.S;
 
+    `LOGW($sformatf("manti:%h G:%b R:%b, S:%b", v.manti, G, R, S));
     rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
-    exp = v.exp;
+    exp = 13'(v.exp);
     res.exp = v.exp;
     manti = v.manti;
     if (rndup) begin
-      manti = v.manti + 53'd1;
-      res.manti = manti;
-      if (manti == `ONES(53)) begin
-        res.manti = {1'b1, 52'b0};
-        exp = v.exp + 12'd1;
+      overflow = single_i ? manti[22:0] == `ONES(23) : manti[51:0] == `ONES(52);
+      if (overflow) begin
+        res.manti = single_i ? {29'b0, 1'b1, 23'b0} : {1'b1, 52'b0};
+        exp = v.exp + 13'd1;
         res.exp = exp;
+      end else begin
+        manti = v.manti + 53'd1;
+        res.manti = manti;
       end
     end else begin
       res.manti = v.manti;
@@ -6142,21 +6148,24 @@ module fdiv (
 
     // flags
     res.flags.nx = (G | R | S);
+    if (v.tiny && res.flags.nx) begin
+      res.flags.uf = 1;
+    end
     if (res.exp == 0) begin
       res.flags.uf = res.flags.nx;
     end
     if (single_i) begin
-      if ($signed(exp) >= 12'd255) begin
+      if ($signed(exp) >= 13'd255) begin
         res.flags.of = 1;
         res.flags.nx = 1;
-        res.exp = 12'h0ff;
+        res.exp = 13'h0ff;
         res.manti = '0;
       end
     end else begin
-      if ($signed(exp) >= 12'd2047) begin
+      if ($signed(exp) >= 13'd2047) begin
         res.flags.of = 1;
         res.flags.nx = 1;
-        res.exp = 12'h7ff;
+        res.exp = 13'h7ff;
         res.manti = '0;
       end
     end
@@ -6185,8 +6194,8 @@ module fdiv (
     logic [106:0] holder;
     logic [53:0] sub, divisor;
     logic [54:0] quotient;
-    logic gotone, sticky;
-    logic [11:0] lz;
+    logic gotone, sticky, tiny;
+    logic [12:0] lz;
     int cnt;
     fdiv_t dres;
 
@@ -6238,22 +6247,21 @@ module fdiv (
         end
         S4: begin
           dres.sign = p1.sign ^ p2.sign;
-          dres.exp = p1.exp - p2.exp + `fp_bias(single_i, 12) - lz;
+          dres.exp = $signed(p1.exp) - $signed(p2.exp) + $signed(`fp_bias(single_i, 13)) - $signed(lz);
           sticky = |holder;
-          `LOGW($sformatf("exp:%0d, quotient:%h", $signed(dres.exp), quotient));
-          if ($signed(dres.exp) <= -52) begin
-            sticky |= (|quotient);
-            quotient = '0;
-            dres.exp = '0;
-          end else if ($signed(dres.exp) <= 0) begin
-            sticky |= `OR_NBITS(quotient[54:2], -$signed(dres.exp));
-            quotient = quotient >> -($signed(dres.exp) - 1);
+          tiny = 0;
+          if ($signed(dres.exp) <= 0) begin
+            tiny = single_i ? quotient[23:1] != `ONES(23) : quotient[53:1] != `ONES(53);
+            sticky |= `OR_NBITS(quotient, -$signed(dres.exp) + 1);
+            quotient = quotient >> -$signed(dres.exp) + 1;
             dres.exp = '0;
           end
+
           dres.manti = quotient[54:2];
           dres.grs.G = quotient[1];
           dres.grs.R = quotient[0];
           dres.grs.S = sticky;
+          dres.tiny  = tiny;
           `LOGI($sformatf("div done >> s:%b e:%0d m:%h", dres.sign, $signed(dres.exp), dres.manti));
           norm = normalize(dres);
         end
