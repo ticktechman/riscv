@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -62,13 +62,16 @@ package hawks;
       string elf; \
       int fd; \
       $value$plusargs("elf=%s", elf); \
-      if (elf != "") begin \
+      if (elf != "") begin: elfload \
         elf = {elf, surfix}; \
         fd  = $fopen(elf, "r"); \
         if (fd != 0) begin \
           $fclose(fd); \
           $readmemh(elf, data); \
           `LOGI($sformatf("load %s", elf)); \
+        end else begin \
+          `LOGE($sformatf("fail to load %s", elf)); \
+          $finish(1); \
         end \
       end \
     end\
@@ -6127,7 +6130,6 @@ module fdiv (
     R = v.grs.R;
     S = v.grs.S;
 
-    `LOGW($sformatf("manti:%h G:%b R:%b, S:%b", v.manti, G, R, S));
     rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
     exp = 13'(v.exp);
     res.exp = v.exp;
