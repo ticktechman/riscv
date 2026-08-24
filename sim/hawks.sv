@@ -6333,7 +6333,7 @@ module fsqrt (
 
   typedef struct packed {
     logic sign;
-    logic signed [10:0] exp;
+    logic signed [11:0] exp;
     logic [52:0] manti;  // hidden-1bit, frac-52bit
   } funpack_t;
 
@@ -6379,7 +6379,7 @@ module fsqrt (
       res.exp = 11'sd1 - 11'(lz);
       res.manti = res.manti <<< lz;
     end else begin
-      res.exp   = single_i ? {3'b0, v[30:23]} : {v[62:52]};
+      res.exp   = single_i ? {4'b0, v[30:23]} : {1'b0, v[62:52]};
       res.manti = single_i ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]};
     end
     `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
@@ -6397,7 +6397,7 @@ module fsqrt (
     endcase
   endfunction
   function automatic logic [2:0] select_s(logic signed [MP-1:0] fr4, logic signed [MP-1:0] partial_s, int shift);
-    localparam BITS = 12;
+    localparam BITS = SEL_BITS;
     logic signed [2:0] candidates[3];
     logic signed [2:0] fit;
     logic signed [MP-1:0] new_s;
@@ -6446,7 +6446,7 @@ module fsqrt (
     funpack_t u1;
     fflags_t flags;
     logic G, R, S, L, rndup;
-    logic signed [10:0] exp, real_e;
+    logic signed [11:0] exp, real_e;
     logic [51:0] manti;
     logic signed [MP-1:0] rem, rem_4x, root, root_2x, root_s, inc, mq;
     logic signed [2:0] sfactor;
@@ -6466,8 +6466,8 @@ module fsqrt (
       end
       S2: begin
         // prepare
-        real_e = u1.exp - (single_i ? 11'sd127 : 11'sd1023);
-        exp = (real_e >>> 1) + (single_i ? 11'sd127 : 11'sd1023);
+        real_e = 12'(u1.exp) - (single_i ? 12'sd127 : 12'sd1023);
+        exp = (real_e >>> 1) + (single_i ? 12'sd127 : 12'sd1023);
         rem = MP'(u1.manti) <<< (BP - 52);
         root = MP'(1) <<< BP;
         if (real_e[0]) begin
@@ -6511,6 +6511,7 @@ module fsqrt (
         L = single_i ? mq[BP-23] : mq[BP-52];
 
         rndup = frndup(G, R, S, L, u1.sign, frm_e'(rm_i));
+        `LOGW($sformatf("mq:%h", mq));
         manti = single_i ? {29'b0, mq[BP-1:BP-23]} : mq[BP-1:BP-52];
         if (rndup) begin
           if (manti == `ONES(52)) begin
@@ -6529,7 +6530,7 @@ module fsqrt (
           if (single_i) begin
             result_o = {32'hffffffff, u1.sign, exp[7:0], manti[22:0]};
           end else begin
-            result_o = {u1.sign, exp, manti};
+            result_o = {u1.sign, exp[10:0], manti};
           end
           `LOGI($sformatf("result:%.16e, e:%0d, m:%h", $bitstoreal(result_o), exp, manti));
           flags_o = flags;
