@@ -765,8 +765,22 @@ package hawks;
   `define fp_zero(single, s) (single ? {32'hffff_ffff, s, 31'b0} : {s, 63'b0})
   `define fp_inf(single, s) (single ? {32'hffff_ffff, s, 8'hff, 23'b0} : {s, 11'h7ff, 52'b0})
   `define fp_mkval(single, sign, v) (single ? {v[63:32], sign, v[30:0]}: {sign, v[62:0]})
+  `define fp_quiet(single, v) v |= (single_i ? 64'b1 << 22 : 64'b1 << 51)
 
   `define FP_CQNAN(single) (single ? CQNAN_S : CQNAN_D)
+
+  function automatic reg_t fnan2(reg_t op[2], fattr_t attr[2]);
+    return attr[1].NAN ? op[1] : op[0];
+  endfunction
+  function automatic reg_t fnan3(reg_t op[3], fattr_t attr[3]);
+    return attr[0].NAN ? op[0] : (attr[1].NAN ? op[1] : op[2]);
+  endfunction
+  function automatic reg_t fsnan2(reg_t op[2], fattr_t attr[2]);
+    return attr[1].SNAN ? op[1] : op[0];
+  endfunction
+  function automatic reg_t fsnan3(reg_t op[3], fattr_t attr[3]);
+    return attr[2].SNAN ? op[2] : (attr[1].SNAN ? op[1] : op[0]);
+  endfunction
 
   function automatic funpack_t funpack(logic single, reg_t v, fattr_t a);
     funpack_t res;
@@ -775,11 +789,14 @@ package hawks;
     if (a.SUBN) begin
       res.exp   = 12'd1;
       res.manti = `fp_subn_manti(single, v);
+    end else if (a.ZERO) begin
+      res.exp   = '0;
+      res.manti = '0;
     end else begin
       res.exp   = `fp_exp(single, v, 12);
       res.manti = `fp_manti(single, v);
     end
-    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:%h", res.sign, res.exp, res.manti));
     return res;
   endfunction
 
@@ -6438,6 +6455,8 @@ module fsqrt (
     return fit;
   endfunction
 
+  // fastpath > unpack > prepare > iterate SRT-radix4 > get root > normalize
+  // > round > pack
 
   // FSM
   state_e state;
@@ -6597,13 +6616,13 @@ module fma (
 
   typedef struct packed {
     logic sign;
-    logic [11:0] exp;
+    logic [12:0] exp;
     logic [105:0] manti;
   } fmul_t;
 
   typedef struct packed {
     logic sign, sticky;
-    logic [11:0] exp;
+    logic [12:0] exp;
     logic [106:0] manti;
   } fadd_t;
 
@@ -6623,16 +6642,59 @@ module fma (
   // fastcheck: INF, ZERO, NAN(SNAN, QNAN), SUBN
   function automatic ffast_t check_fastpath();
     ffast_t res = '{valid: 1, default: 0};
-    logic nan = attr_i[0].NAN | attr_i[1].NAN | attr_i[2].NAN;
-    logic snan = attr_i[0].SNAN | attr_i[1].SNAN | attr_i[2].SNAN;
+    fattr_t a1, a2, a3;
+    logic s1, s2, s3, s12;
+    logic nan, snan, zxi, ixi, prod_inf, prod_zero;
+
+    {s1, s2, s3} = single_i ? {op1_i[31], op2_i[31], op3_i[31]} : {op1_i[63], op2_i[63], op3_i[63]};
+    {a1, a2, a3} = {attr_i[0], attr_i[1], attr_i[2]};
+    nan = a1.NAN | a2.NAN | a3.NAN;
+    snan = a1.SNAN | a2.SNAN | a3.SNAN;
+    zxi = (a1.ZERO && a2.INF) | (a1.INF && a2.ZERO);
+    ixi = (a1.INF && a2.INF);
+    prod_inf = (a1.INF | a2.INF);
+    prod_zero = (a1.ZERO | a2.ZERO);
+
+    `LOGI($sformatf("v1:%h v2:%h v3:%h a:%b %b %b", op1_i, op2_i, op3_i, a1, a2, a3));
+    // verilog_format: off
+    unique case (op_i)
+      FOP_MADD: begin s12 = 0 + (s1^s2); s3 = 0 + s3; end
+      FOP_MSUB: begin s12 = 0 + (s1^s2); s3 = 1 + s3; end
+      FOP_NMADD: begin s12 = 1 + (s1^s2); s3 = 1 + s3; end
+      FOP_NMSUB: begin s12 = 1 + (s1^s2); s3 = 0 + s3; end
+      default: ;
+    endcase
+    // verilog_format: on
 
     if (nan) begin
-      res.result = `FP_CQNAN(single_i);
+      res.result   = snan ? fsnan3({op1_i, op2_i, op3_i}, attr_i) : fnan3({op1_i, op2_i, op3_i}, attr_i);
+      res.flags.nv = snan;
       if (snan) begin
+        `fp_quiet(single_i, res.result);
+      end
+      return res;
+    end
+
+    if (zxi) begin
+      res.result   = `FP_CQNAN(single_i);
+      res.flags.nv = 1;
+      `LOGW($sformatf("result: %h", res.result));
+      return res;
+    end
+    if (prod_inf) begin
+      res.result = `fp_inf(single_i, s12);
+      if (a3.INF && s12 != s3) begin
+        res.result   = `FP_CQNAN(single_i);
         res.flags.nv = 1;
       end
       return res;
     end
+
+    if (prod_zero || a3.INF) begin
+      res.result = `fp_mkval(single_i, a3.ZERO ? (s12 & s3) : s3, op3_i);
+      return res;
+    end
+
     res.valid = 0;
     return res;
   endfunction
@@ -6646,15 +6708,15 @@ module fma (
   function automatic fmul_t multiply(funpack_t u1, u2);
     fmul_t res = '{default: 0};
     res.sign  = u1.sign ^ u2.sign;
-    res.exp   = u1.exp + u2.exp - (single_i ? 12'd127 : 12'd1023);
+    res.exp   = u1.exp + u2.exp - (single_i ? 13'd127 : 13'd1023);
     res.manti = u1.manti * u2.manti;
-    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:%0h", res.sign, $signed(res.exp), res.manti));
     return res;
   endfunction
 
   function automatic fadd_t madd(fmul_t m, funpack_t u3);
     fadd_t res = '{default: 0};
-    logic [11:0] exp, diff;
+    logic [12:0] exp, diff;
     logic [106:0] m1, m2;  // HHH.FFF...FFGR
     logic s = 0;
     logic s1, s2;  // sign of operator 1&2;
@@ -6670,23 +6732,27 @@ module fma (
     // verilog_format: on
 
     // align exponent of m and u3
-    if (m.exp >= u3.exp) begin
-      diff = m.exp - u3.exp;
+    if ($signed(m.exp) >= $signed(13'(u3.exp))) begin
+      diff = $signed(m.exp) - $signed(13'(u3.exp));
       exp = m.exp;
       m1 = {1'b0, m.manti[105:0]};
       m2 = {2'b0, u3.manti, 52'b0};
       s = `OR_NBITS(m2, diff);
       m2 = m2 >> diff;
+      // m2[0] |= s;
+      `LOGW($sformatf("diff:%0d m.exp=%0d", diff, $signed(m.exp)));
     end else begin
-      diff = u3.exp - m.exp;
-      exp = u3.exp;
+      diff = $signed(13'(u3.exp)) - $signed(m.exp);
+      exp = 13'(u3.exp);
       m2 = {2'b0, u3.manti, 52'b0};
       m1 = {1'b0, m.manti[105:0]};
       s = `OR_NBITS(m1, diff);
       m1 = m1 >> diff;
+      // m1[0] |= s;
+      `LOGW($sformatf("diff:%0d", diff));
     end
 
-    // `LOGI($sformatf("exp:%0d m1:%h m2:%h", m.exp, m1, m2));
+    `LOGI($sformatf("exp:%0d m1:%h m2:%h", exp, m1, m2));
 
     if (s1 ^ s2) begin
       res.exp = exp;
@@ -6702,6 +6768,7 @@ module fma (
       res.exp   = exp;
       res.manti = m1 + m2;
     end
+    `LOGW($sformatf("exp:%0d manti:%h", res.exp, res.manti));
 
     res.exp += 2;  // make only one hidden bit;
     res.sticky = s;
@@ -6715,7 +6782,7 @@ module fma (
     logic s = v.sticky;
     logic G, R, S, L, rndup;
     int lz;
-    logic [11:0] max_e = single_i ? 12'd255 : 12'd2047;
+    logic [12:0] max_e = single_i ? 13'd255 : 13'd2047;
 
     if (v.manti == 107'b0) begin
       res.exp  = '0;
@@ -6725,16 +6792,21 @@ module fma (
       lz = clz(v.manti[106:54]);
       if (lz >= 53) begin
         lz += clz(v.manti[53:1]);
-        if (lz >= 53) begin
+        if (lz >= 106) begin
           lz += (v.manti[0] == 0 ? 1 : 0);
         end
       end
-      if (12'(lz) > v.exp) begin
-        v.manti = v.manti << v.exp;
+      `LOGW($sformatf("lz:%0d, exp:%0d", lz, v.exp));
+      if (13'(lz) > v.exp) begin
+        v.manti = v.manti << v.exp - 1;
         v.exp   = '0;
       end else begin
-        v.manti = v.manti << lz;
-        v.exp   = v.exp - 12'(lz);
+        v.exp = v.exp - 13'(lz);
+        if (v.exp == 0) begin
+          v.manti = v.manti << (lz - 1);
+        end else begin
+          v.manti = v.manti << lz;
+        end
       end
 
       if (single_i) begin
@@ -6748,22 +6820,24 @@ module fma (
         R = v.manti[52];
         S = s | (|v.manti[51:0]);
       end
+      `LOGW($sformatf("manti:%h LGRS:%b%b%b%b", v.manti[106:52], L, G, R, S));
 
       rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
 
       res.flags.nx = G | R | S;
       res.sign = v.sign;
       res.frac = single_i ? {`ONES(29), v.manti[105:83]} : v.manti[105:54];
+      `LOGW($sformatf("rndup:%b frac:%h", rndup, res.frac));
       if (rndup) begin
         if (res.frac == `ONES(52)) begin
           res.frac = '0;
-          v.exp += 12'd1;
+          v.exp += 13'd1;
         end else begin
           res.frac += 52'd1;
         end
       end
 
-      if (v.exp > max_e) begin
+      if (v.exp >= max_e) begin
         res.exp = max_e[10:0];
         res.frac = '0;
         res.flags.of = 1;
@@ -6772,8 +6846,11 @@ module fma (
         res.exp = v.exp[10:0];
       end
     end
+    if (res.exp == '0) begin
+      res.flags.uf = res.flags.nx;
+    end
 
-    // `LOGI($sformatf("norm: s:%b e:%0d f:%h", res.sign, res.exp, res.frac));
+    `LOGI($sformatf("norm: s:%b e:%0d f:%h", res.sign, res.exp, res.frac));
     return res;
   endfunction
 
