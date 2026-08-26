@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -779,7 +779,7 @@ package hawks;
     return attr[1].SNAN ? op[1] : op[0];
   endfunction
   function automatic reg_t fsnan3(reg_t op[3], fattr_t attr[3]);
-    return attr[2].SNAN ? op[2] : (attr[1].SNAN ? op[1] : op[0]);
+    return attr[2].SNAN ? op[2] : (attr[0].SNAN ? op[0] : op[1]);
   endfunction
 
   function automatic funpack_t funpack(logic single, reg_t v, fattr_t a);
@@ -5067,9 +5067,9 @@ module scoreboard (
     end else begin
       if (mif.valid && mif.we) begin
         if (mif.wd == 1) begin
-          $write("%sPASS%s", `COLOR_GREEN, `COLOR_NONE);
+          $write("%sPASS%s ", `COLOR_GREEN, `COLOR_NONE);
         end else begin
-          $write("%sFAIL:%0d%s", `COLOR_RED, mif.wd[63:1], `COLOR_NONE);
+          $write("%sFAIL:%0d%s ", `COLOR_RED, mif.wd[63:1], `COLOR_NONE);
         end
         $finish(0);
       end
@@ -6642,20 +6642,17 @@ module fma (
   // fastcheck: INF, ZERO, NAN(SNAN, QNAN), SUBN
   function automatic ffast_t check_fastpath();
     ffast_t res = '{valid: 1, default: 0};
-    fattr_t a1, a2, a3;
+    fattr_t a1, a2, a3, a12;
     logic s1, s2, s3, s12;
-    logic nan, snan, zxi, ixi, prod_inf, prod_zero;
-
-    {s1, s2, s3} = single_i ? {op1_i[31], op2_i[31], op3_i[31]} : {op1_i[63], op2_i[63], op3_i[63]};
-    {a1, a2, a3} = {attr_i[0], attr_i[1], attr_i[2]};
-    nan = a1.NAN | a2.NAN | a3.NAN;
-    snan = a1.SNAN | a2.SNAN | a3.SNAN;
-    zxi = (a1.ZERO && a2.INF) | (a1.INF && a2.ZERO);
-    ixi = (a1.INF && a2.INF);
-    prod_inf = (a1.INF | a2.INF);
-    prod_zero = (a1.ZERO | a2.ZERO);
+    logic nan, snan, zxi, ixi, prod_inf, prod_zero, nv;
+    reg_t op12 = '0;
 
     `LOGI($sformatf("v1:%h v2:%h v3:%h a:%b %b %b", op1_i, op2_i, op3_i, a1, a2, a3));
+    {s1, s2, s3} = single_i ? {op1_i[31], op2_i[31], op3_i[31]} : {op1_i[63], op2_i[63], op3_i[63]};
+    {a1, a2, a3} = {attr_i[0], attr_i[1], attr_i[2]};
+    nv = 0;
+    a12 = '0;
+
     // verilog_format: off
     unique case (op_i)
       FOP_MADD: begin s12 = 0 + (s1^s2); s3 = 0 + s3; end
@@ -6666,32 +6663,57 @@ module fma (
     endcase
     // verilog_format: on
 
-    if (nan) begin
-      res.result   = snan ? fsnan3({op1_i, op2_i, op3_i}, attr_i) : fnan3({op1_i, op2_i, op3_i}, attr_i);
-      res.flags.nv = snan;
-      if (snan) begin
+    // calculate a x b
+    if (a1.NAN | a2.NAN) begin
+      a12.NAN = 1;
+      if (a1.SNAN | a2.SNAN) begin
+        nv   = 1;
+        op12 = a1.SNAN ? op1_i : op2_i;
+      end else begin
+        op12 = a1.NAN ? op1_i : op2_i;
+      end
+      `fp_quiet(single_i, op12);
+    end else if (a1.INF | a2.INF) begin
+      if ((a1.INF && a2.ZERO) || (a2.INF && a1.ZERO)) begin
+        op12 = `FP_CQNAN(single_i);
+        nv = 1;
+        a12.NAN = 1;
+      end else if (a1.INF | a2.INF) begin
+        op12 = `fp_inf(single_i, s12);
+        a12.INF = 1;
+      end
+    end else if (a1.ZERO | a2.ZERO) begin
+      a12.ZERO = 1;
+      op12 = `fp_zero(single_i, s12);
+    end
+
+    if (a12.INF | a12.ZERO | a12.NAN | a3.INF | a3.NAN) begin
+      if (a12.NAN | a3.NAN) begin
+        if (a3.SNAN) begin
+          nv = 1;
+        end
+        res.result = a3.SNAN ? op3_i : (a12.NAN ? op12 : op3_i);
         `fp_quiet(single_i, res.result);
+      end else if (a12.INF | a3.INF) begin
+        if (a12.INF & a3.INF) begin
+          if (s12 != s3) begin
+            nv = 1;
+            res.result = `FP_CQNAN(single_i);
+          end else begin
+            res.result = op12;
+          end
+        end else begin
+          res.result = a12.INF ? op12 : `fp_inf(single_i, s3);
+        end
+      end else if (a12.ZERO) begin
+        res.result = `fp_mkval(single_i, s3, op3_i);
+        if (a3.ZERO) begin
+          if (s12 != s3) begin
+            res.result = `fp_zero(single_i, 1'b0);
+          end
+        end
       end
-      return res;
-    end
-
-    if (zxi) begin
-      res.result   = `FP_CQNAN(single_i);
-      res.flags.nv = 1;
-      `LOGW($sformatf("result: %h", res.result));
-      return res;
-    end
-    if (prod_inf) begin
-      res.result = `fp_inf(single_i, s12);
-      if (a3.INF && s12 != s3) begin
-        res.result   = `FP_CQNAN(single_i);
-        res.flags.nv = 1;
-      end
-      return res;
-    end
-
-    if (prod_zero || a3.INF) begin
-      res.result = `fp_mkval(single_i, a3.ZERO ? (s12 & s3) : s3, op3_i);
+      res.flags.nv = nv;
       return res;
     end
 
@@ -6788,6 +6810,10 @@ module fma (
       res.exp  = '0;
       res.frac = '0;
       res.sign = v.sign;
+      if (v.sticky) begin
+        res.flags.nx = 1'b1;
+        res.flags.uf = 1'b1;
+      end
     end else begin
       lz = clz(v.manti[106:54]);
       if (lz >= 53) begin

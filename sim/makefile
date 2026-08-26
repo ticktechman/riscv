@@ -35,14 +35,14 @@ hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.fpu: $(HEX_FPU:.hex=.fputest)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="fpu-test/testcases/build/f32_mulAdd"
+	@$< +verilator+quiet +elf="fpu-test/testcases/build/f64_mulAdd"
 
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
 
 
 %.fputest: obj_dir/hawks
-	@printf "> %12s" "$(shell basename $*): "
+	@printf "> %12s " "$(shell basename $*): "
 	-@obj_dir/hawks +verilator+quiet +elf="fpu-test/testcases/build/$(shell basename $*)"
 
 %.run: obj_dir/hawks
