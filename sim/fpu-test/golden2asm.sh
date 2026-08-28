@@ -26,8 +26,10 @@ gen_one() {
   echo "> $1 -> $dest"
 }
 
-for one in ./golden/*.txt; do
-  gen_one "$one"
-done
+# for one in ./golden/*.txt; do
+#   gen_one "$one"
+# done
+
+gen_one ./golden/f32_to_i32.txt
 
 ###############################################################################

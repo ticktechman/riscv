@@ -7239,14 +7239,14 @@ module fcvt (
     data = {1'b0, `fp_manti(single_i, op1_i), 10'b0, 2'b0};
     exp -= `fp_bias(single_i, 12);
 
-    `LOGI($sformatf("e:%0d max_e:%0d", exp, max_e));
+    `LOGI($sformatf("v:%h a:%b e:%0d max_e:%0d", op1_i, attr_i, exp, max_e));
     if (attr_i.ZERO) begin
       if (!isigned && fsign) begin
         res.flags = '{nv: 1'b1, nx: 1'b1, default: 0};
       end
     end else if (attr_i.NAN) begin
       res.flags  = '{nv: 1'b1, default: 0};
-      res.result = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
+      res.result = '0;
     end else if (attr_i.INF || exp >= max_e) begin
       res.flags = '{nv: 1'b1, default: 0};
       if (fsign) begin
@@ -7256,9 +7256,17 @@ module fcvt (
       end
     end else begin
       // normal data
+      `LOGI($sformatf("data:%h", data));
       shift = 12'd62 - exp;
-      S = |(data << (exp + 12'd2));
+      if (shift >= 65) begin
+        S = |data;
+      end else begin
+        `LOGI($sformatf("shift: %0d", shift));
+        // S = shift > 12'sd2 ? `OR_NBITS(data, (shift - 12'sd2)) : 1'b0;
+        S = `OR_NBITS(data, shift);
+      end
       data = data >> shift;
+      `LOGI($sformatf("data:%h", data));
       ires = data[65:2];
       L = data[2];
       G = data[1];
@@ -7267,6 +7275,7 @@ module fcvt (
       rndup = frndup(G, R, S, L, fsign, frm_e'(rm_i));
       res.flags.nx = G | R | S;
 
+      `LOGI($sformatf("rndup:%b LGRS:%b%b%b%b", rndup, L, G, R, S));
       if (rndup) begin
         ires += 1;
       end

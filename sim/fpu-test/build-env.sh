@@ -37,9 +37,9 @@ generate_x2x() {
       i2f="${itype}_to_${ftype}"
       f2i="${ftype}_to_${itype}"
 
-      $TFGEN -level 1 $i2f >"$GLD/${i2f}.txt"
+      $TFGEN -level 1 -exact $i2f >"$GLD/${i2f}.txt"
       echo "> $GLD/${i2f}.txt"
-      $TFGEN -level 1 $i2f >"$GLD/${f2i}.txt"
+      $TFGEN -level 1 -exact $f2i >"$GLD/${f2i}.txt"
       echo "> $GLD/${f2i}.txt"
     done
   done

@@ -1,5 +1,4 @@
 
-
   /* TESTNUM=2 */
   .word 0xDE7F8006
   .word 0xBC27FFFF
