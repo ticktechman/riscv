@@ -6616,14 +6616,20 @@ module fma (
 
   typedef struct packed {
     logic sign;
-    logic [12:0] exp;
+    logic signed [12:0] exp;
+    logic [52:0] manti;
+  } funpacked_t;
+
+  typedef struct packed {
+    logic sign;
+    logic signed [12:0] exp;
     logic [105:0] manti;
   } fmul_t;
 
   typedef struct packed {
     logic sign, sticky;
-    logic [12:0] exp;
-    logic [106:0] manti;
+    logic signed [12:0] exp;
+    logic [108:0] manti;
   } fadd_t;
 
   typedef struct packed {
@@ -6638,6 +6644,36 @@ module fma (
   // FSM
   state_e state;
   ffast_t fast;
+
+  function automatic int clz(logic [52:0] val);
+    int i;
+    for (i = 52; i >= 0; i--) if (val[i] != 1'b0) break;
+    return 52 - i;
+  endfunction
+
+  function automatic funpacked_t funpacked(logic single, reg_t v, fattr_t a);
+    funpacked_t res;
+    int lz = 0;
+    res = '0;
+    res.sign = `fp_sign(single, v);
+    if (a.SUBN) begin
+      res.exp = 13'sd1;
+      res.manti = `fp_subn_manti(single, v);
+      lz = clz(res.manti);
+      if (lz > 0) begin
+        res.exp -= 13'(lz);
+        res.manti = res.manti << lz;
+      end
+    end else if (a.ZERO) begin
+      res.exp   = '0;
+      res.manti = '0;
+    end else begin
+      res.exp   = `fp_exp(single, v, 13);
+      res.manti = `fp_manti(single, v);
+    end
+    `LOGI($sformatf("s:%b e:%0d m:%h", res.sign, res.exp, res.manti));
+    return res;
+  endfunction
 
   // fastcheck: INF, ZERO, NAN(SNAN, QNAN), SUBN
   function automatic ffast_t check_fastpath();
@@ -6721,13 +6757,7 @@ module fma (
     return res;
   endfunction
 
-  function automatic int clz(logic [52:0] val);
-    int i;
-    for (i = 52; i >= 0; i--) if (val[i] != 1'b0) break;
-    return 52 - i;
-  endfunction
-
-  function automatic fmul_t multiply(funpack_t u1, u2);
+  function automatic fmul_t multiply(funpacked_t u1, u2);
     fmul_t res = '{default: 0};
     res.sign  = u1.sign ^ u2.sign;
     res.exp   = u1.exp + u2.exp - (single_i ? 13'd127 : 13'd1023);
@@ -6736,10 +6766,10 @@ module fma (
     return res;
   endfunction
 
-  function automatic fadd_t madd(fmul_t m, funpack_t u3);
+  function automatic fadd_t madd(fmul_t m, funpacked_t u3);
     fadd_t res = '{default: 0};
-    logic [12:0] exp, diff;
-    logic [106:0] m1, m2;  // HHH.FFF...FFGR
+    logic signed [12:0] exp, diff;
+    logic [108:0] m1, m2;  // HHH.FFF...FFGR
     logic s = 0;
     logic s1, s2;  // sign of operator 1&2;
 
@@ -6757,20 +6787,20 @@ module fma (
     if ($signed(m.exp) >= $signed(13'(u3.exp))) begin
       diff = $signed(m.exp) - $signed(13'(u3.exp));
       exp = m.exp;
-      m1 = {1'b0, m.manti[105:0]};
-      m2 = {2'b0, u3.manti, 52'b0};
+      m1 = {1'b0, m.manti[105:0], 2'b0};
+      m2 = {2'b0, u3.manti, 52'b0, 2'b0};
       s = `OR_NBITS(m2, diff);
       m2 = m2 >> diff;
-      // m2[0] |= s;
+      m2[0] |= s;
       `LOGW($sformatf("diff:%0d m.exp=%0d", diff, $signed(m.exp)));
     end else begin
       diff = $signed(13'(u3.exp)) - $signed(m.exp);
       exp = 13'(u3.exp);
-      m2 = {2'b0, u3.manti, 52'b0};
-      m1 = {1'b0, m.manti[105:0]};
+      m2 = {2'b0, u3.manti, 52'b0, 2'b0};
+      m1 = {1'b0, m.manti[105:0], 2'b0};
       s = `OR_NBITS(m1, diff);
       m1 = m1 >> diff;
-      // m1[0] |= s;
+      m1[0] |= s;
       `LOGW($sformatf("diff:%0d", diff));
     end
 
@@ -6802,11 +6832,11 @@ module fma (
   function automatic fnorm_t normalize(fadd_t v);
     fnorm_t res = '{default: 0};
     logic s = v.sticky;
-    logic G, R, S, L, rndup;
+    logic G, R, S, L, rndup, tiny;
     int lz;
     logic [12:0] max_e = single_i ? 13'd255 : 13'd2047;
 
-    if (v.manti == 107'b0) begin
+    if (v.manti == 109'b0) begin
       res.exp  = '0;
       res.frac = '0;
       res.sign = v.sign;
@@ -6815,49 +6845,59 @@ module fma (
         res.flags.uf = 1'b1;
       end
     end else begin
-      lz = clz(v.manti[106:54]);
+      lz = clz(v.manti[108:56]);
       if (lz >= 53) begin
-        lz += clz(v.manti[53:1]);
+        lz += clz(v.manti[55:3]);
         if (lz >= 106) begin
-          lz += (v.manti[0] == 0 ? 1 : 0);
+          if (v.manti[2] == 0) begin
+            lz += 1;
+            if (v.manti[1] == 0) begin
+              lz += 1;
+              if (v.manti[0] == 0) begin
+                lz += 1;
+              end
+            end
+          end
         end
       end
-      `LOGW($sformatf("lz:%0d, exp:%0d", lz, v.exp));
-      if (13'(lz) > v.exp) begin
-        v.manti = v.manti << v.exp - 1;
-        v.exp   = '0;
-      end else begin
-        v.exp = v.exp - 13'(lz);
-        if (v.exp == 0) begin
-          v.manti = v.manti << (lz - 1);
-        end else begin
-          v.manti = v.manti << lz;
-        end
+
+      if (lz > 0) begin
+        v.exp -= 13'(lz);
+        v.manti = v.manti << lz;
+      end
+
+      tiny = 0;
+      if (v.exp <= 0) begin
+        tiny = single_i ? v.manti[107:84] != `ONES(24) : v.manti[107:55] != `ONES(53);
+        v.manti = v.manti >> (1 - v.exp);
+        v.exp = '0;
       end
 
       if (single_i) begin
-        L = v.manti[83];
-        G = v.manti[82];
-        R = v.manti[81];
-        S = (|v.manti[80:0]) | s;
+        L = v.manti[85];
+        G = v.manti[84];
+        R = v.manti[83];
+        S = (|v.manti[82:0]) | s;
       end else begin
-        L = v.manti[54];
-        G = v.manti[53];
-        R = v.manti[52];
-        S = s | (|v.manti[51:0]);
+        L = v.manti[56];
+        G = v.manti[55];
+        R = v.manti[54];
+        S = s | (|v.manti[53:0]);
       end
-      `LOGW($sformatf("manti:%h LGRS:%b%b%b%b", v.manti[106:52], L, G, R, S));
 
       rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
-
       res.flags.nx = G | R | S;
+      if (tiny && res.flags.nx) begin
+        res.flags.uf = 1;
+      end
       res.sign = v.sign;
-      res.frac = single_i ? {`ONES(29), v.manti[105:83]} : v.manti[105:54];
+      res.frac = single_i ? {`ONES(29), v.manti[107:85]} : v.manti[107:56];
+
       `LOGW($sformatf("rndup:%b frac:%h", rndup, res.frac));
       if (rndup) begin
         if (res.frac == `ONES(52)) begin
           res.frac = '0;
-          v.exp += 13'd1;
+          v.exp += 13'sd1;
         end else begin
           res.frac += 52'd1;
         end
@@ -6876,7 +6916,6 @@ module fma (
       res.flags.uf = res.flags.nx;
     end
 
-    `LOGI($sformatf("norm: s:%b e:%0d f:%h", res.sign, res.exp, res.frac));
     return res;
   endfunction
 
@@ -6888,7 +6927,7 @@ module fma (
   endfunction
 
   always_comb begin
-    funpack_t u1, u2, u3;
+    funpacked_t u1, u2, u3;
     fmul_t mul;
     fadd_t ma;
     fnorm_t norm;
@@ -6902,9 +6941,9 @@ module fma (
         fast = check_fastpath();
         `LOGI($sformatf("fast.valid: %d", fast.valid));
         if (!fast.valid) begin
-          u1 = funpack(single_i, op1_i, attr_i[0]);
-          u2 = funpack(single_i, op2_i, attr_i[1]);
-          u3 = funpack(single_i, op3_i, attr_i[2]);
+          u1 = funpacked(single_i, op1_i, attr_i[0]);
+          u2 = funpacked(single_i, op2_i, attr_i[1]);
+          u3 = funpacked(single_i, op3_i, attr_i[2]);
         end
       end
       S2: mul = multiply(u1, u2);
