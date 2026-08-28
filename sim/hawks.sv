@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-// `define DEBUG_LOG
+`define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -5360,7 +5360,7 @@ module fpu (
       flags   = cmp_flags;
       ready_o = cmp_ready;
       if (cmp_ready) begin
-        `LOGW($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
+        `LOGI($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
       end
     end else if (fmax_valid) begin
       wb_fpr  = fmax_result;
@@ -5419,8 +5419,8 @@ module fpu (
       end else begin
         wb_gpr = fcvt_result;
       end
-      if (sqrt_ready) begin
-        `LOGI($sformatf("FCVT:0x%0h flags:%b", fcvt_result, fcvt_flags));
+      if (fcvt_ready) begin
+        `LOGW($sformatf("FCVT:0x%0h flags:%b", fcvt_result, fcvt_flags));
       end
     end else if (fmv_valid) begin
       ready_o = fmv_ready;
@@ -7081,9 +7081,10 @@ module fcvt (
       res.result = {op1_i[31], 11'b0, 52'b0};
     end else if (attr_i.SUBN) begin
       // subnormal
-      lz = clz({op1_i[22:0], 41'b0}, 23);
-      frac = op1_i[22:0] << lz;
-      res.result = {op1_i[31], 11'd1024 - 11'(lz), frac, 29'b0};
+      lz   = clz({op1_i[22:0], 41'b0}, 23);
+      frac = op1_i[22:0] << (lz + 1);
+      `LOGW($sformatf("frac:%h lz:%0d", frac, lz));
+      res.result = {op1_i[31], 11'd896 - 11'(lz), frac, 29'b0};
     end else begin
       // normal
       res.result = {op1_i[31], 11'(op1_i[30:23]) + 11'd896, {op1_i[22:0], 29'b0}};
@@ -7107,10 +7108,8 @@ module fcvt (
     end else if (attr_i.NAN) begin
       if (attr_i.SNAN) begin
         res.flags.nv = 1;
-        res.result   = {`ONES(32), op1_i[63], 8'hff, 1'b1, op1_i[50:29]};  // change to QNaN
-      end else begin
-        res.result = {`ONES(32), op1_i[63], 8'hff, 1'b1, 22'b0};
       end
+      res.result = {`ONES(32), op1_i[63], 8'hff, 1'b1, op1_i[50:29]};
     end else if (exp < -12'sd126) begin
       // TODO
       exp = -12'sd127 - exp;
@@ -7122,14 +7121,23 @@ module fcvt (
       S = |manti[27:0];
       S = S | s;
 
+      exp = '0;
       rndup = frndup(G, R, S, L, op1_i[63], frm_e'(rm_i));
       if (rndup) begin
-        manti[52:30] += 1;
+        if (manti[52:30] == `ONES(23)) begin
+          exp += 12'sd1;
+          manti = '0;
+        end else begin
+          manti[52:30] += 23'd1;
+        end
       end
-      res.flags.nx = G | S;
-      res.result   = {`ONES(32), op1_i[63], 8'h00, manti[52:30]};
+      res.flags.nx = G | R | S;
+      res.flags.uf = (exp == '0 && res.flags.nx);
+      res.result   = {`ONES(32), op1_i[63], exp[7:0], manti[52:30]};
     end else if (exp > 12'sd127) begin
-      res.result = {`ONES(32), op1_i[63], 8'hff, 23'b0};
+      res.result   = {`ONES(32), op1_i[63], 8'hff, 23'b0};
+      res.flags.nx = 1;
+      res.flags.of = 1;
     end else begin
       //normal data
       L = op1_i[29];
@@ -7148,6 +7156,7 @@ module fcvt (
         end
       end
       res.flags.nx = G | S;
+      res.flags.of = exp > 12'd254;
       res.result   = {`ONES(32), op1_i[63], exp[7:0], frac};
       `LOGI($sformatf("e:%0d, f:%h", exp[7:0], frac));
     end
@@ -7598,7 +7607,6 @@ module fcmp (
       unique case (op_i)
         FOP_CMP_EQ: begin
           `LOGI($sformatf("feq(single:%b):%h %h", single_i, op1_i, op2_i));
-          `LOGW($sformatf("nan: %b snan:%b", nan, snan));
           if (nan) begin
             rst = 0;
             if (snan) begin

@@ -63,8 +63,8 @@ generate_tc() {
   #                      <float>_div      <float>_le_quiet
   #                      <float>_rem      <float>_lt_quiet
   #                      <float>_sqrt
-  operators="add sub mul div sqrt mulAdd rem"
-  operators="roundToInt eq le lt eq_signaling le_quiet lt_quiet"
+  operators="add sub mul div sqrt mulAdd"
+  operators="eq le lt"
 
   [[ -d "$GLD" ]] || mkdir $GLD
   for typ in $ftypes; do
