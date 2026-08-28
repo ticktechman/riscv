@@ -13,18 +13,19 @@ RISCV_PREFIX = /opt/riscv/bin/riscv-none-elf-
 CFLAGS = -march=rv64imafd_zicsr -mabi=lp64d -nostdlib -Wl,-T link.ld -Wl,-melf64lriscv
 COPYFLAGS = -O verilog --verilog-data-width=1
 SRCS = $(wildcard *.S)
-HEXS = $(SRCS:.S=.hex)
+HEXS = $(addprefix build/,$(SRCS:.S=.hex))
 
 SIM = obj_dir/Vtop
 
 all: $(HEXS)
 
-%.hex: %.S
-	@$(RISCV_PREFIX)gcc $(CFLAGS) -o $(^:.S=.elf) $^
-	@$(RISCV_PREFIX)objcopy $(COPYFLAGS) $(^:.S=.elf) $@
+build/%.hex: %.S
+	@[[ -d ./build ]] || mkdir ./build
+	@$(RISCV_PREFIX)gcc $(CFLAGS) -o ./build/$(^:.S=.elf) $^
+	@$(RISCV_PREFIX)objcopy $(COPYFLAGS) ./build/$(^:.S=.elf) $@
 	@echo "> $@"
 
 clean:
-	rm -rf *.hex *.elf
+	rm -rf build
 
 ###############################################################################
