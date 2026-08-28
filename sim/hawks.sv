@@ -5360,7 +5360,7 @@ module fpu (
       flags   = cmp_flags;
       ready_o = cmp_ready;
       if (cmp_ready) begin
-        `LOGI($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
+        `LOGW($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
       end
     end else if (fmax_valid) begin
       wb_fpr  = fmax_result;
@@ -7602,7 +7602,7 @@ module fcmp (
             rst = 0;
             if (snan) flags_o.nv = 1;
           end else begin
-            rst = (val1 == val2 | all_zero);
+            rst = ((val1 == val2 && (sign == 2'b00 || sign == 2'b11)) | all_zero);
           end
         end
 
