@@ -7601,7 +7601,9 @@ module fcmp (
           `LOGW($sformatf("nan: %b snan:%b", nan, snan));
           if (nan) begin
             rst = 0;
-            flags_o.nv = 1;
+            if (snan) begin
+              flags_o.nv = 1;
+            end
           end else begin
             rst = ((val1 == val2 && (sign == 2'b00 || sign == 2'b11)) | all_zero);
           end

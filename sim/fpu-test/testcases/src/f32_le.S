@@ -16,17 +16,17 @@ loop:
     bgeu    s2, s3, pass
 
     /* load from current pointer */
-    fld     f0, 0(s2)              /* a        @ +0  */
-    fld     f1, 8(s2)              /* b        @ +8  */
-    lw      a2, 16(s2)             /* gold     @ +16 */
-    lw      a3, 20(s2)             /* flags    @ +20 */
-    lw      t0, 24(s2)             /* TESTNUM  @ +24 */
+    flw     f0, 0(s2)              /* a        @ +0  */
+    flw     f1, 4(s2)              /* b        @ +4  */
+    lw      a2, 8(s2)              /* gold     @ +8  */
+    lw      a3, 12(s2)             /* flags    @ +12 */
+    lw      t0, 16(s2)             /* TESTNUM  @ +16 */
 
     /* clear fcsr */
     csrw    fcsr, zero
 
-    /* execute feq.d */
-    feq.d   a4, f0, f1             /* a4 = (a == b) ? 1 : 0 */
+    /* execute feq.s */
+    fle.s   a4, f0, f1             /* a4 = (a <= b) ? 1 : 0 */
 
     /* read fflags */
     csrr    a5, fcsr
@@ -37,7 +37,7 @@ loop:
     bne     a5, a3, do_fail
 
 do_pass:
-    addi    s2, s2, 28             /* advance pointer 32 bytes (8x4) */
+    addi    s2, s2, 20             /* advance pointer 20 bytes (5x4) */
     j       loop
 
 do_fail:
@@ -71,5 +71,5 @@ tohost:
 .align 4
 
 test_data:
-.include "./golden/f64_eq_signaling.txt.S"
+.include "./golden/f32_le.txt.S"
 test_data_end:
