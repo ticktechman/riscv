@@ -25,14 +25,53 @@ build_pkg() {
   echo "==> build succ"
 }
 
+itypes="i32 i64 ui32 ui64"
+ftypes="f64 f32"
+TFGEN="./TestFloat-3e/build/Linux-ARM-VFPv2-GCC/testfloat_gen"
+GLD="./golden"
+
+generate_x2x() {
+  ## int <-> float
+  for itype in $itypes; do
+    for ftype in $ftypes; do
+      i2f="${itype}_to_${ftype}"
+      f2i="${ftype}_to_${itype}"
+
+      $TFGEN -level 1 $i2f >"$GLD/${i2f}.txt"
+      echo "> $GLD/${i2f}.txt"
+      $TFGEN -level 1 $i2f >"$GLD/${f2i}.txt"
+      echo "> $GLD/${f2i}.txt"
+    done
+  done
+
+  ## f32 <-> f64
+  for f1 in $ftypes; do
+    for f2 in $ftypes; do
+      [[ "$f1" != "$f2" ]] || continue
+      f2f="${f1}_to_${f2}"
+      $TFGEN -level 1 $f2f >"$GLD/${f2f}.txt"
+      echo "> $GLD/${f2f}.txt"
+    done
+  done
+}
+
 generate_tc() {
+  # <int>_to_<float>     <float>_add      <float>_eq
+  # <float>_to_<int>     <float>_sub      <float>_le
+  # <float>_to_<float>   <float>_mul      <float>_lt
+  # <float>_roundToInt   <float>_mulAdd   <float>_eq_signaling
+  #                      <float>_div      <float>_le_quiet
+  #                      <float>_rem      <float>_lt_quiet
+  #                      <float>_sqrt
   operators="add sub mul div sqrt mulAdd rem"
-  types="f64 f32"
-  for typ in $types; do
+  operators="roundToInt eq le lt eq_signaling le_quiet lt_quiet"
+
+  [[ -d "$GLD" ]] || mkdir $GLD
+  for typ in $ftypes; do
     for op in $operators; do
       one="${typ}_${op}"
-      ./TestFloat-3e/build/Linux-ARM-VFPv2-GCC/testfloat_gen -level 1 "$one" >"$one".txt
-      echo "${one}.txt"
+      $TFGEN -level 1 "$one" >"${GLD}/$one".txt
+      echo "> $GLD/${one}.txt"
     done
   done
 }
@@ -40,5 +79,6 @@ generate_tc() {
 # download_pkg
 # build_pkg
 # generate_tc
+generate_x2x
 
 ###############################################################################
