@@ -7598,9 +7598,10 @@ module fcmp (
       unique case (op_i)
         FOP_CMP_EQ: begin
           `LOGI($sformatf("feq(single:%b):%h %h", single_i, op1_i, op2_i));
+          `LOGW($sformatf("nan: %b snan:%b", nan, snan));
           if (nan) begin
             rst = 0;
-            if (snan) flags_o.nv = 1;
+            flags_o.nv = 1;
           end else begin
             rst = ((val1 == val2 && (sign == 2'b00 || sign == 2'b11)) | all_zero);
           end
