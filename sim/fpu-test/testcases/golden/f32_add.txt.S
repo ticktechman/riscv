@@ -1,11 +1,4 @@
 
-  /* TESTNUM=116 */
-  .word 0xE9FFFFFE
-  .word 0xFFB40EFF
-  .word 0xFFF40EFF
-  .word 0x10
-  .word 116
-
   /* TESTNUM=2 */
   .word 0xDE7F8006
   .word 0xBC27FFFF

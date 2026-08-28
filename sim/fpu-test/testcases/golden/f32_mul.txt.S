@@ -1,11 +1,4 @@
 
-  /* TESTNUM=2227 */
-  .word 0x00800000
-  .word 0x3F7FFFFF
-  .word 0x00800000
-  .word 0x03
-  .word 2227
-
   /* TESTNUM=2 */
   .word 0xDE7F8006
   .word 0xBC27FFFF
@@ -68,6 +61,13 @@
   .word 0xFE50F0DC
   .word 0x01
   .word 10
+
+  /* TESTNUM=11 */
+  .word 0x4688003F
+  .word 0x00000001
+  .word 0x00004400
+  .word 0x03
+  .word 11
 
   /* TESTNUM=12 */
   .word 0xBFFFFE00
@@ -8308,6 +8308,13 @@
   .word 0x01
   .word 1188
 
+  /* TESTNUM=1189 */
+  .word 0x007FFFFF
+  .word 0x3F800001
+  .word 0x00800000
+  .word 0x01
+  .word 1189
+
   /* TESTNUM=1190 */
   .word 0xBF000017
   .word 0x8001000F
@@ -15566,6 +15573,13 @@
   .word 0x4269AAAB
   .word 0x01
   .word 2226
+
+  /* TESTNUM=2227 */
+  .word 0x00800000
+  .word 0x3F7FFFFF
+  .word 0x00800000
+  .word 0x03
+  .word 2227
 
   /* TESTNUM=2228 */
   .word 0xCE9FFFF7
@@ -85559,6 +85573,13 @@
   .word 0x3DFF4015
   .word 0x01
   .word 12226
+
+  /* TESTNUM=12227 */
+  .word 0x4D808002
+  .word 0x3E800001
+  .word 0x4C808003
+  .word 0x01
+  .word 12227
 
   /* TESTNUM=12228 */
   .word 0x014905FB

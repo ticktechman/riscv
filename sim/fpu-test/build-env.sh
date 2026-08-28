@@ -79,6 +79,6 @@ generate_tc() {
 # download_pkg
 # build_pkg
 # generate_tc
-generate_x2x
+# generate_x2x
 
 ###############################################################################
