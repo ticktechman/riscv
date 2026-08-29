@@ -7264,9 +7264,9 @@ module fcvt (
       if (shift >= 65) begin
         S = |data;
       end else begin
-        S = `OR_NBITS(data, shift);
+        S = (shift > 0 ? `OR_NBITS(data, shift) : 0);
       end
-      data = data >> shift;
+      data = (shift > 0 ? data >> shift : data << -shift);
       ires = data[65:2];
       L = data[2];
       G = data[1];
@@ -7276,6 +7276,10 @@ module fcvt (
       res.flags.nx = G | R | S;
 
       if (rndup) begin
+        if (ires == (l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX))) begin
+          res.flags.nv = 1;
+          res.flags.nx = 0;
+        end
         ires += 1;
       end
       if (fsign && !isigned) begin
