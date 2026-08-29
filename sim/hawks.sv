@@ -7222,15 +7222,16 @@ module fcvt (
   localparam I64_MIN = 64'h8000_0000_0000_0000;
   localparam I32_MIN = 64'hFFFF_FFFF_8000_0000;
   localparam U64_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
-  localparam U32_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
+  localparam U32_MAX = 64'h0000_0000_FFFF_FFFF;
 
   // s|d -> u32|u64|i32|i64
   function automatic fconvert_t d2i(logic isigned, logic l);
-    // INF, ZERO, NAN(QNaN, SNaN), SUBN
+    // INF, ZERO, NAN(QNaN, SNaN), SUBN, max_e(-+)
     fconvert_t res = '{default: 0};
     logic fsign = `fp_sign(single_i, op1_i);
     logic signed [11:0] exp = `fp_exp(single_i, op1_i, 12), shift;
     logic signed [11:0] max_e = l ? (isigned ? 12'd63 : 12'd64) : (isigned ? 12'd31 : 12'd32);
+    logic [51:0] frac;
     reg_t ires;
     logic G, R, S, L, rndup;
 
@@ -7250,8 +7251,12 @@ module fcvt (
     end else if (attr_i.INF || exp >= max_e) begin
       res.flags = '{nv: 1'b1, default: 0};
       // -2^max_e is valid, but 2^max_e is overflow, 2^max_e - 1 is valid;
-      if (!attr_i.INF && fsign && exp == max_e && `fp_frac(single_i, op1_i) == '0) begin
-        res.flags.nv = ~isigned;
+      if (!attr_i.INF && fsign && exp == max_e) begin
+        frac = `fp_frac(single_i, op1_i);
+        if ((|(frac >> (12'sd52 - exp))) == 0) begin
+          res.flags.nv = ~isigned;
+          res.flags.nx = !res.flags.nv && (|frac) == 1'b1;
+        end
       end
       if (fsign) begin
         res.result = l ? (isigned ? I64_MIN : 64'b0) : (isigned ? I32_MIN : 64'b0);
@@ -7275,12 +7280,14 @@ module fcvt (
       rndup = frndup(G, R, S, L, fsign, frm_e'(rm_i));
       res.flags.nx = G | R | S;
 
+      `LOGW($sformatf("ires:%h rndup:%b", ires, rndup));
       if (rndup) begin
-        if (ires == (l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX))) begin
+        if (!fsign && ires == (l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX))) begin
           res.flags.nv = 1;
           res.flags.nx = 0;
+        end else begin
+          ires += 1;
         end
-        ires += 1;
       end
       if (fsign && !isigned) begin
         if (ires != 64'b0) begin
@@ -7290,7 +7297,7 @@ module fcvt (
       end
       res.result = fsign ? (isigned ? -ires : 64'b0) : ires;
       if (!l) begin
-        res.result = {{32{res.result[31]}}, res.result[31:0]};
+        res.result = isigned ? {{32{res.result[31]}}, res.result[31:0]} : {32'b0, res.result[31:0]};
       end
     end
 
