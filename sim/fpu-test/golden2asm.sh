@@ -30,6 +30,6 @@ gen_one() {
 #   gen_one "$one"
 # done
 
-gen_one ./golden/f32_to_i32.txt
+gen_one ./golden/f32_to_ui32.txt
 
 ###############################################################################

@@ -755,7 +755,7 @@ package hawks;
 
   `define fp_sign(single, v) (single ? v[31] : v[63])
   `define fp_exp(single, v, N) (single ? N'(v[30:23]) : N'(v[62:52]))
-  `define fp_frac(single, v) (single ? v[22:0] : v[51:0])
+  `define fp_frac(single, v) (single ? {29'b0, v[22:0]} : v[51:0])
   `define fp_manti(single, v) (single ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]})
   `define fp_subn_manti(single, v) (single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]})
   `define fp_bias(single, N) (single ? N'd127 : N'd1023)
@@ -7239,16 +7239,20 @@ module fcvt (
     data = {1'b0, `fp_manti(single_i, op1_i), 10'b0, 2'b0};
     exp -= `fp_bias(single_i, 12);
 
-    `LOGI($sformatf("v:%h a:%b e:%0d max_e:%0d", op1_i, attr_i, exp, max_e));
+    `LOGI($sformatf("v:%h a:%b e:%0d max_e:%0d isigned:%b", op1_i, attr_i, exp, max_e, isigned));
     if (attr_i.ZERO) begin
       if (!isigned && fsign) begin
-        res.flags = '{nv: 1'b1, nx: 1'b1, default: 0};
+        res.flags = '{default: 0};
       end
     end else if (attr_i.NAN) begin
       res.flags  = '{nv: 1'b1, default: 0};
       res.result = '0;
     end else if (attr_i.INF || exp >= max_e) begin
       res.flags = '{nv: 1'b1, default: 0};
+      // -2^max_e is valid, but 2^max_e is overflow, 2^max_e - 1 is valid;
+      if (!attr_i.INF && fsign && exp == max_e && `fp_frac(single_i, op1_i) == '0) begin
+        res.flags.nv = ~isigned;
+      end
       if (fsign) begin
         res.result = l ? (isigned ? I64_MIN : 64'b0) : (isigned ? I32_MIN : 64'b0);
       end else begin
@@ -7256,17 +7260,13 @@ module fcvt (
       end
     end else begin
       // normal data
-      `LOGI($sformatf("data:%h", data));
       shift = 12'd62 - exp;
       if (shift >= 65) begin
         S = |data;
       end else begin
-        `LOGI($sformatf("shift: %0d", shift));
-        // S = shift > 12'sd2 ? `OR_NBITS(data, (shift - 12'sd2)) : 1'b0;
         S = `OR_NBITS(data, shift);
       end
       data = data >> shift;
-      `LOGI($sformatf("data:%h", data));
       ires = data[65:2];
       L = data[2];
       G = data[1];
@@ -7275,13 +7275,13 @@ module fcvt (
       rndup = frndup(G, R, S, L, fsign, frm_e'(rm_i));
       res.flags.nx = G | R | S;
 
-      `LOGI($sformatf("rndup:%b LGRS:%b%b%b%b", rndup, L, G, R, S));
       if (rndup) begin
         ires += 1;
       end
       if (fsign && !isigned) begin
         if (ires != 64'b0) begin
           res.flags.nv = 1;
+          res.flags.nx = 0;
         end
       end
       res.result = fsign ? (isigned ? -ires : 64'b0) : ires;
