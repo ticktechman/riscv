@@ -7222,7 +7222,7 @@ module fcvt (
   localparam I64_MIN = 64'h8000_0000_0000_0000;
   localparam I32_MIN = 64'hFFFF_FFFF_8000_0000;
   localparam U64_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
-  localparam U32_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
+  localparam U32_MAX = 64'h0000_0000_FFFF_FFFF;
 
   // s|d -> u32|u64|i32|i64
   function automatic fconvert_t d2i(logic isigned, logic l);
@@ -7290,7 +7290,7 @@ module fcvt (
       end
       res.result = fsign ? (isigned ? -ires : 64'b0) : ires;
       if (!l) begin
-        res.result = {{32{res.result[31]}}, res.result[31:0]};
+        res.result = isigned ? {{32{res.result[31]}}, res.result[31:0]} : {32'b0, res.result[31:0]};
       end
     end
 
