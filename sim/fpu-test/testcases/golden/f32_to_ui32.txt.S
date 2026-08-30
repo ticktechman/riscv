@@ -583,7 +583,7 @@
 
   /* TESTNUM=99 */
   .word 0x7FA07FFF
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 99
 
@@ -1357,7 +1357,7 @@
 
   /* TESTNUM=228 */
   .word 0xFFFFF9FE
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 228
 
@@ -1375,7 +1375,7 @@
 
   /* TESTNUM=231 */
   .word 0xFFB40EFF
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 231
 
@@ -1411,7 +1411,7 @@
 
   /* TESTNUM=237 */
   .word 0x7F9FC651
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 237
 
@@ -1759,7 +1759,7 @@
 
   /* TESTNUM=295 */
   .word 0x7F800001
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 295
 
@@ -1777,7 +1777,7 @@
 
   /* TESTNUM=298 */
   .word 0x7FFFFFFF
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 298
 
@@ -1795,7 +1795,7 @@
 
   /* TESTNUM=301 */
   .word 0x7FFFFFFE
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 301
 
@@ -1969,7 +1969,7 @@
 
   /* TESTNUM=330 */
   .word 0x7F806FFF
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 330
 
@@ -2293,7 +2293,7 @@
 
   /* TESTNUM=384 */
   .word 0xFFFFF7FD
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 384
 
@@ -3157,7 +3157,7 @@
 
   /* TESTNUM=528 */
   .word 0x7FC0F25E
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 528
 
@@ -3313,7 +3313,7 @@
 
   /* TESTNUM=554 */
   .word 0x7F81FFF0
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 554
 
@@ -3553,13 +3553,13 @@
 
   /* TESTNUM=594 */
   .word 0x7FFBFFF7
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 594
 
   /* TESTNUM=595 */
   .word 0xFF800001
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 595
 
@@ -3577,7 +3577,7 @@
 
   /* TESTNUM=598 */
   .word 0xFFFFFFFF
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 598
 
@@ -3595,6 +3595,6 @@
 
   /* TESTNUM=601 */
   .word 0xFFFFFFFE
-  .word 0x00000000
+  .word 0xFFFFFFFF
   .word 0x10
   .word 601

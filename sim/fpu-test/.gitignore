@@ -4,3 +4,5 @@ SoftFloat-3e*
 TestFloat-3e*
 testcases/build/*
 golden/*
+berkeley-softfloat-3*
+berkeley-testfloat-3*

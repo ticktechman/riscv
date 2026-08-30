@@ -2143,13 +2143,13 @@
 
   /* TESTNUM=359 */
   .dword 0x7FFC0001FFFFFFFF
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 359
 
   /* TESTNUM=360 */
   .dword 0xFFFC000004000000
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 360
 
@@ -2263,7 +2263,7 @@
 
   /* TESTNUM=379 */
   .dword 0x7FF0000000000001
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 379
 
@@ -2281,7 +2281,7 @@
 
   /* TESTNUM=382 */
   .dword 0x7FFFFFFFFFFFFFFF
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 382
 
@@ -2293,13 +2293,13 @@
 
   /* TESTNUM=384 */
   .dword 0x7FFFDFF7FFFFFFFE
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 384
 
   /* TESTNUM=385 */
   .dword 0x7FFFFFFFFFFFFFFE
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 385
 
@@ -2491,7 +2491,7 @@
 
   /* TESTNUM=417 */
   .dword 0x7FF20007FFFFFFFF
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 417
 
@@ -3067,7 +3067,7 @@
 
   /* TESTNUM=513 */
   .dword 0x7FF0000010000003
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 513
 
@@ -3085,7 +3085,7 @@
 
   /* TESTNUM=516 */
   .dword 0x7FF7FFFFFFFBFFFE
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 516
 
@@ -3259,7 +3259,7 @@
 
   /* TESTNUM=545 */
   .dword 0xFFFFFFFFEFFEFFFF
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 545
 
@@ -4093,7 +4093,7 @@
 
   /* TESTNUM=684 */
   .dword 0xFFFFFFF7FFFEFFFF
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 684
 
@@ -4567,7 +4567,7 @@
 
   /* TESTNUM=763 */
   .dword 0xFFF0000000000001
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 763
 
@@ -4585,7 +4585,7 @@
 
   /* TESTNUM=766 */
   .dword 0xFFFFFFFFFFFFFFFF
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 766
 
@@ -4597,12 +4597,12 @@
 
   /* TESTNUM=768 */
   .dword 0xFFF0000003FFFF00
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 768
 
   /* TESTNUM=769 */
   .dword 0xFFFFFFFFFFFFFFFE
-  .dword 0x0000000000000000
+  .dword 0x7FFFFFFFFFFFFFFF
   .word 0x10
   .word 769

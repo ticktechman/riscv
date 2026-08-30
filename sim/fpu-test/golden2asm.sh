@@ -32,10 +32,8 @@ gen_all() {
   done
 }
 
-# gen_all
-gen_one ./golden/f64_to_i64.txt
-gen_one ./golden/f64_to_ui64.txt
-gen_one ./golden/f64_to_i32.txt
-gen_one ./golden/f64_to_ui32.txt
+gen_all
+# gen_one ./golden/f32_to_i32.txt
+# gen_one ./golden/f32_to_ui32.txt
 
 ###############################################################################

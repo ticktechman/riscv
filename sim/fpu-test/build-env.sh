@@ -9,25 +9,25 @@
 ###############################################################################
 
 download_pkg() {
-  curl -O http://www.jhauser.us/arithmetic/SoftFloat-3e.zip
-  curl -O http://www.jhauser.us/arithmetic/TestFloat-3e.zip
-  unzip SoftFloat-3e.zip
-  unzip TestFloat-3e.zip
+  wget https://github.com/ticktechman/berkeley-testfloat-3/archive/refs/tags/1.0.zip -O berkeley-testfloat-3.zip
+  wget https://github.com/ticktechman/berkeley-softfloat-3/archive/refs/tags/1.0.zip -O berkeley-softfloat-3.zip
+  unzip berkeley-testfloat-3.zip && mv berkeley-testfloat-3-1.0 berkeley-testfloat-3
+  unzip berkeley-softfloat-3.zip && mv berkeley-softfloat-3-1.0 berkeley-softfloat-3
 }
 
 build_pkg() {
   old_dir="$(pwd)"
   echo "==> start building..."
-  cd ./SoftFloat-3e/build/Linux-ARM-VFPv2-GCC/ && make &&
+  cd ./berkeley-softfloat-3/build/macos-arm64/ && make &&
     cd "$old_dir" &&
-    cd ./TestFloat-3e/build/Linux-ARM-VFPv2-GCC/ && make &&
+    cd ./berkeley-testfloat-3/build/macos-arm64/ && make &&
     cd "$old_dir" || exit 0
   echo "==> build succ"
 }
 
 itypes="i32 i64 ui32 ui64"
 ftypes="f64 f32"
-TFGEN="./TestFloat-3e/build/Linux-ARM-VFPv2-GCC/testfloat_gen"
+TFGEN="./berkeley-testfloat-3/build/macos-arm64/testfloat_gen"
 GLD="./golden"
 
 generate_x2x() {
@@ -63,8 +63,7 @@ generate_tc() {
   #                      <float>_div      <float>_le_quiet
   #                      <float>_rem      <float>_lt_quiet
   #                      <float>_sqrt
-  operators="add sub mul div sqrt mulAdd"
-  operators="eq le lt"
+  operators="add sub mul div sqrt mulAdd eq le lt"
 
   [[ -d "$GLD" ]] || mkdir $GLD
   for typ in $ftypes; do
@@ -78,7 +77,7 @@ generate_tc() {
 
 # download_pkg
 # build_pkg
-# generate_tc
-# generate_x2x
+generate_tc
+generate_x2x
 
 ###############################################################################
