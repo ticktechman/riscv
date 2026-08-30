@@ -7209,7 +7209,7 @@ module fcvt (
       if (single_i) begin
         frac = {29'b0, frac[22:0]};
       end
-      res.flags.nx = G | S;
+      res.flags.nx = G | R | S;
       res.result   = single_i ? {`ONES(32), sign, exp[7:0], frac[22:0]} : {sign, exp, frac};
     end
 
