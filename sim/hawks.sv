@@ -5360,56 +5360,56 @@ module fpu (
       flags   = cmp_flags;
       ready_o = cmp_ready;
       if (cmp_ready) begin
-        `LOGI($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
+        `LOGW($sformatf("FCMP:%0d flags:%b", cmp_result, cmp_flags));
       end
     end else if (fmax_valid) begin
       wb_fpr  = fmax_result;
       flags   = fmax_flags;
       ready_o = fmax_ready;
       if (fmax_ready) begin
-        `LOGI($sformatf("FMAX:0x%0h", fmax_result));
+        `LOGW($sformatf("FMAX:0x%0h", fmax_result));
       end
     end else if (add_valid) begin
       wb_fpr  = add_result;
       flags   = add_flags;
       ready_o = add_ready;
       if (add_ready) begin
-        `LOGI($sformatf("FADD:0x%0h flags:%b", add_result, add_flags));
+        `LOGW($sformatf("FADD:0x%0h flags:%b", add_result, add_flags));
       end
     end else if (fma_valid) begin
       wb_fpr  = fma_result;
       flags   = fma_flags;
       ready_o = fma_ready;
       if (fma_ready) begin
-        `LOGI($sformatf("FMA:0x%0h flags:%b", fma_result, fma_flags));
+        `LOGW($sformatf("FMA:0x%0h flags:%b", fma_result, fma_flags));
       end
     end else if (mul_valid) begin
       wb_fpr  = mul_result;
       flags   = mul_flags;
       ready_o = mul_ready;
       if (mul_ready) begin
-        `LOGI($sformatf("FMUL:0x%0h flags:%b", mul_result, mul_flags));
+        `LOGW($sformatf("FMUL:0x%0h flags:%b", mul_result, mul_flags));
       end
     end else if (div_valid) begin
       wb_fpr  = div_result;
       flags   = div_flags;
       ready_o = div_ready;
       if (div_ready) begin
-        `LOGI($sformatf("FDIV:0x%0h flags:%b", div_result, div_flags));
+        `LOGW($sformatf("FDIV:0x%0h flags:%b", div_result, div_flags));
       end
     end else if (fsgnj_valid) begin
       wb_fpr  = fsgnj_result;
       flags   = fsgnj_flags;
       ready_o = fsgnj_ready;
       if (fsgnj_ready) begin
-        `LOGI($sformatf("FSGNJ:0x%0h flags:%b", fsgnj_result, fsgnj_flags));
+        `LOGW($sformatf("FSGNJ:0x%0h flags:%b", fsgnj_result, fsgnj_flags));
       end
     end else if (sqrt_valid) begin
       wb_fpr  = sqrt_result;
       flags   = sqrt_flags;
       ready_o = sqrt_ready;
       if (sqrt_ready) begin
-        `LOGI($sformatf("FSQRT:0x%0h flags:%b", sqrt_result, sqrt_flags));
+        `LOGW($sformatf("FSQRT:0x%0h flags:%b", sqrt_result, sqrt_flags));
       end
     end else if (fcvt_valid) begin
       ready_o = fcvt_ready;
@@ -5523,6 +5523,7 @@ module fadd (
     logic s1, s2;
     logic nan, infi, zero, both_nan, both_infi, both_zero;
 
+    `LOGI($sformatf("add: %h %h a:%b %b", op1_i, op2_i, attr_i[0], attr_i[1]));
     res = '{valid: 1, default: 0};
     s1 = single_i ? op1_i[31] : op1_i[63];
     s2 = single_i ? op2_i[31] ^ op_i == FOP_SUB : op2_i[63] ^ op_i == FOP_SUB;
@@ -5535,17 +5536,10 @@ module fadd (
 
     // NaN + [NaN]
     if (nan) begin
-      res.result = attr_i[0].NAN ? op1_i : op2_i;
       if (attr_i[0].SNAN | attr_i[1].SNAN) begin
-        // make it QNaN
-        res.result = attr_i[0].SNAN ? op1_i : op2_i;
-        if (single_i) begin
-          res.result[22] = 1'b1;
-        end else begin
-          res.result[51] = 1'b1;
-        end
         res.flags.nv = 1;
       end
+      res.result = `FP_CQNAN(single_i);
       return res;
     end
     // INF + [INF]
@@ -5857,9 +5851,7 @@ module fmul (
 
     `LOGW($sformatf("a1:%b a2:%b", a1, a2));
     if (a1.SNAN || a2.SNAN) begin
-      // choose the SNAN one and make it QNAN
-      res.result   = a1.SNAN ? v1 : v2;
-      res.result   = res.result | (single_i ? 64'(1 << 22) : 64'(1 << 51));
+      res.result   = `FP_CQNAN(single_i);
       res.flags.nv = 1;
       return res;
     end
@@ -5870,7 +5862,7 @@ module fmul (
       return res;
     end
     if (a1.QNAN || a2.QNAN) begin
-      res.result = a1.QNAN ? v1 : v2;
+      res.result = `FP_CQNAN(single_i);
       return res;
     end
     if (a1.ZERO || a2.ZERO) begin
@@ -6090,13 +6082,12 @@ module fdiv (
     `LOGI($sformatf("v1:%h v2:%h a1:%b a2:%b", v1, v2, a1, a2));
     if (a1.SNAN || a2.SNAN) begin
       // choose the SNAN one and make it QNAN
-      res.result   = a1.SNAN ? v1 : v2;
-      res.result   = res.result | (single_i ? 64'(1 << 22) : 64'(1 << 51));
+      res.result   = `FP_CQNAN(single_i);
       res.flags.nv = 1;
       return res;
     end
     if (a1.QNAN || a2.QNAN) begin
-      res.result = a1.QNAN ? v1 : v2;
+      res.result = `FP_CQNAN(single_i);
       return res;
     end
     if ((a1.INF && a2.INF) || (a1.ZERO && a2.ZERO)) begin
@@ -6366,10 +6357,8 @@ module fsqrt (
     `LOGI($sformatf("v:%h a:%b", v1, a1));
 
     if (a1.NAN) begin
-      if (a1.SNAN) begin
-        res.flags.nv = 1;
-      end
-      res.result = v1 | (64'b1 << (single_i ? 22 : 51));
+      res.flags.nv = a1.SNAN;
+      res.result   = `FP_CQNAN(single_i);
       return res;
     end
 
@@ -6702,13 +6691,7 @@ module fma (
     // calculate a x b
     if (a1.NAN | a2.NAN) begin
       a12.NAN = 1;
-      if (a1.SNAN | a2.SNAN) begin
-        nv   = 1;
-        op12 = a1.SNAN ? op1_i : op2_i;
-      end else begin
-        op12 = a1.NAN ? op1_i : op2_i;
-      end
-      `fp_quiet(single_i, op12);
+      nv = (a1.SNAN | a2.SNAN);
     end else if (a1.INF | a2.INF) begin
       if ((a1.INF && a2.ZERO) || (a2.INF && a1.ZERO)) begin
         op12 = `FP_CQNAN(single_i);
@@ -6725,11 +6708,8 @@ module fma (
 
     if (a12.INF | a12.ZERO | a12.NAN | a3.INF | a3.NAN) begin
       if (a12.NAN | a3.NAN) begin
-        if (a3.SNAN) begin
-          nv = 1;
-        end
-        res.result = a3.SNAN ? op3_i : (a12.NAN ? op12 : op3_i);
-        `fp_quiet(single_i, res.result);
+        nv = a3.SNAN ? 1 : nv;
+        res.result = `FP_CQNAN(single_i);
       end else if (a12.INF | a3.INF) begin
         if (a12.INF & a3.INF) begin
           if (s12 != s3) begin
