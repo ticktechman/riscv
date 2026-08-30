@@ -755,7 +755,7 @@ package hawks;
 
   `define fp_sign(single, v) (single ? v[31] : v[63])
   `define fp_exp(single, v, N) (single ? N'(v[30:23]) : N'(v[62:52]))
-  `define fp_frac(single, v) (single ? {29'b0, v[22:0]} : v[51:0])
+  `define fp_frac(single, v) (single ? {v[22:0], 29'b0} : v[51:0])
   `define fp_manti(single, v) (single ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]})
   `define fp_subn_manti(single, v) (single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]})
   `define fp_bias(single, N) (single ? N'd127 : N'd1023)
@@ -7231,14 +7231,20 @@ module fcvt (
     logic fsign = `fp_sign(single_i, op1_i);
     logic signed [11:0] exp = `fp_exp(single_i, op1_i, 12), shift;
     logic signed [11:0] max_e = l ? (isigned ? 12'd63 : 12'd64) : (isigned ? 12'd31 : 12'd32);
-    reg_t ires;
+    reg_t ires, boundary;
     logic G, R, S, L, rndup;
+    logic [51:0] frac;
 
     // integer(64bits) + frac(52bits) + GR
     logic [65:0] data = '0;
     data = {1'b0, `fp_manti(single_i, op1_i), 10'b0, 2'b0};
     exp -= `fp_bias(single_i, 12);
 
+    if (fsign) begin
+      boundary = l ? (isigned ? I64_MIN : 64'b0) : (isigned ? I32_MIN : 64'b0);
+    end else begin
+      boundary = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
+    end
     `LOGI($sformatf("v:%h a:%b e:%0d max_e:%0d isigned:%b", op1_i, attr_i, exp, max_e, isigned));
     if (attr_i.ZERO) begin
       if (!isigned && fsign) begin
@@ -7250,14 +7256,15 @@ module fcvt (
     end else if (attr_i.INF || exp >= max_e) begin
       res.flags = '{nv: 1'b1, default: 0};
       // -2^max_e is valid, but 2^max_e is overflow, 2^max_e - 1 is valid;
-      if (!attr_i.INF && fsign && exp == max_e && `fp_frac(single_i, op1_i) == '0) begin
-        res.flags.nv = ~isigned;
+      if (!attr_i.INF && fsign && exp == max_e) begin
+        frac = `fp_frac(single_i, op1_i);
+        `LOGW($sformatf("frac:%h exp:%0d", frac, exp));
+        if ((|(frac >> (12'sd52 - (exp > 12'sd52 ? 12'sd52 : exp)))) == 0) begin
+          res.flags.nv = ~isigned;
+          res.flags.nx = !res.flags.nv && (|frac) == 1'b1;
+        end
       end
-      if (fsign) begin
-        res.result = l ? (isigned ? I64_MIN : 64'b0) : (isigned ? I32_MIN : 64'b0);
-      end else begin
-        res.result = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
-      end
+      res.result = boundary;
     end else begin
       // normal data
       shift = 12'd62 - exp;
@@ -7275,12 +7282,14 @@ module fcvt (
       rndup = frndup(G, R, S, L, fsign, frm_e'(rm_i));
       res.flags.nx = G | R | S;
 
+      `LOGW($sformatf("ires:%h rndup:%b", ires, rndup));
       if (rndup) begin
-        if (ires == (l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX))) begin
+        if (ires == boundary) begin
           res.flags.nv = 1;
           res.flags.nx = 0;
+        end else begin
+          ires += 1;
         end
-        ires += 1;
       end
       if (fsign && !isigned) begin
         if (ires != 64'b0) begin
