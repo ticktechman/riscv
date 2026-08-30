@@ -752,6 +752,10 @@ package hawks;
   // canonical qNaN
   localparam CQNAN_D = 64'h7FF8000000000000;
   localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
+  localparam I32_NAN = 64'h000000007FFFFFFF;
+  localparam U32_NAN = 64'h00000000FFFFFFFF;
+  localparam I64_NAN = 64'h7FFFFFFFFFFFFFFF;
+  localparam U64_NAN = 64'hFFFFFFFFFFFFFFFF;
 
   `define fp_sign(single, v) (single ? v[31] : v[63])
   `define fp_exp(single, v, N) (single ? N'(v[30:23]) : N'(v[62:52]))
@@ -7051,12 +7055,8 @@ module fcvt (
     if (attr_i.INF) begin
       res.result = {op1_i[31], 11'h7FF, 52'b0};
     end else if (attr_i.NAN) begin
-      if (attr_i.SNAN) begin
-        res.flags.nv = 1;
-        res.result   = {op1_i[31], 11'h7ff, 1'b1, op1_i[21:0], 29'b0};  // change to QNaN
-      end else begin
-        res.result = {op1_i[31], 11'h7ff, op1_i[22:0], 29'b0};
-      end
+      res.flags.nv = attr_i.SNAN;
+      res.result   = `FP_CQNAN(0);
     end else if (attr_i.ZERO) begin
       res.result = {op1_i[31], 11'b0, 52'b0};
     end else if (attr_i.SUBN) begin
@@ -7086,10 +7086,8 @@ module fcvt (
     end else if (attr_i.ZERO) begin
       res.result = {`ONES(32), op1_i[63], 8'h00, 23'b0};
     end else if (attr_i.NAN) begin
-      if (attr_i.SNAN) begin
-        res.flags.nv = 1;
-      end
-      res.result = {`ONES(32), op1_i[63], 8'hff, 1'b1, op1_i[50:29]};
+      res.flags.nv = attr_i.SNAN;
+      res.result   = `FP_CQNAN(1);
     end else if (exp < -12'sd126) begin
       // TODO
       exp = -12'sd127 - exp;
@@ -7231,8 +7229,8 @@ module fcvt (
         res.flags = '{default: 0};
       end
     end else if (attr_i.NAN) begin
-      res.flags  = '{nv: 1'b1, default: 0};
-      res.result = '0;
+      res.flags.nv = 1;
+      res.result   = l ? (isigned ? I64_NAN : U64_NAN) : (isigned ? I32_NAN : U32_NAN);
     end else if (attr_i.INF || exp >= max_e) begin
       res.flags = '{nv: 1'b1, default: 0};
       // -2^max_e is valid, but 2^max_e is overflow, 2^max_e - 1 is valid;
