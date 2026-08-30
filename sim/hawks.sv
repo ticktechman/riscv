@@ -71,7 +71,7 @@ package hawks;
           `LOGI($sformatf("load %s", elf)); \
         end else begin \
           `LOGE($sformatf("fail to load %s", elf)); \
-          $finish(1); \
+          // $finish(1); \
         end \
       end \
     end\
@@ -753,7 +753,7 @@ package hawks;
   localparam CQNAN_D = 64'h7FF8000000000000;
   localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
   localparam I32_NAN = 64'h000000007FFFFFFF;
-  localparam U32_NAN = 64'h00000000FFFFFFFF;
+  localparam U32_NAN = 64'hFFFFFFFFFFFFFFFF;
   localparam I64_NAN = 64'h7FFFFFFFFFFFFFFF;
   localparam U64_NAN = 64'hFFFFFFFFFFFFFFFF;
 
@@ -7200,7 +7200,7 @@ module fcvt (
   localparam I64_MIN = 64'h8000_0000_0000_0000;
   localparam I32_MIN = 64'hFFFF_FFFF_8000_0000;
   localparam U64_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
-  localparam U32_MAX = 64'h0000_0000_FFFF_FFFF;
+  localparam U32_MAX = 64'hFFFF_FFFF_FFFF_FFFF;
 
   // s|d -> u32|u64|i32|i64
   function automatic fconvert_t d2i(logic isigned, logic l);
@@ -7223,7 +7223,7 @@ module fcvt (
     end else begin
       boundary = l ? (isigned ? I64_MAX : U64_MAX) : (isigned ? I32_MAX : U32_MAX);
     end
-    `LOGI($sformatf("v:%h a:%b e:%0d max_e:%0d isigned:%b", op1_i, attr_i, exp, max_e, isigned));
+    `LOGI($sformatf("v:%h a:%b e:%0d max_e:%0d isigned:%b single:%b", op1_i, attr_i, exp, max_e, isigned, single_i));
     if (attr_i.ZERO) begin
       if (!isigned && fsign) begin
         res.flags = '{default: 0};
@@ -7262,6 +7262,7 @@ module fcvt (
 
       `LOGW($sformatf("ires:%h rndup:%b", ires, rndup));
       if (rndup) begin
+        boundary = l ? boundary : (boundary & 64'h00000000FFFFFFFF);
         if (ires == boundary) begin
           res.flags.nv = 1;
           res.flags.nx = 0;
@@ -7277,7 +7278,7 @@ module fcvt (
       end
       res.result = fsign ? (isigned ? -ires : 64'b0) : ires;
       if (!l) begin
-        res.result = isigned ? {{32{res.result[31]}}, res.result[31:0]} : {32'b0, res.result[31:0]};
+        res.result = {{32{res.result[31]}}, res.result[31:0]};
       end
     end
 

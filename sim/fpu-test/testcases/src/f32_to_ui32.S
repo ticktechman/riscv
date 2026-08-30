@@ -16,7 +16,7 @@ loop:
 
     /* load from current pointer */
     flw     f0, 0(s2)              /* a (f32)         @ +0  */
-    lwu     a2, 4(s2)              /* gold (u32 bits) @ +4  */
+    lw      a2, 4(s2)              /* gold (u32 bits) @ +4  */
     lw      a3, 8(s2)              /* flags           @ +8  */
     lw      t0, 12(s2)             /* TESTNUM         @ +12 */
 
