@@ -21,8 +21,8 @@ all: $(HEXS)
 
 build/%.hex: %.S
 	@[[ -d ./build ]] || mkdir ./build
-	@$(RISCV_PREFIX)gcc $(CFLAGS) -o ./build/$(^:.S=.elf) $^
-	@$(RISCV_PREFIX)objcopy $(COPYFLAGS) ./build/$(^:.S=.elf) $@
+	@$(RISCV_PREFIX)gcc $(CFLAGS) -o ./build/$(^:.S=) $^
+	@$(RISCV_PREFIX)objcopy $(COPYFLAGS) ./build/$(^:.S=) $@
 	@echo "> $@"
 
 clean:

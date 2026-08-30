@@ -3,6 +3,7 @@ obj_dir
 **/*.elf
 *.vcd
 
+**/build
 riscv-tests/*.dump
 riscv-tests/*.data
 riscv-tests/*.hex
