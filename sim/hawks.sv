@@ -10,7 +10,7 @@
  */
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
