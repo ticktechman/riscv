@@ -8,13 +8,6 @@
 ##
 ###############################################################################
 
-download_pkg() {
-  wget https://github.com/ticktechman/berkeley-testfloat-3/archive/refs/tags/1.0.zip -O berkeley-testfloat-3.zip
-  wget https://github.com/ticktechman/berkeley-softfloat-3/archive/refs/tags/1.0.zip -O berkeley-softfloat-3.zip
-  unzip berkeley-testfloat-3.zip && mv berkeley-testfloat-3-1.0 berkeley-testfloat-3
-  unzip berkeley-softfloat-3.zip && mv berkeley-softfloat-3-1.0 berkeley-softfloat-3
-}
-
 build_pkg() {
   old_dir="$(pwd)"
   echo "==> start building..."
@@ -104,9 +97,8 @@ generate_tc() {
   done
 }
 
-# download_pkg
 # build_pkg
 generate_tc
-# generate_x2x
+generate_x2x
 
 ###############################################################################

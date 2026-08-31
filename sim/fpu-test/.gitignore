@@ -1,2 +1,4 @@
 testcases/build/*
 golden/*
+testcases/golden/*
+!testcases/golden/rne
