@@ -19,7 +19,7 @@ OBJCOPY = $(RV_PREFIX)objcopy
 CFLAGS = -march=rv64imafd_zicsr -mabi=lp64d -nostdlib -Wl,-T link.ld -Wl,-melf64lriscv
 COPYFLAGS = -O verilog --verilog-data-width=1 --no-change-warnings
 SRCS = $(notdir $(wildcard src/*.S))
-FRMS = rne rtz rdn rup rmm
+FRMS = rne
 
 all:
 

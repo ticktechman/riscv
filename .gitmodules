@@ -1,0 +1,6 @@
+[submodule "sim/fpu-test/berkeley-softfloat-3"]
+	path = sim/fpu-test/berkeley-softfloat-3
+	url = ssh://git@github.com/ticktechman/berkeley-softfloat-3
+[submodule "sim/fpu-test/berkeley-testfloat-3"]
+	path = sim/fpu-test/berkeley-testfloat-3
+	url = ssh://git@github.com/ticktechman/berkeley-testfloat-3
