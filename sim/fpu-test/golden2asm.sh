@@ -9,31 +9,31 @@
 ###############################################################################
 
 gen_one() {
-  local filename="$(basename $1)"
-  local dest="./testcases/golden/${filename}.S"
+  local dest="testcases/${1}.S"
+  local dir="$(dirname $dest)"
+  [[ -d $dir ]] || mkdir -p $dir
 
   awk 'BEGIN{tn=2} {
-    printf "\n  /* TESTNUM=%d */\n", tn
+    printf "\n/* N=%d */\n", tn
     for (i = 1; i <= NF; i++) {
       if (length($i) == 16)
-        printf "  .dword 0x%s\n", $i
+        printf ".dword 0x%s\n", $i
       else
-        printf "  .word 0x%s\n", $i
+        printf ".word 0x%s\n", $i
     }
-    printf "  .word %d\n", tn
+    printf ".word %d\n", tn
     tn++
-}' "$1" >$dest
-  echo "> $1 -> $dest"
+  }' "$1" >$dest
+  printf "%30s > %-40s\n" "$1" "$dest"
 }
 
 gen_all() {
-  for one in ./golden/*.txt; do
-    gen_one "$one"
+  find golden/ -name "*.txt" -print0 | while IFS= read -r -d '' file; do
+    gen_one "$file"
   done
 }
 
 gen_all
-# gen_one ./golden/f32_to_i32.txt
-# gen_one ./golden/f32_to_ui32.txt
+# gen_one golden/rtz/f32_to_i32.txt
 
 ###############################################################################

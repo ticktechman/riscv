@@ -25,6 +25,20 @@ build_pkg() {
   echo "==> build succ"
 }
 
+##
+# *  -rnear_even      --Round to nearest/even.
+#    -rminMag         --Round to minimum magnitude (toward zero).
+#    -rmin            --Round to minimum (down).
+#    -rmax            --Round to maximum (up).
+#    -rnear_maxMag    --Round to nearest/maximum magnitude (nearest/away).
+##
+declare -A rmodes=(
+  ["-rnear_even"]="rne"
+  ["-rminMag"]="rtz"
+  ["-rmin"]="rdn"
+  ["-rmax"]="rup"
+  ["-rnear_maxMag"]="rmm"
+)
 itypes="i32 i64 ui32 ui64"
 ftypes="f64 f32"
 TFGEN="./berkeley-testfloat-3/build/macos-arm64/testfloat_gen"
@@ -32,25 +46,33 @@ GLD="./golden"
 
 generate_x2x() {
   ## int <-> float
-  for itype in $itypes; do
-    for ftype in $ftypes; do
-      i2f="${itype}_to_${ftype}"
-      f2i="${ftype}_to_${itype}"
+  for rmode in "${!rmodes[@]}"; do
+    local dirname="$GLD/${rmodes[$rmode]}"
+    [[ -d "$dirname" ]] || mkdir -p $dirname
+    for itype in $itypes; do
+      for ftype in $ftypes; do
+        i2f="${itype}_to_${ftype}"
+        f2i="${ftype}_to_${itype}"
 
-      $TFGEN -level 1 -exact $i2f >"$GLD/${i2f}.txt"
-      echo "> $GLD/${i2f}.txt"
-      $TFGEN -level 1 -exact $f2i >"$GLD/${f2i}.txt"
-      echo "> $GLD/${f2i}.txt"
+        $TFGEN -level 1 "$rmode" -exact $i2f >"$dirname/${i2f}.txt"
+        echo "> $dirname/${i2f}.txt"
+        $TFGEN -level 1 "$rmode" -exact $f2i >"$dirname/${f2i}.txt"
+        echo "> $dirname/${f2i}.txt"
+      done
     done
   done
 
   ## f32 <-> f64
-  for f1 in $ftypes; do
-    for f2 in $ftypes; do
-      [[ "$f1" != "$f2" ]] || continue
-      f2f="${f1}_to_${f2}"
-      $TFGEN -level 1 $f2f >"$GLD/${f2f}.txt"
-      echo "> $GLD/${f2f}.txt"
+  for rmode in "${!rmodes[@]}"; do
+    local dirname="$GLD/${rmodes[$rmode]}"
+    [[ -d "$dirname" ]] || mkdir -p $dirname
+    for f1 in $ftypes; do
+      for f2 in $ftypes; do
+        [[ "$f1" != "$f2" ]] || continue
+        f2f="${f1}_to_${f2}"
+        $TFGEN -level 1 "$rmode" $f2f >"$dirname/${f2f}.txt"
+        echo "> $dirname/${f2f}.txt"
+      done
     done
   done
 }
@@ -65,12 +87,19 @@ generate_tc() {
   #                      <float>_sqrt
   operators="add sub mul div sqrt mulAdd eq le lt"
 
-  [[ -d "$GLD" ]] || mkdir $GLD
-  for typ in $ftypes; do
-    for op in $operators; do
-      one="${typ}_${op}"
-      $TFGEN -level 1 "$one" >"${GLD}/$one".txt
-      echo "> $GLD/${one}.txt"
+  for rmode in "${!rmodes[@]}"; do
+    local dirname="$GLD/${rmodes[$rmode]}"
+    [[ -d "$dirname" ]] || mkdir -p $dirname
+    for typ in $ftypes; do
+      for op in $operators; do
+        one="${typ}_${op}"
+        $TFGEN -level 1 "$rmode" "$one" >"${GLD}/${rmodes[$rmode]}/$one".txt
+        if [[ $op == "mulAdd" ]]; then
+          head -50000 "${GLD}/${rmodes[$rmode]}/$one".txt >a.txt
+          mv a.txt "${GLD}/${rmodes[$rmode]}/$one".txt
+        fi
+        echo "> $dirname/${one}.txt"
+      done
     done
   done
 }
@@ -78,6 +107,6 @@ generate_tc() {
 # download_pkg
 # build_pkg
 generate_tc
-generate_x2x
+# generate_x2x
 
 ###############################################################################

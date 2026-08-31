@@ -9,7 +9,7 @@
 .PHONY: all build test install doc hawks
 
 HEX_FILES := $(wildcard $(CURDIR)/riscv-tests/*.hex)
-HEX_FPU := $(shell find $(CURDIR)/fpu-test/testcases/build/ -name *.hex | sort)
+HEX_FPU := $(shell find fpu-test/testcases/build -name *.hex | sort)
 
 V_FLAGS = --timing --cc --exe --trace --build -I../
 SV_SRCS = \
@@ -42,7 +42,7 @@ obj_dir/hawks: hawks.sv hawks.cpp
 
 
 %.fputest: obj_dir/hawks
-	@printf "> %14s " "$(shell basename $*): "
+	@printf "%45s " "$(patsubst %.fputest,%,$@): "
 	-@obj_dir/hawks +verilator+quiet +elf="fpu-test/testcases/build/rne/$(shell basename $*)"
 
 %.run: obj_dir/hawks
