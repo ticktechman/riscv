@@ -17,11 +17,10 @@ HEXS = $(patsubst src/%.S, build/%.hex, $(SRCS))
 all: $(HEXS)
 
 build/%.hex: src/%.S golden/%.txt.S
-	@[ ! -d build ] && mkdir build || touch build/
+	@[ -d build ] || mkdir build
 	@$(RISCV_PREFIX)gcc $(CFLAGS) -o $(@:.hex=) $<
 	@$(RISCV_PREFIX)objcopy $(COPYFLAGS) -j .data --change-section-address .data=0 $(@:.hex=) $(@:.hex=).data >/dev/null
 	@$(RISCV_PREFIX)objcopy $(COPYFLAGS) -j .text.init --change-section-address .text.init=0 $(@:.hex=) $(@:.hex=).hex >/dev/null
-
 	@echo "> $@"
 
 clean:
