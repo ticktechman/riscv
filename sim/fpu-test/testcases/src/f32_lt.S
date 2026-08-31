@@ -4,6 +4,7 @@
 .globl _start
 .align 8
 
+#include "inc/frnd.S"
 _start:
     csrw    fcsr, zero
 
@@ -24,6 +25,7 @@ loop:
 
     /* clear fcsr */
     csrw    fcsr, zero
+    fsrmi  _FRM
 
     /* execute feq.s */
     flt.s   a4, f0, f1             /* a4 = (a < b) ? 1 : 0 */
@@ -71,5 +73,5 @@ tohost:
 .align 4
 
 test_data:
-.include "./golden/f32_lt.txt.S"
+.include "f32_lt.txt.S"
 test_data_end:

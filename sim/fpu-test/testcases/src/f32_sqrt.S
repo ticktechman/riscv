@@ -4,6 +4,7 @@
 .globl _start
 .align 8
 
+#include "inc/frnd.S"
 _start:
     csrw    fcsr, zero
 
@@ -23,6 +24,7 @@ loop:
 
     /* clear fcsr */
     csrw    fcsr, zero
+    fsrmi   _FRM
 
     /* execute fsqrt.s */
     fsqrt.s f3, f0
@@ -89,5 +91,5 @@ tohost:
 .align 4
 
 test_data:
-.include "./golden/f32_sqrt.txt.S"
+.include "f32_sqrt.txt.S"
 test_data_end:

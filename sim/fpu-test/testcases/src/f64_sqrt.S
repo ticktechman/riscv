@@ -4,6 +4,8 @@
 .globl _start
 .align 8
 
+#include "inc/frnd.S"
+
 _start:
     csrw    fcsr, zero
 
@@ -19,6 +21,8 @@ loop:
     lw      t0, 20(s2)             /* TESTNUM  @ +20 */
 
     csrw    fcsr, zero
+    fsrmi   _FRM
+
 
     fsqrt.d f3, f0
     fmv.x.d a4, f3                 /* DUT result -> GPR */
@@ -81,5 +85,5 @@ tohost:
 .align 8
 
 test_data:
-.include "./golden/f64_sqrt.txt.S"
+.include "f64_sqrt.txt.S"
 test_data_end:

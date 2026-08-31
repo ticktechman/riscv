@@ -4,6 +4,8 @@
 .globl _start
 .align 8
 
+#include "inc/frnd.S"
+
 _start:
     csrw    fcsr, zero
 
@@ -24,6 +26,8 @@ loop:
 
     /* clear fcsr */
     csrw    fcsr, zero
+    fsrmi   _FRM
+
 
     /* execute fadd.d */
     fmul.d  f3, f0, f1
@@ -90,5 +94,5 @@ tohost:
 .align 8
 
 test_data:
-.include "./golden/f64_mul.txt.S"
+.include "f64_mul.txt.S"
 test_data_end:

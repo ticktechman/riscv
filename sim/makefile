@@ -9,7 +9,7 @@
 .PHONY: all build test install doc hawks
 
 HEX_FILES := $(wildcard $(CURDIR)/riscv-tests/*.hex)
-HEX_FPU := $(wildcard $(CURDIR)/fpu-test/testcases/build/*.hex)
+HEX_FPU := $(shell find $(CURDIR)/fpu-test/testcases/build/ -name *.hex | sort)
 
 V_FLAGS = --timing --cc --exe --trace --build -I../
 SV_SRCS = \
@@ -35,7 +35,7 @@ hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.fpu: $(HEX_FPU:.hex=.fputest)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="./fpu-test/testcases/build/f64_to_ui32"
+	@$< +verilator+quiet +elf="./fpu-test/testcases/build/rne/f32_add"
 
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary --trace $^ --top-module top -o $(shell basename $@)
@@ -43,7 +43,7 @@ obj_dir/hawks: hawks.sv hawks.cpp
 
 %.fputest: obj_dir/hawks
 	@printf "> %14s " "$(shell basename $*): "
-	-@obj_dir/hawks +verilator+quiet +elf="fpu-test/testcases/build/$(shell basename $*)"
+	-@obj_dir/hawks +verilator+quiet +elf="fpu-test/testcases/build/rne/$(shell basename $*)"
 
 %.run: obj_dir/hawks
 	@printf "%28s" "$(shell basename $*): "

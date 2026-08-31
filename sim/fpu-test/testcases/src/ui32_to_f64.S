@@ -4,6 +4,8 @@
 .globl _start
 .align 8
 
+#include "inc/frnd.S"
+
 _start:
     csrw    fcsr, zero
 
@@ -22,6 +24,7 @@ loop:
 
     /* clear fcsr */
     csrw    fcsr, zero
+    fsrmi   _FRM
 
     /* execute fcvt.s.w */
     fcvt.d.w f0, a0                /* f0 = (float)(int32)a0 */
@@ -72,5 +75,5 @@ tohost:
 .align 4
 
 test_data:
-  .include "./golden/ui32_to_f64.txt.S"
+  .include "ui32_to_f64.txt.S"
 test_data_end:

@@ -4,6 +4,7 @@
 .globl _start
 .align 8
 
+#include "inc/frnd.S"
 _start:
     csrw    fcsr, zero
 
@@ -27,6 +28,7 @@ loop:
 
     /* clear fcsr */
     csrw    fcsr, zero
+    fsrmi   _FRM
 
     /* execute fmadd.s: f3 = f0 * f1 + f2 */
     fmadd.s f3, f0, f1, f2
@@ -93,5 +95,5 @@ tohost:
   .align 4
 
 test_data:
-.include "./golden/f32_mulAdd.txt.S"
+.include "f32_mulAdd.txt.S"
 test_data_end:
