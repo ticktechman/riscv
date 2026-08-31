@@ -4,3 +4,6 @@
 [submodule "sim/fpu-test/berkeley-testfloat-3"]
 	path = sim/fpu-test/berkeley-testfloat-3
 	url = ssh://git@github.com/ticktechman/berkeley-testfloat-3
+[submodule "software/riscv-tests"]
+	path = software/riscv-tests
+	url = ssh://git@github.com/ticktechman/riscv-tests
