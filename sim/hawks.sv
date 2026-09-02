@@ -6568,7 +6568,7 @@ module fsqrt (
       S4: begin
         // adjustment root
         if (rem[MP-1]) begin
-          root = root - (MP'(1) << 4);
+          root = root - (MP'(1) << 3);
           `LOGW($sformatf("adjust root to:%h", root));
           root_adj = 1;
         end
