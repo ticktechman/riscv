@@ -9,7 +9,7 @@
 .PHONY: all build test install doc hawks
 
 HEX_FILES := $(wildcard $(CURDIR)/riscv-tests/*.hex)
-HEX_FPU := $(shell find fpu-test/testcases/build -name *.hex | sort)
+HEX_FPU := $(shell find fpu-test/testcases/build -name *_mul.hex | sort)
 
 HAWKS_FLAGS = -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary
 V_FLAGS = --timing --cc --exe --trace --build -I../

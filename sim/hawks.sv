@@ -135,12 +135,12 @@ package hawks;
   };
 
   typedef enum {
-    S8,    // 0
+    S8,
     U8,
     S16,
     U16,
     S32,
-    U32,   // 5
+    U32,
     F32,
     US64,
     F64
@@ -740,7 +740,7 @@ package hawks;
 
   typedef struct packed {
     logic sign;
-    logic [11:0] exp;
+    logic signed [12:0] exp;
     logic [52:0] manti;  // hidden-1bit, frac-52bit
   } funpack_t;
 
@@ -769,35 +769,21 @@ package hawks;
   `define fp_zero(single, s) (single ? {32'hffff_ffff, s, 31'b0} : {s, 63'b0})
   `define fp_inf(single, s) (single ? {32'hffff_ffff, s, 8'hff, 23'b0} : {s, 11'h7ff, 52'b0})
   `define fp_mkval(single, sign, v) (single ? {v[63:32], sign, v[30:0]}: {sign, v[62:0]})
-  `define fp_quiet(single, v) v |= (single_i ? 64'b1 << 22 : 64'b1 << 51)
 
   `define FP_CQNAN(single) (single ? CQNAN_S : CQNAN_D)
-
-  function automatic reg_t fnan2(reg_t op[2], fattr_t attr[2]);
-    return attr[1].NAN ? op[1] : op[0];
-  endfunction
-  function automatic reg_t fnan3(reg_t op[3], fattr_t attr[3]);
-    return attr[0].NAN ? op[0] : (attr[1].NAN ? op[1] : op[2]);
-  endfunction
-  function automatic reg_t fsnan2(reg_t op[2], fattr_t attr[2]);
-    return attr[1].SNAN ? op[1] : op[0];
-  endfunction
-  function automatic reg_t fsnan3(reg_t op[3], fattr_t attr[3]);
-    return attr[2].SNAN ? op[2] : (attr[0].SNAN ? op[0] : op[1]);
-  endfunction
 
   function automatic funpack_t funpack(logic single, reg_t v, fattr_t a);
     funpack_t res;
     res = '0;
     res.sign = `fp_sign(single, v);
     if (a.SUBN) begin
-      res.exp   = 12'd1;
+      res.exp   = 13'sd1;
       res.manti = `fp_subn_manti(single, v);
     end else if (a.ZERO) begin
       res.exp   = '0;
       res.manti = '0;
     end else begin
-      res.exp   = `fp_exp(single, v, 12);
+      res.exp   = `fp_exp(single, v, 13);
       res.manti = `fp_manti(single, v);
     end
     `LOGI($sformatf("s:%b e:%0d m:%h", res.sign, res.exp, res.manti));
@@ -5508,7 +5494,7 @@ module fadd (
 
   typedef struct packed {
     logic sign, sticky;
-    logic [11:0] exp;
+    logic signed [12:0] exp;
     logic [64:0] manti;  // {funpack_t.manti, }
   } faligned_t;
 
@@ -5517,7 +5503,7 @@ module fadd (
   `define EXP_INF_D 11'h7ff
   `define EXP_MAX_S 8'hfe
   `define EXP_MAX_D 11'h7fe
-  `define max_exp(single) (single ? 12'd254 : 12'd2046)
+  `define max_exp(single) (single ? 13'sd254 : 13'sd2046)
 
   //-----------------
   // check fastpath
@@ -5591,7 +5577,7 @@ module fadd (
   endfunction
 
   function automatic faligned_t alignment(funpack_t u1, funpack_t u2);
-    logic [11:0] diff, exp;
+    logic signed [12:0] diff, exp;
     logic sticky, s1, s2, carry;
     reg_t m1, m2;
     faligned_t res = '{default: 0};
@@ -5653,9 +5639,9 @@ module fadd (
     end else begin
       lz = lzc(ali.manti[63:0]);
       `LOGI($sformatf("lz:%0d manti:%h", lz, ali.manti));
-      if (ali.exp > 12'(lz)) begin
+      if (ali.exp > 13'(lz)) begin
         res.manti = ali.manti << lz;
-        res.exp   = ali.exp - 12'(lz);
+        res.exp   = ali.exp - 13'(lz);
       end else begin
         res.exp   = '0;
         res.manti = ali.manti << (ali.exp > 0 ? ali.exp - 1 : 0);
@@ -5668,7 +5654,7 @@ module fadd (
   function automatic fpacked_t pack(faligned_t norm, frm_e rm);
     // do round
     logic [51:0] frac;
-    logic [11:0] exp;
+    logic signed [12:0] exp;
     logic overflow;
     logic G, R, S, L;
     logic rnd, sign;
@@ -5708,7 +5694,7 @@ module fadd (
       res.flags.nx = 1;
       overflow = single_i ? frac[22:0] == `ONES(23) : frac == `ONES(52);
       if (overflow) begin
-        exp  = exp + 11'd1;
+        exp += 1;
         frac = '0;
       end else begin
         frac += 1;
@@ -5720,30 +5706,30 @@ module fadd (
       res.flags.nx = 1;
       unique case (rm)
         RNE, RMM: begin
-          exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+          exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
           frac = '0;
           res.flags.of = 1;
         end
         RTZ: begin
-          exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
+          exp  = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
           frac = '1;
         end
         RDN: begin
           if (norm.sign) begin
-            exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+            exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
             frac = '0;
             res.flags.of = 1;
           end else begin
-            exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
+            exp  = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
             frac = '1;
           end
         end
         RUP: begin
           if (norm.sign) begin
-            exp  = single_i ? 12'({'0, `EXP_MAX_S}) : 12'({'0, `EXP_MAX_D});
+            exp  = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
             frac = '1;
           end else begin
-            exp = single_i ? 12'({'0, `EXP_INF_S}) : 12'({'0, `EXP_INF_D});
+            exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
             frac = '0;
             res.flags.of = 1;
           end
@@ -5839,7 +5825,7 @@ module fmul (
 
   typedef struct packed {
     logic sign;
-    logic [12:0] exp;
+    logic signed [12:0] exp;
     logic [105:0] manti;  // HH.FF....F
     fflags_t flags;
   } fmul_t;
@@ -5898,7 +5884,7 @@ module fmul (
   function automatic fmul_t normalize(fmul_t v);
     fmul_t res;
     logic L, G, R, S, rndup, tiny;
-    logic [12:0] exp;
+    logic signed [12:0] exp;
     logic [105:0] manti;
     int lz = clz(v.manti);
     exp = 13'(v.exp) - 13'(lz);
@@ -5964,7 +5950,7 @@ module fmul (
       res.flags.uf = G | R | S;
     end
 
-    if (res.exp > (single_i ? 13'd254 : 13'd2046)) begin
+    if (res.exp > `max_exp(single_i)) begin
       res.flags.of = 1;
       res.flags.nx = 1;
       unique case (rm_i)
@@ -6092,7 +6078,7 @@ module fdiv (
 
   typedef struct packed {
     logic sign, tiny;
-    logic [12:0] exp;
+    logic signed [12:0] exp;
     logic [52:0] manti;
     grs_t grs;
     fflags_t flags;
@@ -6329,14 +6315,8 @@ module fdiv (
           norm = normalize(dres);
         end
         SE: begin
-          if (fast.valid) begin
-            result_o = fast.result;
-            flags_o  = fast.flags;
-          end else begin
-            pcked    = pack(norm);
-            result_o = pcked.result;
-            flags_o  = pcked.flags;
-          end
+          pcked = pack(norm);
+          {result_o, flags_o} = fast.valid ? {fast.result, fast.flags} : {pcked.result, pcked.flags};
         end
         default: ;
       endcase
@@ -6663,12 +6643,6 @@ module fma (
   typedef struct packed {
     logic sign;
     logic signed [12:0] exp;
-    logic [52:0] manti;
-  } funpacked_t;
-
-  typedef struct packed {
-    logic sign;
-    logic signed [12:0] exp;
     logic [105:0] manti;
   } fmul_t;
 
@@ -6697,8 +6671,8 @@ module fma (
     return 52 - i;
   endfunction
 
-  function automatic funpacked_t funpacked(logic single, reg_t v, fattr_t a);
-    funpacked_t res;
+  function automatic funpack_t funpacked(logic single, reg_t v, fattr_t a);
+    funpack_t res;
     int lz = 0;
     res = '0;
     res.sign = `fp_sign(single, v);
@@ -6794,7 +6768,7 @@ module fma (
     return res;
   endfunction
 
-  function automatic fmul_t multiply(funpacked_t u1, u2);
+  function automatic fmul_t multiply(funpack_t u1, u2);
     fmul_t res = '{default: 0};
     res.sign  = u1.sign ^ u2.sign;
     res.exp   = u1.exp + u2.exp - (single_i ? 13'd127 : 13'd1023);
@@ -6803,7 +6777,7 @@ module fma (
     return res;
   endfunction
 
-  function automatic fadd_t madd(fmul_t m, funpacked_t u3);
+  function automatic fadd_t madd(fmul_t m, funpack_t u3);
     fadd_t res = '{default: 0};
     logic signed [12:0] exp, diff;
     logic [108:0] m1, m2;  // HHH.FFF...FFGR
@@ -7001,15 +6975,13 @@ module fma (
   endfunction
 
   always_comb begin
-    funpacked_t u1, u2, u3;
+    funpack_t u1, u2, u3;
     fmul_t mul;
     fadd_t ma;
     fnorm_t norm;
     fpacked_t pcked;
     unique case (state)
-      SB: begin
-        fast = '0;
-      end
+      SB: fast = '0;
       S1: begin
         // check fastpath & unpack
         fast = check_fastpath();
@@ -7021,12 +6993,8 @@ module fma (
         end
       end
       S2: mul = multiply(u1, u2);
-      S3: begin
-        ma = madd(mul, u3);
-      end
-      S4: begin
-        norm = normalize(ma);
-      end
+      S3: ma = madd(mul, u3);
+      S4: norm = normalize(ma);
       SE: begin
         if (fast.valid) begin
           result_o = fast.result;
@@ -7180,7 +7148,6 @@ module fcvt (
       res.flags.nv = attr_i.SNAN;
       res.result   = `FP_CQNAN(1);
     end else if (exp < -12'sd126) begin
-      // TODO
       exp = -12'sd127 - exp;
       s = `OR_NBITS(manti, exp);
       manti = manti >> exp;
