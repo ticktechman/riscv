@@ -36,7 +36,12 @@ hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.fpu: $(HEX_FPU:.hex=.fputest)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="./fpu-test/testcases/build/rup/f32_mulAdd"
+	# @$< +verilator+quiet +elf="./fpu-test/testcases/build/rne/f64_sqrt"
+	@$< +verilator+quiet +elf="./fpu-test/testcases/build/rup/f64_sqrt"
+	@$< +verilator+quiet +elf="./fpu-test/testcases/build/rup/f32_sqrt"
+	# @$< +verilator+quiet +elf="./fpu-test/testcases/build/rdn/f64_sqrt"
+	# @$< +verilator+quiet +elf="./fpu-test/testcases/build/rtz/f64_sqrt"
+	# @$< +verilator+quiet +elf="./fpu-test/testcases/build/rmm/f64_sqrt"
 
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(shell basename $@)

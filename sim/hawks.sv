@@ -6562,7 +6562,7 @@ module fsqrt (
         root_s = root_2x + inc;
         rem = rem_4x - multi_s(sfactor, root_s);
         root += inc;
-        `LOGI($sformatf("root:%0d sfactor:%0d, inc:%0d", root, sfactor, inc));
+        // `LOGI($sformatf("root:%0d sfactor:%0d, inc:%0d", root, sfactor, inc));
         iterate_end = counter >= max_counter;
       end
       S4: begin
@@ -6575,7 +6575,8 @@ module fsqrt (
 
         // normalize
         root = root <<< 1;
-        mq = root - (1 << BP);
+        mq   = root - (1 << BP);
+        mq[0] |= (|rem);
         G = single_i ? mq[BP-24] : mq[BP-53];
         R = single_i ? mq[BP-25] : mq[BP-54];
         S = single_i ? |mq[BP-26:0] : |mq[BP-55:0];
@@ -6583,12 +6584,15 @@ module fsqrt (
 
         rndup = frndup(G, R, S, L, u1.sign, frm_e'(rm_i));
         `LOGW($sformatf("mq:%h rem:%h, rndup:%b", mq, rem, rndup));
-        manti = single_i ? {29'b0, mq[BP-1:BP-23]} : mq[BP-1:BP-52];
+        manti = single_i ? {`ONES(29), mq[BP-1:BP-23]} : mq[BP-1:BP-52];
+        `LOGW($sformatf("manti:%h", manti));
         if (rndup) begin
           if (manti == `ONES(52)) begin
             exp += 1;
+            manti = '0;
+          end else begin
+            manti += 52'b1;
           end
-          manti += 52'b1;
         end
         flags.nx = (G | R | S | root_adj | rem != '0);
       end
