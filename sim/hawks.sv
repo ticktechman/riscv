@@ -134,17 +134,9 @@ package hawks;
       '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
   };
 
-  typedef enum {
-    S8,
-    U8,
-    S16,
-    U16,
-    S32,
-    U32,
-    F32,
-    US64,
-    F64
-  } datatype_e;
+  // verilog_format: off
+  typedef enum { S8, U8, S16, U16, S32, U32, F32, US64, F64 } datatype_e;
+  // verilog_format: on
 
   function automatic addr_t databytes(datatype_e dtype);
     unique case (dtype)
@@ -745,6 +737,13 @@ package hawks;
   } funpack_t;
 
   typedef struct packed {
+    logic sign;
+    logic [10:0] exp;
+    logic [51:0] frac;
+    fflags_t flags;
+  } fnorm_t;
+
+  typedef struct packed {
     reg_t result;
     fflags_t flags;
   } fpacked_t;
@@ -758,17 +757,18 @@ package hawks;
   localparam U64_NAN = 64'hFFFFFFFFFFFFFFFF;
 
   `define fp_sign(single, v) (single ? v[31] : v[63])
-  `define fp_exp(single, v, N) (single ? N'(v[30:23]) : N'(v[62:52]))
+  `define fp_exp(single, v) (single ? 13'(v[30:23]) : 13'(v[62:52]))
   `define fp_frac(single, v) (single ? {v[22:0], 29'b0} : v[51:0])
   `define fp_manti(single, v) (single ? {1'b1, v[22:0], 29'b0} : {1'b1, v[51:0]})
   `define fp_subn_manti(single, v) (single ? {1'b0, v[22:0], 29'b0} : {1'b0, v[51:0]})
-  `define fp_bias(single, N) (single ? N'd127 : N'd1023)
+  `define fp_bias(single) (single ? 13'sd127 : 13'sd1023)
   `define fp_abs(single, v) (single ? v[30:0] : v[62:0])
   `define fp_abs64(single, v) (single ? {33'b0, v[30:0]} : {1'b0, v[62:0]})
   `define fp_pack(single, s, e, m) (single ? {32'hffff_ffff, s, e[7:0], m[22:0]} : {s, e[10:0], m[51:0]})
   `define fp_zero(single, s) (single ? {32'hffff_ffff, s, 31'b0} : {s, 63'b0})
   `define fp_inf(single, s) (single ? {32'hffff_ffff, s, 8'hff, 23'b0} : {s, 11'h7ff, 52'b0})
   `define fp_mkval(single, sign, v) (single ? {v[63:32], sign, v[30:0]}: {sign, v[62:0]})
+  `define fp_emax(single) (single ? 13'sd254 : 13'sd2046)
 
   `define FP_CQNAN(single) (single ? CQNAN_S : CQNAN_D)
 
@@ -783,7 +783,7 @@ package hawks;
       res.exp   = '0;
       res.manti = '0;
     end else begin
-      res.exp   = `fp_exp(single, v, 13);
+      res.exp   = `fp_exp(single, v);
       res.manti = `fp_manti(single, v);
     end
     `LOGI($sformatf("s:%b e:%0d m:%h", res.sign, res.exp, res.manti));
@@ -5638,7 +5638,6 @@ module fadd (
       res.manti = ali.manti >> 1;
     end else begin
       lz = lzc(ali.manti[63:0]);
-      `LOGI($sformatf("lz:%0d manti:%h", lz, ali.manti));
       if (ali.exp > 13'(lz)) begin
         res.manti = ali.manti << lz;
         res.exp   = ali.exp - 13'(lz);
@@ -5664,14 +5663,10 @@ module fadd (
     rnd = 0;
     S = norm.sticky;
     if (single_i) begin
-      L = norm.manti[40];
-      G = norm.manti[39];
-      R = norm.manti[38];
+      {L, G, R} = norm.manti[40:38];
       S = (|norm.manti[37:0]) | norm.sticky;
     end else begin
-      L = norm.manti[11];
-      G = norm.manti[10];
-      R = norm.manti[9];
+      {L, G, R} = norm.manti[11:9];
       S = (|norm.manti[8:0]) | norm.sticky;
     end
 
@@ -5701,7 +5696,7 @@ module fadd (
       end
     end
 
-    if (exp > `max_exp(single_i)) begin
+    if (exp > `fp_emax(single_i)) begin
       res.flags.of = 1;
       res.flags.nx = 1;
       unique case (rm)
@@ -5876,7 +5871,7 @@ module fmul (
     fmul_t res;
     res.sign  = u1.sign ^ u2.sign;
     res.manti = u1.manti * u2.manti;
-    res.exp   = u1.exp + u2.exp + 13'd1 - `fp_bias(single_i, 13);  // +1 to make int part to MSB
+    res.exp   = u1.exp + u2.exp + 13'sd1 - `fp_bias(single_i);  // +1 to make int part to MSB
     `LOGI($sformatf("exp:%0d manti:%h", res.exp, res.manti));
     return res;
   endfunction
@@ -5887,20 +5882,20 @@ module fmul (
     logic signed [12:0] exp;
     logic [105:0] manti;
     int lz = clz(v.manti);
-    exp = 13'(v.exp) - 13'(lz);
+    exp = v.exp - 13'(lz);
     manti = v.manti << lz;
     S = 0;
     tiny = 0;
-    if ($signed(exp) <= 0) begin
-      if ($signed(exp) < -106) begin
+    if (exp <= 0) begin
+      if (exp < -106) begin
         S = |manti;
         manti = '0;
         exp = '0;
-      end else if ($signed(exp) <= 0) begin
+      end else if (exp <= 0) begin
         exp = exp - 1;
-        S = `OR_NBITS(manti, (-$signed(exp)));
+        S = `OR_NBITS(manti, -exp);
         tiny = single_i ? manti[104:81] != `ONES(24) : manti[104:52] != `ONES(53);
-        manti = manti >> -$signed(exp);
+        manti = manti >> -exp;
         manti[0] |= S;
         exp = '0;
       end
@@ -5929,7 +5924,7 @@ module fmul (
       if (single_i) begin
         if (manti[104:82] == `ONES(23)) begin
           res.manti = {1'b1, 105'b0};
-          res.exp += 13'd1;
+          res.exp += 13'sd1;
         end else begin
           manti[105:82] += 1;
           res.manti = manti;
@@ -5937,7 +5932,7 @@ module fmul (
       end else begin
         if (manti[104:53] == `ONES(52)) begin
           res.manti = {1'b1, 105'b0};
-          res.exp += 13'd1;
+          res.exp += 13'sd1;
         end else begin
           manti[105:53] += 1;
           res.manti = manti;
@@ -5946,11 +5941,11 @@ module fmul (
     end else begin
       res.manti = manti;
     end
-    if (res.exp == 13'd0) begin
+    if (res.exp == 13'sd0) begin
       res.flags.uf = G | R | S;
     end
 
-    if (res.exp > `max_exp(single_i)) begin
+    if (res.exp > `fp_emax(single_i)) begin
       res.flags.of = 1;
       res.flags.nx = 1;
       unique case (rm_i)
@@ -6180,7 +6175,7 @@ module fdiv (
       res.flags.uf = res.flags.nx;
     end
 
-    if (exp > (single_i ? 13'd254 : 13'd2046)) begin
+    if (exp > `fp_emax(single_i)) begin
       res.flags.of = 1;
       res.flags.nx = 1;
       unique case (rm_i)
@@ -6296,7 +6291,7 @@ module fdiv (
         end
         S4: begin
           dres.sign = p1.sign ^ p2.sign;
-          dres.exp = $signed(p1.exp) - $signed(p2.exp) + $signed(`fp_bias(single_i, 13)) - $signed(lz);
+          dres.exp = $signed(p1.exp) - $signed(p2.exp) + $signed(`fp_bias(single_i)) - $signed(lz);
           sticky = |holder;
           tiny = 0;
           if ($signed(dres.exp) <= 0) begin
@@ -6567,7 +6562,7 @@ module fsqrt (
         manti = single_i ? {`ONES(29), mq[BP-1:BP-23]} : mq[BP-1:BP-52];
         `LOGW($sformatf("manti:%h", manti));
         if (rndup) begin
-          if (manti == `ONES(52)) begin
+          if (&manti == 1'b1) begin
             exp += 1;
             manti = '0;
           end else begin
@@ -6582,13 +6577,9 @@ module fsqrt (
           result_o = fast.result;
           flags_o  = fast.flags;
         end else begin
-          if (single_i) begin
-            result_o = {32'hffffffff, u1.sign, exp[7:0], manti[22:0]};
-          end else begin
-            result_o = {u1.sign, exp[10:0], manti};
-          end
+          result_o = `fp_pack(single_i, u1.sign, exp, manti);
+          flags_o  = flags;
           `LOGI($sformatf("result:%.16e, e:%0d, m:%h", $bitstoreal(result_o), exp, manti));
-          flags_o = flags;
         end
       end
       default: ;
@@ -6652,13 +6643,6 @@ module fma (
     logic [108:0] manti;
   } fadd_t;
 
-  typedef struct packed {
-    logic sign;
-    logic [10:0] exp;
-    logic [51:0] frac;
-    fflags_t flags;
-  } fnorm_t;
-
   // fastpath > unpack > multiply > alignment > add > roundup > normalize > pack
 
   // FSM
@@ -6688,7 +6672,7 @@ module fma (
       res.exp   = '0;
       res.manti = '0;
     end else begin
-      res.exp   = `fp_exp(single, v, 13);
+      res.exp   = `fp_exp(single, v);
       res.manti = `fp_manti(single, v);
     end
     `LOGI($sformatf("s:%b e:%0d m:%h", res.sign, res.exp, res.manti));
@@ -6847,7 +6831,7 @@ module fma (
     int lz;
     logic [12:0] max_e = single_i ? 13'd255 : 13'd2047;
 
-    if (v.manti == 109'b0) begin
+    if ((|v.manti) == 1'b0) begin
       res.exp  = '0;
       res.frac = '0;
       res.sign = v.sign;
@@ -6920,7 +6904,7 @@ module fma (
       end
 
       res.exp = v.exp[10:0];
-      if (v.exp > (single_i ? 13'd254 : 13'd2046)) begin
+      if (v.exp > `fp_emax(single_i)) begin
         res.flags.of = 1;
         res.flags.nx = 1;
         unique case (rm_i)
@@ -6960,9 +6944,6 @@ module fma (
     if ((tiny && res.flags.nx) || res.exp == 11'b0) begin
       res.flags.uf = res.flags.nx;
     end
-    // if (tiny && res.exp == 11'b1) begin
-    //   res.flags.uf = !res.flags.nx;
-    // end
 
     return res;
   endfunction
@@ -6970,7 +6951,7 @@ module fma (
   function automatic fpacked_t pack(fnorm_t norm);
     fpacked_t res;
     res.flags  = norm.flags;
-    res.result = single_i ? {`ONES(32), norm.sign, norm.exp[7:0], norm.frac[22:0]} : {norm.sign, norm.exp, norm.frac};
+    res.result = `fp_pack(single_i, norm.sign, norm.exp, norm.frac);
     return res;
   endfunction
 
@@ -6996,14 +6977,8 @@ module fma (
       S3: ma = madd(mul, u3);
       S4: norm = normalize(ma);
       SE: begin
-        if (fast.valid) begin
-          result_o = fast.result;
-          flags_o  = fast.flags;
-        end else begin
-          pcked = pack(norm);
-          result_o = pcked.result;
-          flags_o = pcked.flags;
-        end
+        pcked = pack(norm);
+        {result_o, flags_o} = fast.valid ? {fast.result, fast.flags} : {pcked.result, pcked.flags};
       end
       default: ;
     endcase
@@ -7338,8 +7313,8 @@ module fcvt (
     // INF, ZERO, NAN(QNaN, SNaN), SUBN
     fconvert_t res = '{default: 0};
     logic fsign = `fp_sign(single_i, op1_i);
-    logic signed [11:0] exp = `fp_exp(single_i, op1_i, 12), shift;
-    logic signed [11:0] max_e = l ? (isigned ? 12'd63 : 12'd64) : (isigned ? 12'd31 : 12'd32);
+    logic signed [12:0] exp = `fp_exp(single_i, op1_i), shift;
+    logic signed [12:0] max_e = l ? (isigned ? 13'd63 : 13'd64) : (isigned ? 13'd31 : 13'd32);
     reg_t ires, boundary;
     logic G, R, S, L, rndup;
     logic [51:0] frac;
@@ -7347,7 +7322,7 @@ module fcvt (
     // integer(64bits) + frac(52bits) + GR
     logic [65:0] data = '0;
     data = {1'b0, `fp_manti(single_i, op1_i), 10'b0, 2'b0};
-    exp -= `fp_bias(single_i, 12);
+    exp -= `fp_bias(single_i);
 
     if (fsign) begin
       boundary = l ? (isigned ? I64_MIN : 64'b0) : (isigned ? I32_MIN : 64'b0);
@@ -7368,7 +7343,7 @@ module fcvt (
       if (!attr_i.INF && fsign && exp == max_e) begin
         frac = `fp_frac(single_i, op1_i);
         `LOGW($sformatf("frac:%h exp:%0d", frac, exp));
-        if ((|(frac >> (12'sd52 - (exp > 12'sd52 ? 12'sd52 : exp)))) == 0) begin
+        if ((|(frac >> (13'sd52 - (exp > 13'sd52 ? 13'sd52 : exp)))) == 0) begin
           if (rm_i == RDN && isigned && (|frac) == 1) begin
             res.flags.nv = 1'b1;
           end else begin
