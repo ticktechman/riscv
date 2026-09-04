@@ -738,7 +738,7 @@ package hawks;
 
   typedef struct packed {
     logic sign;
-    logic [10:0] exp;
+    logic signed [12:0] exp;
     logic [51:0] frac;
     fflags_t flags;
   } fnorm_t;
@@ -777,6 +777,8 @@ package hawks;
   `define fp_inf(single, s) (single ? {32'hffff_ffff, s, 8'hff, 23'b0} : {s, 11'h7ff, 52'b0})
   `define fp_mkval(single, sign, v) (single ? {v[63:32], sign, v[30:0]}: {sign, v[62:0]})
   `define fp_emax(single) (single ? 13'sd254 : 13'sd2046)
+  `define fp_einf(single) (single ? 13'sd255 : 13'sd2047)
+  `define fp_fast_or_packed(f, p) {result_o, flags_o} = f.valid ? {f.result, f.flags} : {p.result, p.flags}
 
   `define FP_CQNAN(single) (single ? CQNAN_S : CQNAN_D)
 
@@ -835,7 +837,7 @@ package hawks;
     end
     res.flags.nx = G | R | S;
 
-    res.exp = exp[10:0];
+    res.exp = exp;
     res.sign = sign;
     res.frac = frac;
     if (exp > `fp_emax(single)) begin
@@ -843,28 +845,28 @@ package hawks;
       res.flags.of = 1;
       unique case (rmode)
         RNE, RMM: begin
-          res.exp  = single ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
+          res.exp  = `fp_einf(single);
           res.frac = '0;
         end
         RTZ: begin
-          res.exp  = single ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
+          res.exp  = `fp_emax(single);
           res.frac = '1;
         end
         RDN: begin
           if (sign) begin
-            res.exp  = single ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
+            res.exp  = `fp_einf(single);
             res.frac = '0;
           end else begin
-            res.exp  = single ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
+            res.exp  = `fp_emax(single);
             res.frac = '1;
           end
         end
         RUP: begin
           if (sign) begin
-            res.exp  = single ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
+            res.exp  = `fp_emax(single);
             res.frac = '1;
           end else begin
-            res.exp  = single ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
+            res.exp  = `fp_einf(single);
             res.frac = '0;
           end
         end
@@ -5722,16 +5724,16 @@ module fadd (
     // do round
     logic [51:0] frac;
     logic signed [12:0] exp;
-    logic sign, G, R, S, L;
+    logic sign, G, R, S;
     fnorm_t rnd;
     fpacked_t res = '{default: 0};
     sign = norm.sign;
     S = norm.sticky;
     if (single_i) begin
-      {L, G, R} = norm.manti[40:38];
+      {G, R} = norm.manti[39:38];
       S = (|norm.manti[37:0]) | norm.sticky;
     end else begin
-      {L, G, R} = norm.manti[11:9];
+      {G, R} = norm.manti[10:9];
       S = (|norm.manti[8:0]) | norm.sticky;
     end
 
@@ -5765,12 +5767,8 @@ module fadd (
         S2: aligned = alignment(u1, u2);
         S3: normed = normalize(aligned);
         SE: begin
-          if (fast.valid) begin
-            {result_o, flags_o} = {fast.result, fast.flags};
-          end else begin
-            pcked = pack(normed, frm_e'(rm_i));
-            {result_o, flags_o} = {pcked.result, pcked.flags};
-          end
+          pcked = pack(normed, frm_e'(rm_i));
+          `fp_fast_or_packed(fast, pcked);
         end
         default: ;
       endcase
@@ -5959,13 +5957,7 @@ module fmul (
         S3: norm = normalize(mult);
         SE: begin
           pcked = pack(norm);
-          if (fast.valid) begin
-            result_o = fast.result;
-            flags_o  = fast.flags;
-          end else begin
-            result_o = pcked.result;
-            flags_o  = pcked.flags;
-          end
+          `fp_fast_or_packed(fast, pcked);
         end
         default: ;
       endcase
@@ -6187,7 +6179,7 @@ module fdiv (
         end
         SE: begin
           pcked = pack(norm);
-          {result_o, flags_o} = fast.valid ? {fast.result, fast.flags} : {pcked.result, pcked.flags};
+          `fp_fast_or_packed(fast, pcked);
         end
         default: ;
       endcase
@@ -6706,7 +6698,6 @@ module fma (
     logic s = v.sticky;
     logic G, R, S, tiny;
     int lz;
-    logic [12:0] max_e = single_i ? 13'd255 : 13'd2047;
 
     if ((|v.manti) == 1'b0) begin
       res.exp  = '0;
@@ -6741,12 +6732,12 @@ module fma (
       tiny = 0;
       if (v.exp <= 0) begin
         if ((v.sign && rm_i == RDN) || (!v.sign && rm_i == RUP)) begin
-          tiny = single_i ? v.manti[107:85] != `ONES(23) : v.manti[107:56] != `ONES(52);
+          tiny = single_i ? &v.manti[107:85] != 1'b1 : &v.manti[107:56] != 1'b1;
           if (tiny) begin
             tiny = single_i ? (|v.manti[84:0]) : (|v.manti[55:0]);
           end
         end else begin
-          tiny = single_i ? v.manti[107:84] != `ONES(24) : v.manti[107:55] != `ONES(53);
+          tiny = single_i ? &v.manti[107:84] != 1'b1 : &v.manti[107:55] != 1'b1;
         end
         v.manti = v.manti >> (1 - v.exp);
         v.exp   = '0;
@@ -6754,18 +6745,16 @@ module fma (
 
       if (single_i) begin
         frac = {29'b0, v.manti[107:85]};
-        G = v.manti[84];
-        R = v.manti[83];
+        {G, R} = v.manti[84:83];
         S = (|v.manti[82:0]) | s;
       end else begin
         frac = v.manti[107:56];
-        G = v.manti[55];
-        R = v.manti[54];
+        {G, R} = v.manti[55:54];
         S = s | (|v.manti[53:0]);
       end
       res = fround(single_i, v.sign, v.exp, frac, frm_e'(rm_i), {G, R, S});
     end
-    if ((tiny && res.flags.nx) || res.exp == 11'b0) begin
+    if ((tiny && res.flags.nx) || res.exp == '0) begin
       res.flags.uf = res.flags.nx;
     end
 
@@ -6802,7 +6791,7 @@ module fma (
       S4: norm = normalize(ma);
       SE: begin
         pcked = pack(norm);
-        {result_o, flags_o} = fast.valid ? {fast.result, fast.flags} : {pcked.result, pcked.flags};
+        `fp_fast_or_packed(fast, pcked);
       end
       default: ;
     endcase
