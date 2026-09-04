@@ -748,6 +748,9 @@ package hawks;
     fflags_t flags;
   } fpacked_t;
 
+  typedef logic signed [12:0] fexp_t;
+  typedef logic signed [51:0] ffrac_t;
+
   // canonical qNaN
   localparam CQNAN_D = 64'h7FF8000000000000;
   localparam CQNAN_S = 64'hFFFFFFFF7FC00000;
@@ -755,6 +758,11 @@ package hawks;
   localparam U32_NAN = 64'hFFFFFFFFFFFFFFFF;
   localparam I64_NAN = 64'h7FFFFFFFFFFFFFFF;
   localparam U64_NAN = 64'hFFFFFFFFFFFFFFFF;
+
+  `define EXP_INF_S 8'hff
+  `define EXP_INF_D 11'h7ff
+  `define EXP_MAX_S 8'hfe
+  `define EXP_MAX_D 11'h7fe
 
   `define fp_sign(single, v) (single ? v[31] : v[63])
   `define fp_exp(single, v) (single ? 13'(v[30:23]) : 13'(v[62:52]))
@@ -800,6 +808,70 @@ package hawks;
       default: rndup = 0;
     endcase
     return rndup;
+  endfunction
+
+  function automatic fnorm_t fround(logic single, sign, fexp_t exp, ffrac_t frac, frm_e rmode, grs_t grs);
+    fnorm_t res = '{default: 0};
+    logic all_ones, rnd, G, R, S, L;
+
+    {G, R, S, L} = {grs.G, grs.R, grs.S, frac[0]};
+    unique case (rmode)
+      RNE: rnd = G & (R | S | L);
+      RDN: rnd = sign & (G | R | S);
+      RUP: rnd = (!sign) & (G | R | S);
+      RMM: rnd = G;
+      default: rnd = 0;
+    endcase
+
+    if (rnd) begin
+      res.flags.nx = 1;
+      all_ones = single ? &frac[22:0] : &frac[51:0];
+      if (all_ones) begin
+        exp += 1;
+        frac = '0;
+      end else begin
+        frac += 1;
+      end
+    end
+    res.flags.nx = G | R | S;
+
+    res.exp = exp[10:0];
+    res.sign = sign;
+    res.frac = frac;
+    if (exp > `fp_emax(single)) begin
+      res.flags.nx = 1;
+      res.flags.of = 1;
+      unique case (rmode)
+        RNE, RMM: begin
+          res.exp  = single ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
+          res.frac = '0;
+        end
+        RTZ: begin
+          res.exp  = single ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
+          res.frac = '1;
+        end
+        RDN: begin
+          if (sign) begin
+            res.exp  = single ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
+            res.frac = '0;
+          end else begin
+            res.exp  = single ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
+            res.frac = '1;
+          end
+        end
+        RUP: begin
+          if (sign) begin
+            res.exp  = single ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
+            res.frac = '1;
+          end else begin
+            res.exp  = single ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
+            res.frac = '0;
+          end
+        end
+        default: ;
+      endcase
+    end
+    return res;
   endfunction
 
   function automatic logic check_file_exist(string name);
@@ -5499,10 +5571,6 @@ module fadd (
   } faligned_t;
 
 
-  `define EXP_INF_S 8'hff
-  `define EXP_INF_D 11'h7ff
-  `define EXP_MAX_S 8'hfe
-  `define EXP_MAX_D 11'h7fe
   `define max_exp(single) (single ? 13'sd254 : 13'sd2046)
 
   //-----------------
@@ -5654,13 +5722,10 @@ module fadd (
     // do round
     logic [51:0] frac;
     logic signed [12:0] exp;
-    logic overflow;
-    logic G, R, S, L;
-    logic rnd, sign;
-    fpacked_t res;
+    logic sign, G, R, S, L;
+    fnorm_t rnd;
+    fpacked_t res = '{default: 0};
     sign = norm.sign;
-    res = '0;
-    rnd = 0;
     S = norm.sticky;
     if (single_i) begin
       {L, G, R} = norm.manti[40:38];
@@ -5670,72 +5735,13 @@ module fadd (
       S = (|norm.manti[8:0]) | norm.sticky;
     end
 
-    unique case (rm)
-      RNE: rnd = G & (L | R | S);
-      RTZ: rnd = 0;
-      RDN: rnd = norm.sign & (G | R | S);
-      RUP: rnd = ~norm.sign & (G | R | S);
-      RMM: rnd = G;
-      default: ;
-    endcase
-    `LOGI($sformatf("G:%b R:%b S:%b L:%b rnd:%b", G, R, S, L, rnd));
-    res.flags.nx = G | R | S;
-
     frac = single_i ? {29'b0, norm.manti[62:40]} : norm.manti[62:11];
     exp = norm.exp;
-    `LOGI($sformatf("frac:%h norm:%h", frac, norm.manti));
+    rnd = fround(single_i, sign, exp, frac, frm_e'(rm_i), {G, R, S});
 
-    if (rnd) begin
-      res.flags.nx = 1;
-      overflow = single_i ? frac[22:0] == `ONES(23) : frac == `ONES(52);
-      if (overflow) begin
-        exp += 1;
-        frac = '0;
-      end else begin
-        frac += 1;
-      end
-    end
-
-    if (exp > `fp_emax(single_i)) begin
-      res.flags.of = 1;
-      res.flags.nx = 1;
-      unique case (rm)
-        RNE, RMM: begin
-          exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-          frac = '0;
-          res.flags.of = 1;
-        end
-        RTZ: begin
-          exp  = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-          frac = '1;
-        end
-        RDN: begin
-          if (norm.sign) begin
-            exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-            frac = '0;
-            res.flags.of = 1;
-          end else begin
-            exp  = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-            frac = '1;
-          end
-        end
-        RUP: begin
-          if (norm.sign) begin
-            exp  = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-            frac = '1;
-          end else begin
-            exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-            frac = '0;
-            res.flags.of = 1;
-          end
-        end
-        default: ;
-      endcase
-    end
-
-    `LOGI($sformatf("s:%b e:%0d f:%h", norm.sign, exp, frac));
-    res.flags.uf = (res.flags.nx && exp == 0);
-    res.result   = `fp_pack(single_i, norm.sign, exp, frac);
+    rnd.flags.uf = (rnd.flags.nx && exp == 0);
+    res.flags = rnd.flags;
+    res.result = `fp_pack(single_i, rnd.sign, rnd.exp, rnd.frac);
     return res;
   endfunction
 
@@ -5876,11 +5882,12 @@ module fmul (
     return res;
   endfunction
 
-  function automatic fmul_t normalize(fmul_t v);
-    fmul_t res;
-    logic L, G, R, S, rndup, tiny;
+  function automatic fnorm_t normalize(fmul_t v);
+    fnorm_t res;
+    logic G, R, S, rndup, tiny;
     logic signed [12:0] exp;
     logic [105:0] manti;
+    logic [51:0] frac;
     int lz = clz(v.manti);
     exp = v.exp - 13'(lz);
     manti = v.manti << lz;
@@ -5902,94 +5909,30 @@ module fmul (
     end
 
     if (single_i) begin
-      L = manti[82];
-      G = manti[81];
-      R = manti[80];
+      {G, R} = manti[81:80];
       S = (|manti[79:0]) | S;
+      frac = {29'b0, manti[104:82]};
     end else begin
-      L = manti[53];
-      G = manti[52];
-      R = manti[51];
+      {G, R} = manti[52:51];
       S = (|manti[50:0]) | S;
+      frac = manti[104:53];
     end
 
-    res.exp = exp;
-    res.sign = v.sign;
-    rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
-    res.flags.nx = (G | R | S);
+    res = fround(single_i, v.sign, exp, frac, frm_e'(rm_i), {G, R, S});
     if (tiny && res.flags.nx) begin
       res.flags.uf = 1;
     end
-    if (rndup) begin
-      if (single_i) begin
-        if (manti[104:82] == `ONES(23)) begin
-          res.manti = {1'b1, 105'b0};
-          res.exp += 13'sd1;
-        end else begin
-          manti[105:82] += 1;
-          res.manti = manti;
-        end
-      end else begin
-        if (manti[104:53] == `ONES(52)) begin
-          res.manti = {1'b1, 105'b0};
-          res.exp += 13'sd1;
-        end else begin
-          manti[105:53] += 1;
-          res.manti = manti;
-        end
-      end
-    end else begin
-      res.manti = manti;
-    end
-    if (res.exp == 13'sd0) begin
+    if (res.exp == '0) begin
       res.flags.uf = G | R | S;
     end
-
-    if (res.exp > `fp_emax(single_i)) begin
-      res.flags.of = 1;
-      res.flags.nx = 1;
-      unique case (rm_i)
-        RNE, RMM: begin
-          res.exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-          res.manti = '0;
-          res.flags.of = 1;
-        end
-        RTZ: begin
-          res.exp   = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-          res.manti = '1;
-        end
-        RDN: begin
-          if (v.sign) begin
-            res.exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-            res.manti = '0;
-            res.flags.of = 1;
-          end else begin
-            res.exp   = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-            res.manti = '1;
-          end
-        end
-        RUP: begin
-          if (v.sign) begin
-            res.exp   = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-            res.manti = '1;
-          end else begin
-            res.exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-            res.manti = '0;
-            res.flags.of = 1;
-          end
-        end
-        default: ;
-      endcase
-    end
-
-    `LOGI($sformatf("s:%b e:%0d m=%h", res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:%h", res.sign, res.exp, res.frac));
     return res;
   endfunction
 
-  function automatic fpacked_t pack(fmul_t v);
+  function automatic fpacked_t pack(fnorm_t v);
     fpacked_t res;
-    res.result = single_i ? {32'hffff_ffff, v.sign, v.exp[7:0], v.manti[104:82]} : {v.sign, v.exp[10:0], v.manti[104:53]};
-    res.flags = v.flags;
+    res.result = `fp_pack(single_i, v.sign, v.exp, v.frac);
+    res.flags  = v.flags;
     return res;
   endfunction
 
@@ -5999,7 +5942,8 @@ module fmul (
 
   always_comb begin
     funpack_t u1, u2;
-    fmul_t mult, norm;
+    fmul_t mult;
+    fnorm_t norm;
     fpacked_t pcked;
     if (valid) begin
       unique case (state)
@@ -6136,90 +6080,23 @@ module fdiv (
     return res;
   endfunction
 
-  function automatic fdiv_t normalize(fdiv_t v);
-    fdiv_t res = '{default: 0, sign: v.sign};
-    logic [52:0] manti;
-    logic G, R, S, L, overflow, tiny;
-    logic rndup;
-    logic [12:0] exp;
+  function automatic fnorm_t normalize(fdiv_t v);
+    fnorm_t res = '{default: 0};
 
-    L = v.manti[0];
-    G = v.grs.G;
-    R = v.grs.R;
-    S = v.grs.S;
-
-    rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
-    exp = 13'(v.exp);
-    res.exp = v.exp;
-    manti = v.manti;
-    if (rndup) begin
-      overflow = single_i ? manti[22:0] == `ONES(23) : manti[51:0] == `ONES(52);
-      if (overflow) begin
-        res.manti = single_i ? {29'b0, 1'b1, 23'b0} : {1'b1, 52'b0};
-        exp = v.exp + 13'd1;
-        res.exp = exp;
-      end else begin
-        manti = v.manti + 53'd1;
-        res.manti = manti;
-      end
-    end else begin
-      res.manti = v.manti;
-    end
-
-    // flags
-    res.flags.nx = (G | R | S);
+    res = fround(single_i, v.sign, v.exp, v.manti[51:0], frm_e'(rm_i), v.grs);
     if (v.tiny && res.flags.nx) begin
       res.flags.uf = 1;
     end
     if (res.exp == 0) begin
       res.flags.uf = res.flags.nx;
     end
-
-    if (exp > `fp_emax(single_i)) begin
-      res.flags.of = 1;
-      res.flags.nx = 1;
-      unique case (rm_i)
-        RNE, RMM: begin
-          res.exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-          res.manti = '0;
-          res.flags.of = 1;
-        end
-        RTZ: begin
-          res.exp   = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-          res.manti = '1;
-        end
-        RDN: begin
-          if (v.sign) begin
-            res.exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-            res.manti = '0;
-            res.flags.of = 1;
-          end else begin
-            res.exp   = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-            res.manti = '1;
-          end
-        end
-        RUP: begin
-          if (v.sign) begin
-            res.exp   = single_i ? 13'({'0, `EXP_MAX_S}) : 13'({'0, `EXP_MAX_D});
-            res.manti = '1;
-          end else begin
-            res.exp = single_i ? 13'({'0, `EXP_INF_S}) : 13'({'0, `EXP_INF_D});
-            res.manti = '0;
-            res.flags.of = 1;
-          end
-        end
-        default: ;
-      endcase
-    end
-
-    // res.flags.uf = (res.flags.nx && exp == 0);
-    `LOGI($sformatf("rnd:%b s:%b e:%0d m:%h", rndup, res.sign, res.exp, res.manti));
+    `LOGI($sformatf("s:%b e:%0d m:%h", res.sign, res.exp, res.frac));
     return res;
   endfunction
 
-  function automatic fpacked_t pack(fdiv_t v);
+  function automatic fpacked_t pack(fnorm_t v);
     fpacked_t res = '{default: 0};
-    res.result = `fp_pack(single_i, v.sign, v.exp, v.manti);
+    res.result = `fp_pack(single_i, v.sign, v.exp, v.frac);
     res.flags  = v.flags;
     return res;
   endfunction
@@ -6231,7 +6108,7 @@ module fdiv (
 
   always_comb begin
     funpack_t u1, u2, p1, p2;
-    fdiv_t norm;
+    fnorm_t norm;
     fpacked_t pcked;
 
     // div
@@ -6242,7 +6119,6 @@ module fdiv (
     logic [12:0] lz;
     int cnt;
     fdiv_t dres;
-
 
     if (valid) begin
       unique case (state)
@@ -6826,8 +6702,9 @@ module fma (
 
   function automatic fnorm_t normalize(fadd_t v);
     fnorm_t res = '{default: 0};
+    ffrac_t frac;
     logic s = v.sticky;
-    logic G, R, S, L, rndup, tiny;
+    logic G, R, S, tiny;
     int lz;
     logic [12:0] max_e = single_i ? 13'd255 : 13'd2047;
 
@@ -6861,7 +6738,6 @@ module fma (
         v.manti = v.manti << lz;
       end
 
-      `LOGI($sformatf("exp:%0d", v.exp));
       tiny = 0;
       if (v.exp <= 0) begin
         if ((v.sign && rm_i == RDN) || (!v.sign && rm_i == RUP)) begin
@@ -6877,69 +6753,17 @@ module fma (
       end
 
       if (single_i) begin
-        L = v.manti[85];
+        frac = {29'b0, v.manti[107:85]};
         G = v.manti[84];
         R = v.manti[83];
         S = (|v.manti[82:0]) | s;
       end else begin
-        L = v.manti[56];
+        frac = v.manti[107:56];
         G = v.manti[55];
         R = v.manti[54];
         S = s | (|v.manti[53:0]);
       end
-
-      rndup = frndup(G, R, S, L, v.sign, frm_e'(rm_i));
-      res.flags.nx = G | R | S;
-      res.sign = v.sign;
-      res.frac = single_i ? {`ONES(29), v.manti[107:85]} : v.manti[107:56];
-
-      `LOGW($sformatf("rndup:%b frac:%h", rndup, res.frac));
-      if (rndup) begin
-        if (res.frac == `ONES(52)) begin
-          res.frac = '0;
-          v.exp += 13'sd1;
-        end else begin
-          res.frac += 52'd1;
-        end
-      end
-
-      res.exp = v.exp[10:0];
-      if (v.exp > `fp_emax(single_i)) begin
-        res.flags.of = 1;
-        res.flags.nx = 1;
-        unique case (rm_i)
-          RNE, RMM: begin
-            res.exp = single_i ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
-            res.frac = '0;
-            res.flags.of = 1;
-          end
-          RTZ: begin
-            res.exp  = single_i ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
-            res.frac = '1;
-          end
-          RDN: begin
-            if (v.sign) begin
-              res.exp = single_i ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
-              res.frac = '0;
-              res.flags.of = 1;
-            end else begin
-              res.exp  = single_i ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
-              res.frac = '1;
-            end
-          end
-          RUP: begin
-            if (v.sign) begin
-              res.exp  = single_i ? 11'({'0, `EXP_MAX_S}) : 11'({'0, `EXP_MAX_D});
-              res.frac = '1;
-            end else begin
-              res.exp = single_i ? 11'({'0, `EXP_INF_S}) : 11'({'0, `EXP_INF_D});
-              res.frac = '0;
-              res.flags.of = 1;
-            end
-          end
-          default: ;
-        endcase
-      end
+      res = fround(single_i, v.sign, v.exp, frac, frm_e'(rm_i), {G, R, S});
     end
     if ((tiny && res.flags.nx) || res.exp == 11'b0) begin
       res.flags.uf = res.flags.nx;
