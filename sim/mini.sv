@@ -21,6 +21,7 @@
 `define LOGW(msg) $display("%s[W|%9t|%m.%0d] %s%s", `COLOR_YELLOW, $realtime, `__LINE__, msg, `COLOR_NONE)
 `define LOGE(msg) $display("%s[E|%9t|%m.%0d] %s%s", `COLOR_RED, $realtime, `__LINE__, msg, `COLOR_NONE)
 
+typedef logic [63:0] reg_t;
 //-------------------------------------
 // Testbench
 //-------------------------------------
@@ -73,6 +74,8 @@ module mini (
   input logic clk,
   input logic rst_n
 );
+  always_comb begin
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
