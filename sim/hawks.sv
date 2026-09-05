@@ -5900,7 +5900,7 @@ module fmul (
       end else if (exp <= 0) begin
         exp = exp - 1;
         S = `OR_NBITS(manti, -exp);
-        tiny = single_i ? manti[104:81] != `ONES(24) : manti[104:52] != `ONES(53);
+        tiny = single_i ? manti[104:81] != '1 : manti[104:52] != '1;
         manti = manti >> -exp;
         manti[0] |= S;
         exp = '0;
@@ -6164,7 +6164,7 @@ module fdiv (
           sticky = |holder;
           tiny = 0;
           if ($signed(dres.exp) <= 0) begin
-            tiny = single_i ? quotient[23:1] != `ONES(23) : quotient[53:1] != `ONES(53);
+            tiny = single_i ? quotient[23:1] != '1 : quotient[53:1] != '1;
             sticky |= `OR_NBITS(quotient, -$signed(dres.exp) + 1);
             quotient = quotient >> -$signed(dres.exp) + 1;
             dres.exp = '0;
@@ -6733,12 +6733,12 @@ module fma (
       tiny = 0;
       if (v.exp <= 0) begin
         if ((v.sign && rm_i == RDN) || (!v.sign && rm_i == RUP)) begin
-          tiny = single_i ? &v.manti[107:85] != 1'b1 : &v.manti[107:56] != 1'b1;
+          tiny = single_i ? v.manti[107:85] != '1 : v.manti[107:56] != '1;
           if (tiny) begin
             tiny = single_i ? (|v.manti[84:0]) : (|v.manti[55:0]);
           end
         end else begin
-          tiny = single_i ? &v.manti[107:84] != 1'b1 : &v.manti[107:55] != 1'b1;
+          tiny = single_i ? v.manti[107:84] != '1 : v.manti[107:55] != '1;
         end
         v.manti = v.manti >> (1 - v.exp);
         v.exp   = '0;
@@ -6921,7 +6921,7 @@ module fcvt (
 
   function automatic fconvert_t d2s();
     fconvert_t res = '{default: 0};
-    logic signed [11:0] exp = {1'b0, op1_i[62:52]};
+    logic signed [12:0] exp = {2'b0, op1_i[62:52]};
     logic [22:0] frac = op1_i[51:29];
     logic [52:0] manti = {1'b1, op1_i[51:0]};
     logic G, R, S, L, rndup, s;
@@ -6936,8 +6936,8 @@ module fcvt (
     end else if (attr_i.NAN) begin
       res.flags.nv = attr_i.SNAN;
       res.result   = `FP_CQNAN(1);
-    end else if (exp < -12'sd126) begin
-      exp = -12'sd127 - exp;
+    end else if (exp < -13'sd126) begin
+      exp = -13'sd127 - exp;
       s = `OR_NBITS(manti, exp);
       manti = manti >> exp;
       L = manti[30];
@@ -6949,48 +6949,48 @@ module fcvt (
       exp = '0;
       rndup = frndup(G, R, S, L, op1_i[63], frm_e'(rm_i));
       if (rndup) begin
-        if (manti[52:30] == `ONES(23)) begin
-          exp += 12'sd1;
+        if (manti[52:30] == '1) begin
+          exp += 13'sd1;
           manti = '0;
         end else begin
-          manti[52:30] += 23'd1;
+          manti[52:30] += 1;
         end
       end
       res.flags.nx = G | R | S;
       res.flags.uf = (exp == '0 && res.flags.nx);
       res.result   = {`ONES(32), op1_i[63], exp[7:0], manti[52:30]};
-    end else if (exp > 12'sd127) begin
+    end else if (exp > 13'sd127) begin
       // res.result   = {`ONES(32), op1_i[63], 8'hff, 23'b0};
-      exp += 12'd127;
-      if (exp > 12'sd254) begin
+      exp += 13'd127;
+      if (exp > 13'sd254) begin
         res.flags.of = 1;
         res.flags.nx = 1;
         unique case (rm_i)
           RNE, RMM: begin
-            exp = 12'({'0, `EXP_INF_S});
+            exp = `fp_einf(1);
             frac = '0;
             res.flags.of = 1;
           end
           RTZ: begin
-            exp  = 12'({'0, `EXP_MAX_S});
+            exp  = `fp_emax(1);
             frac = '1;
           end
           RDN: begin
             if (sign) begin
-              exp = 12'({'0, `EXP_INF_S});
+              exp = `fp_einf(1);
               frac = '0;
               res.flags.of = 1;
             end else begin
-              exp  = 12'({'0, `EXP_MAX_S});
+              exp  = `fp_emax(1);
               frac = '1;
             end
           end
           RUP: begin
             if (sign) begin
-              exp  = 12'({'0, `EXP_MAX_S});
+              exp  = `fp_emax(1);
               frac = '1;
             end else begin
-              exp = 12'({'0, `EXP_INF_S});
+              exp = `fp_einf(1);
               frac = '0;
               res.flags.of = 1;
             end
@@ -7005,49 +7005,49 @@ module fcvt (
       G = op1_i[28];
       R = op1_i[27];
       S = |op1_i[26:0];
-      exp += 12'd127;
+      exp += 13'd127;
 
       rndup = frndup(G, R, S, L, op1_i[63], frm_e'(rm_i));
       if (rndup) begin
-        if (frac == `ONES(23)) begin
+        if (frac == '1) begin
           frac = '0;
           exp += 1;
         end else begin
-          frac += 23'd1;
+          frac += 1;
         end
       end
       res.flags.nx = G | S;
-      res.flags.of = exp > 12'd254;
+      res.flags.of = exp > 13'sd254;
 
-      if (exp > 12'sd254) begin
+      if (exp > 13'sd254) begin
         res.flags.of = 1;
         res.flags.nx = 1;
         unique case (rm_i)
           RNE, RMM: begin
-            exp = 12'({'0, `EXP_INF_S});
+            exp = `fp_einf(1);
             frac = '0;
             res.flags.of = 1;
           end
           RTZ: begin
-            exp  = 12'({'0, `EXP_MAX_S});
+            exp  = `fp_emax(1);
             frac = '1;
           end
           RDN: begin
             if (sign) begin
-              exp = 12'({'0, `EXP_INF_S});
+              exp = `fp_einf(1);
               frac = '0;
               res.flags.of = 1;
             end else begin
-              exp  = 12'({'0, `EXP_MAX_S});
+              exp  = `fp_emax(1);
               frac = '1;
             end
           end
           RUP: begin
             if (sign) begin
-              exp  = 12'({'0, `EXP_MAX_S});
+              exp  = `fp_emax(1);
               frac = '1;
             end else begin
-              exp = 12'({'0, `EXP_INF_S});
+              exp = `fp_einf(1);
               frac = '0;
               res.flags.of = 1;
             end
@@ -7097,7 +7097,7 @@ module fcvt (
 
       rndup = frndup(G, R, S, L, sign, frm_e'(rm_i));
       if (rndup) begin
-        if (frac == `ONES(52)) begin
+        if (frac == '1) begin
           frac = '0;
           exp += 1;
         end else begin
