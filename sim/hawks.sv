@@ -6940,11 +6940,8 @@ module fcvt (
       exp = -13'sd127 - exp;
       s = `OR_NBITS(manti, exp);
       manti = manti >> exp;
-      L = manti[30];
-      G = manti[29];
-      R = manti[28];
-      S = |manti[27:0];
-      S = S | s;
+      {L, G, R} = manti[30:28];
+      S = (|manti[27:0]) | s;
 
       exp = '0;
       rndup = frndup(G, R, S, L, op1_i[63], frm_e'(rm_i));
@@ -6967,9 +6964,8 @@ module fcvt (
         res.flags.nx = 1;
         unique case (rm_i)
           RNE, RMM: begin
-            exp = `fp_einf(1);
+            exp  = `fp_einf(1);
             frac = '0;
-            res.flags.of = 1;
           end
           RTZ: begin
             exp  = `fp_emax(1);
@@ -6977,9 +6973,8 @@ module fcvt (
           end
           RDN: begin
             if (sign) begin
-              exp = `fp_einf(1);
+              exp  = `fp_einf(1);
               frac = '0;
-              res.flags.of = 1;
             end else begin
               exp  = `fp_emax(1);
               frac = '1;
@@ -6990,9 +6985,8 @@ module fcvt (
               exp  = `fp_emax(1);
               frac = '1;
             end else begin
-              exp = `fp_einf(1);
+              exp  = `fp_einf(1);
               frac = '0;
-              res.flags.of = 1;
             end
           end
           default: ;
@@ -7001,9 +6995,7 @@ module fcvt (
       res.result = {`ONES(32), op1_i[63], exp[7:0], frac};
     end else begin
       //normal data
-      L = op1_i[29];
-      G = op1_i[28];
-      R = op1_i[27];
+      {L, G, R} = op1_i[29:27];
       S = |op1_i[26:0];
       exp += 13'd127;
 
@@ -7024,9 +7016,8 @@ module fcvt (
         res.flags.nx = 1;
         unique case (rm_i)
           RNE, RMM: begin
-            exp = `fp_einf(1);
+            exp  = `fp_einf(1);
             frac = '0;
-            res.flags.of = 1;
           end
           RTZ: begin
             exp  = `fp_emax(1);
@@ -7034,9 +7025,8 @@ module fcvt (
           end
           RDN: begin
             if (sign) begin
-              exp = `fp_einf(1);
+              exp  = `fp_einf(1);
               frac = '0;
-              res.flags.of = 1;
             end else begin
               exp  = `fp_emax(1);
               frac = '1;
@@ -7047,9 +7037,8 @@ module fcvt (
               exp  = `fp_emax(1);
               frac = '1;
             end else begin
-              exp = `fp_einf(1);
+              exp  = `fp_einf(1);
               frac = '0;
-              res.flags.of = 1;
             end
           end
           default: ;
@@ -7083,15 +7072,11 @@ module fcvt (
       val = val << (lz + 1);
       if (single_i) begin
         frac = {`ONES(29), val[63:41]};
-        L = val[41];
-        G = val[40];
-        R = val[39];
+        {L, G, R} = val[41:39];
         S = |val[38:0];
       end else begin
         frac = val[63:12];
-        L = val[12];
-        G = val[11];
-        R = val[10];
+        {L, G, R} = val[12:10];
         S = |val[9:0];
       end
 
@@ -7177,9 +7162,7 @@ module fcvt (
       end
       data = (shift > 0 ? data >> shift : data << -shift);
       ires = data[65:2];
-      L = data[2];
-      G = data[1];
-      R = data[0];
+      {L, G, R} = data[2:0];
 
       rndup = frndup(G, R, S, L, fsign, frm_e'(rm_i));
       res.flags.nx = G | R | S;
