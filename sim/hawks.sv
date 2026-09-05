@@ -934,7 +934,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(18880000)
+    .COUNTER(64'd999999999999)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -963,17 +963,18 @@ endmodule
 // clock gen
 //-------------------------------------
 module clkgen #(
-  parameter COUNTER = 10
+  parameter longint unsigned COUNTER = 64'd10
 ) (
   output logic clk,
   output logic rst_n,
   output logic rtc_o
 );
+  longint unsigned i;
   initial begin
     clk   = 0;
     rst_n = 0;
     #2 rst_n = 1;
-    repeat (COUNTER) @(negedge clk);
+    for (i = 0; i < COUNTER; i++) @(negedge clk);
     #0.5 rst_n = 0;
     $write($sformatf("%sTIMEOUT%s", `COLOR_YELLOW, `COLOR_NONE));
     #0.1 $finish;
@@ -3666,7 +3667,7 @@ endmodule
 //------------------------------------
 module sram #(
   parameter logic DATAONLY = 0,
-  parameter int unsigned CAPS_IN_BYTES = 8 * MB
+  parameter int unsigned CAPS_IN_BYTES = 254 * MB
 ) (
   input logic clk,
   input logic rst_n,
@@ -5741,7 +5742,7 @@ module fadd (
     exp = norm.exp;
     rnd = fround(single_i, sign, exp, frac, frm_e'(rm_i), {G, R, S});
 
-    rnd.flags.uf = (rnd.flags.nx && exp == 0);
+    rnd.flags.uf = (rnd.flags.nx && rnd.exp == 0);
     res.flags = rnd.flags;
     res.result = `fp_pack(single_i, rnd.sign, rnd.exp, rnd.frac);
     return res;
@@ -5843,7 +5844,7 @@ module fmul (
     res.valid = 1;
     sign = single_i ? v1[31] ^ v2[31] : v1[63] ^ v2[63];
 
-    `LOGW($sformatf("a1:%b a2:%b", a1, a2));
+    `LOGW($sformatf("fmul v:%h %h a:%b %b", v1, v2, a1, a2));
     if (a1.SNAN || a2.SNAN) begin
       res.result   = `FP_CQNAN(single_i);
       res.flags.nv = 1;
