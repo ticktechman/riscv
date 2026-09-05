@@ -461,6 +461,13 @@ package hawks;
     M_MACHINE = 2'b11
   } priviledge_e;
 
+  typedef enum logic [1:0] {
+    FS_OFF   = 2'b00,
+    FS_INIT  = 2'b01,
+    FS_CLEAN = 2'b10,
+    FS_DIRTY = 2'b11
+  } fpu_status_e;
+
   typedef struct packed {
     logic         SD;              // [63] Dirty state
     logic [62:43] reserved_62_43;  // [62:43] WPRI
@@ -3667,7 +3674,7 @@ endmodule
 //------------------------------------
 module sram #(
   parameter logic DATAONLY = 0,
-  parameter int unsigned CAPS_IN_BYTES = 254 * MB
+  parameter int unsigned CAPS_IN_BYTES = 8 * MB
 ) (
   input logic clk,
   input logic rst_n,
@@ -4391,7 +4398,7 @@ module csr (
     if (commit_i) begin
       status = mstatus;
       if (fpr_write_i) begin
-        status.FS = 2'b11;
+        status.FS = FS_DIRTY;
         status.SD = 1'b1;
       end
       if (exc_fired_i) begin
