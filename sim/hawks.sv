@@ -5144,7 +5144,7 @@ module scoreboard (
 endmodule
 
 //------------------------------------
-// fpu related modules
+// floating point registers
 //------------------------------------
 module fpr (
   input logic clk,
@@ -5909,11 +5909,11 @@ module fmul (
 
     if (single_i) begin
       {G, R} = manti[81:80];
-      S = (|manti[79:0]) | S;
+      S |= (|manti[79:0]);
       frac = {29'b0, manti[104:82]};
     end else begin
       {G, R} = manti[52:51];
-      S = (|manti[50:0]) | S;
+      S |= (|manti[50:0]);
       frac = manti[104:53];
     end
 
@@ -6210,7 +6210,7 @@ module fdiv (
 endmodule
 
 //------------------------------------
-// fsqrt
+// FPU square root
 //------------------------------------
 module fsqrt (
   input logic clk,
@@ -6413,8 +6413,8 @@ module fsqrt (
         // adjustment root
         if (rem[MP-1]) begin
           root = root - (MP'(1) << 3);
-          `LOGW($sformatf("adjust root to:%h", root));
           root_adj = 1;
+          `LOGW($sformatf("adjust root to:%h", root));
         end
 
         // normalize
@@ -6478,7 +6478,7 @@ module fsqrt (
 endmodule
 
 //------------------------------------
-// fma
+// FPU multiply & add
 //------------------------------------
 module fma (
   input logic clk,
@@ -6822,7 +6822,7 @@ module fma (
 endmodule
 
 //------------------------------------
-// mv
+// move data between GPR and FPR
 //------------------------------------
 module fmv (
   input  logic clk,
@@ -6861,7 +6861,7 @@ module fmv (
 endmodule
 
 //------------------------------------
-// convert
+// FPU convert data to or from float and integer
 //------------------------------------
 module fcvt (
   input logic clk,
@@ -7252,7 +7252,7 @@ module fcvt (
 endmodule
 
 //------------------------------------
-// min max
+// FPU min max
 //------------------------------------
 module fmax (
   input logic clk,
@@ -7344,7 +7344,7 @@ module fmax (
 endmodule
 
 //------------------------------------
-// fclass
+// FPU classify data types
 //------------------------------------
 module fclass (
   input logic clk,
@@ -7411,7 +7411,7 @@ module fclass (
 endmodule
 
 //------------------------------------
-// fsgnj
+// FPU sign injection
 //------------------------------------
 module fsgnj (
   input logic clk,
@@ -7465,7 +7465,7 @@ module fsgnj (
 endmodule
 
 //------------------------------------
-// float compare
+// FPU compare
 //------------------------------------
 module fcmp (
   input logic clk,
