@@ -8,7 +8,7 @@
 ###############################################################################
 .PHONY: all build test install doc hawks
 
-HEX_FILES := $(wildcard $(CURDIR)/riscv-tests/*.hex | sort)
+HEX_FILES := $(wildcard $(CURDIR)/../software/riscv-tests/hawks/*.hex | sort)
 HEX_FPU := $(shell find fpu-test/testcases/build -name *.hex | sort)
 
 HAWKS_FLAGS = -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary
@@ -36,7 +36,7 @@ hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.fpu: $(HEX_FPU:.hex=.fputest)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="./fpu-test/testcases/build/rup/f64_add"
+	@$< +verilator+quiet +elf="../software/riscv-tests/hawks/rv64uc-p-rvc"
 
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(shell basename $@)
@@ -48,7 +48,7 @@ obj_dir/hawks: hawks.sv hawks.cpp
 
 %.run: obj_dir/hawks
 	@printf "%28s" "$(shell basename $*): "
-	-@obj_dir/hawks +verilator+quiet +elf="riscv-tests/$(shell basename $*)"
+	-@obj_dir/hawks +verilator+quiet +elf="../software/riscv-tests/hawks/$(shell basename $*)"
 
 $(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
