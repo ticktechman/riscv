@@ -39,16 +39,16 @@ hawks.one: obj_dir/hawks
 	@$< +verilator+quiet +elf="../software/riscv-tests/hawks/rv64uc-p-rvc"
 
 obj_dir/hawks: hawks.sv hawks.cpp
-	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(shell basename $@)
+	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(notdir $@)
 
 
 %.fputest: obj_dir/hawks
 	@printf "%45s " "$(patsubst %.fputest,%,$@): "
-	-@obj_dir/hawks +verilator+quiet +elf="$(patsubst %.fputest,%,$@)"
+	-@obj_dir/hawks +verilator+quiet +elf="$*"
 
 %.run: obj_dir/hawks
-	@printf "%28s" "$(shell basename $*): "
-	-@obj_dir/hawks +verilator+quiet +elf="../software/riscv-tests/hawks/$(shell basename $*)"
+	@printf "%28s" "$(notdir $*): "
+	-@obj_dir/hawks +verilator+quiet +elf="$*"
 
 $(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
