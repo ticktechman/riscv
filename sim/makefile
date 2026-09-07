@@ -31,6 +31,14 @@ SIM = obj_dir/Vtop
 
 all: $(SIM)
 
+#------------------
+# linux
+linux: obj_dir/linux
+	@$< +verilator+quiet +elf="./isa/sbi"
+
+obj_dir/linux: hawks.sv hawks.cpp
+	@verilator $(HAWKS_FLAGS) --trace $^ --top-module linux -o $(notdir $@)
+#------------------
 
 hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)

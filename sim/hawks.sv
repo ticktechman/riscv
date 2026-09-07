@@ -941,7 +941,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(64'd999999999999)
+    .COUNTER(64'd9999999)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -962,6 +962,104 @@ module top ();
     .rst_n(rst_n),
     .halt_i(halt),
     .intr_o(intr)
+  );
+
+endmodule
+
+//------------------------------------
+// linux environment
+//  - memory map
+//  - xbar
+//  - clkgen
+//  - cpu core
+//  - clint & plic
+//  - sram
+//  - uart
+//------------------------------------
+module linux ();
+  logic clk, rst_n, rtc, halt;
+
+  // for opensbi + linux + busybox
+  mmap_t linux_mmap[4] = '{
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8fff_ffff)},  // sram
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
+  };
+  initial begin
+    $timeformat(-9, 3, "", 9);
+  end
+
+  memif master_ports[3] ();
+  memif slave_ports[4] ();
+
+  clkgen #(
+    .COUNTER(64'd99999999999999)
+  ) clock (
+    .clk(clk),
+    .rst_n(rst_n),
+    .rtc_o(rtc)
+  );
+
+  xbar #(
+    .MAX_MASTER(3),
+    .MAX_SLAVE(4)
+  ) xbar1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mmapping(linux_mmap),
+    .masters(master_ports),
+    .slaves(slave_ports)
+  );
+
+  core core1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .intr_timer_i(itimer),
+    .intr_ext_i(intr[0]),
+    .mtime_i(timeval),
+    .halt_o(halt),
+    .ifetch_if(master_ports[0].master),
+    .ldst_if(master_ports[1].master),
+    .mmap_if(master_ports[2].master)
+  );
+
+  sram #(
+    .DATAONLY(0),
+    .CAPS_IN_BYTES(256 * MB)
+  ) sram2 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[0].slave)
+  );
+
+  reg_t timeval;
+  logic ipi, itimer;
+  clint clint1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[1]),
+    .rtc_i(rtc),
+    .time_o(timeval),
+    .timer_o(itimer),
+    .ipi_o(ipi)
+  );
+
+  logic [15:0] intr_src;
+  logic [1:0] intr;
+  plic plic1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .src_i(intr_src),
+    .intr_o(intr),
+    .mif(slave_ports[2])
+  );
+
+  uart8250 uart1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[3]),
+    .intr_o(intr_src[1])
   );
 
 endmodule
@@ -1002,20 +1100,8 @@ module soc (
   input  logic intr_i,
   output logic halt_o
 );
-
-  logic stage_ready[6];
-  logic btaken, ttaken;
-  wb_src_e wb_src;
-  reg_t wb_alu, wb_amo, wb_csr, wb_mem;
-  stage_e stage, exc_stage;
-  addr_t pc, btarget, ttarget;
-  instr_t instr;
-  id_t id_out;
-  exception_t exc[6];
-
   memif master_ports[MASTER_CNT] ();
   memif slave_ports[SLAVE_CNT] ();
-  regif rf ();
 
   import "DPI-C" function int elf_parse_mapping(
     input  string elf_path,
@@ -1041,7 +1127,10 @@ module soc (
     end
   end
 
-  xbar xbar1 (
+  xbar #(
+    .MAX_MASTER(MASTER_CNT),
+    .MAX_SLAVE(SLAVE_CNT)
+  ) xbar1 (
     .clk(clk),
     .rst_n(rst_n),
     .mmapping(maps),
@@ -1049,10 +1138,110 @@ module soc (
     .slaves(slave_ports)
   );
 
+  core core1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .intr_timer_i(itimer),
+    .intr_ext_i(intr[0]),
+    .mtime_i(timeval),
+    .halt_o(halt_o),
+    .ifetch_if(master_ports[0].master),
+    .ldst_if(master_ports[1].master),
+    .mmap_if(master_ports[2].master)
+  );
+
+  sram #(
+    .CAPS_IN_BYTES(12 * KB)
+  ) sram1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[0].slave)
+  );
+
+  scoreboard SB (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[1].slave)
+  );
+
+  sram #(
+    .DATAONLY(1)
+  ) sram2 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[2].slave)
+  );
+
+  reg_t timeval;
+  logic ipi, itimer;
+  clint clint1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[3]),
+    .rtc_i(rtc_i),
+    .time_o(timeval),
+    .timer_o(itimer),
+    .ipi_o(ipi)
+  );
+
+  logic [15:0] intr_src;
+  logic [1:0] intr;
+  plic plic1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .src_i(intr_src),
+    .intr_o(intr),
+    .mif(slave_ports[4])
+  );
+
+  igen igen1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .intr_o(intr_src[2]),
+    .mif(slave_ports[5])
+  );
+
+  uart8250 uart1 (
+    .clk(clk),
+    .rst_n(rst_n),
+    .mif(slave_ports[6]),
+    .intr_o(intr_src[1])
+  );
+
+endmodule
+
+//------------------------------------
+// cpu core: pipeline, mmu, csr, fpu, regfile
+//------------------------------------
+module core (
+  input  logic clk,
+  input  logic rst_n,
+  input  logic intr_timer_i,
+  input  logic intr_ext_i,
+  input  reg_t mtime_i,
+  output logic halt_o,
+
+  memif.master ifetch_if,
+  memif.master ldst_if,
+  memif.master mmap_if
+);
+
+  logic stage_ready[6];
+  logic btaken, ttaken;
+  wb_src_e wb_src;
+  reg_t wb_alu, wb_amo, wb_csr, wb_mem;
+  stage_e stage, exc_stage;
+  addr_t pc, btarget, ttarget;
+  instr_t instr;
+  id_t id_out;
+  exception_t exc[6];
+
+  regif rf ();
+
   ifu ifu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(master_ports[0].master),
+    .mif(ifetch_if),
     .mapif(imap.master),
     .valid(stage == STG_FETCH),
     .pc_i(pc),
@@ -1135,7 +1324,7 @@ module soc (
   lsu lsu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(master_ports[1].master),
+    .mif(ldst_if),
     .mapif(dmap.master),
     .valid(stage == STG_MEM),
     .ready_o(stage_ready[3]),
@@ -1173,7 +1362,7 @@ module soc (
   priviledge_e priv;
   logic tlb_invalid;
   logic exc_fired;
-  logic itimer, ipi, interrupted;
+  logic interrupted;
   logic halt;
   assign halt_o = halt;
   csr csr1 (
@@ -1199,10 +1388,10 @@ module soc (
     .fflags_i(fflags),
     .frm_o(frm),
     .fpr_write_i(id_out.fpr_write),
-    .time_i(timeval),
+    .time_i(mtime_i),
     .halt_o(halt),
-    .irq_timer_i(itimer),
-    .irq_ex_i(intr[0]),
+    .irq_timer_i(intr_timer_i),
+    .irq_ex_i(intr_ext_i),
     .interrupted_o(interrupted)
   );
 
@@ -1216,71 +1405,8 @@ module soc (
     .tlb_invalid_i(tlb_invalid),
     .imapif(imap.slave),
     .dmapif(dmap.slave),
-    .mif(master_ports[2].master)
+    .mif(mmap_if)
   );
-
-  // rom rom1 (
-  //   .clk(clk),
-  //   .rst_n(rst_n),
-  //   .mif(slave_ports[0].slave)
-  // );
-  sram #(
-    .CAPS_IN_BYTES(12 * KB)
-  ) sram1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .mif(slave_ports[0].slave)
-  );
-
-  scoreboard SB (
-    .clk(clk),
-    .rst_n(rst_n),
-    .mif(slave_ports[1].slave)
-  );
-
-  sram #(
-    .DATAONLY(1)
-  ) sram2 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .mif(slave_ports[2].slave)
-  );
-
-  reg_t timeval;
-  clint clint1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .mif(slave_ports[3]),
-    .rtc_i(rtc_i),
-    .time_o(timeval),
-    .timer_o(itimer),
-    .ipi_o(ipi)
-  );
-
-  logic [15:0] intr_src;
-  logic [1:0] intr;
-  plic plic1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .src_i(intr_src),
-    .intr_o(intr),
-    .mif(slave_ports[4])
-  );
-
-  igen igen1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .intr_o(intr_src[2]),
-    .mif(slave_ports[5])
-  );
-
-  uart8250 uart1 (
-    .clk(clk),
-    .rst_n(rst_n),
-    .mif(slave_ports[6]),
-    .intr_o(intr_src[1])
-  );
-
 
   // copy exception to exc[0]
   int idx;
@@ -1405,25 +1531,27 @@ module soc (
   end
 
 endmodule
-
 //------------------------------------
 // bus related types and module
 //------------------------------------
 // shared single channel crossbar
-module xbar (
+module xbar #(
+  parameter int unsigned MAX_MASTER = 3,
+  parameter int unsigned MAX_SLAVE = 7
+) (
   input logic clk,
   input logic rst_n,
-  input mmap_t mmapping[SLAVE_CNT],
-  memif.slave masters[MASTER_CNT],
-  memif.master slaves[SLAVE_CNT]
+  input mmap_t mmapping[MAX_SLAVE],
+  memif.slave masters[MAX_MASTER],
+  memif.master slaves[MAX_SLAVE]
 );
-  request_t mreq[MASTER_CNT];
-  response_t mrsp[MASTER_CNT];
-  request_t sreq[SLAVE_CNT];
-  response_t srsp[SLAVE_CNT];
+  request_t mreq[MAX_MASTER];
+  response_t mrsp[MAX_MASTER];
+  request_t sreq[MAX_SLAVE];
+  response_t srsp[MAX_SLAVE];
 
   generate
-    for (genvar m = 0; m < MASTER_CNT; m++) begin : master_flatten
+    for (genvar m = 0; m < MAX_MASTER; m++) begin : master_flatten
       assign mreq[m].valid = masters[m].valid;
       assign mreq[m].addr = masters[m].addr;
       assign mreq[m].we = masters[m].we;
@@ -1434,7 +1562,7 @@ module xbar (
       assign masters[m].rd = mrsp[m].rd;
     end
 
-    for (genvar s = 0; s < SLAVE_CNT; s++) begin : slave_flatten
+    for (genvar s = 0; s < MAX_SLAVE; s++) begin : slave_flatten
       assign slaves[s].valid = sreq[s].valid;
       assign slaves[s].addr = sreq[s].addr;
       assign slaves[s].we = sreq[s].we;
@@ -1447,7 +1575,7 @@ module xbar (
   endgenerate
 
   // choose one master
-  logic [MASTER_CNT-1:0] reqs;
+  logic [MAX_MASTER-1:0] reqs;
   int master_selected;
   always_comb begin
     reqs = '0;
@@ -3787,9 +3915,10 @@ module mmu (
   input priviledge_e priv_i,
   input satp_t       satp_i,
   input logic        tlb_invalid_i,
-        mmapingif    imapif,
-        mmapingif    dmapif,
-        memif.master mif
+
+  mmapingif    imapif,
+  mmapingif    dmapif,
+  memif.master mif
 );
 
   typedef enum {
