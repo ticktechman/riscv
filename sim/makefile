@@ -33,13 +33,16 @@ all: $(SIM)
 
 #------------------
 # linux
+#------------------
 linux: obj_dir/linux
 	@$< +verilator+quiet +elf="./isa/sbi"
 
 obj_dir/linux: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module linux -o $(notdir $@)
-#------------------
 
+#------------------
+# hawks dev
+#------------------
 hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.fpu: $(HEX_FPU:.hex=.fputest)
@@ -49,7 +52,6 @@ hawks.one: obj_dir/hawks
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(notdir $@)
 
-
 %.fputest: obj_dir/hawks
 	@printf "%45s " "$(patsubst %.fputest,%,$@): "
 	-@obj_dir/hawks +verilator+quiet +elf="$*"
@@ -57,6 +59,7 @@ obj_dir/hawks: hawks.sv hawks.cpp
 %.run: obj_dir/hawks
 	@printf "%28s" "$(notdir $*): "
 	-@obj_dir/hawks +verilator+quiet +elf="$*"
+#------------------
 
 $(SIM): $(SV_SRCS) main.cpp
 	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top

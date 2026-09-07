@@ -101,39 +101,6 @@ package hawks;
     longint unsigned END;
   } mmap_t;
 
-  // for opensbi + linux + busybox
-  // parameter mmap_t mapping[SLAVE_CNT] = '{
-  //     '{BASE: addr_t'('ha000_0000), END: addr_t'('ha000_0fff)},  // rom
-  //     '{BASE: addr_t'('ha000_1000), END: addr_t'('ha000_1fff)},  // tohost
-  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8fff_ffff)},  // sram
-  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
-  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
-  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
-  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
-  // };
-
-  // for normal dev and test
-  // parameter mmap_t mapping[SLAVE_CNT] = '{
-  //     '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},
-  //     '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},
-  //     '{BASE: addr_t'('h8000_2000), END: addr_t'('h8000_afff)},
-  //     '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},
-  //     '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},
-  //     '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},
-  //     '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}
-  // };
-
-  // fpu-test
-  parameter mmap_t mapping[SLAVE_CNT] = '{
-      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},  // rom
-      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},  // tohost
-      '{BASE: addr_t'('h8000_2000), END: addr_t'('h8fff_ffff)},  // sram
-      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
-      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
-      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
-      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
-  };
-
   // verilog_format: off
   typedef enum { S8, U8, S16, U16, S32, U32, F32, US64, F64 } datatype_e;
   // verilog_format: on
@@ -900,7 +867,7 @@ import hawks::*;
 //------------------------------------
 // interfaces
 //------------------------------------
-interface memif;
+interface xbar_intf;
   logic valid, ready, error, we;
   addr_t addr;
   datatype_e dtype;
@@ -910,14 +877,14 @@ interface memif;
   modport slave(output ready, error, rd, input valid, we, addr, dtype, wd);
 endinterface
 
-interface regif;
+interface reg_intf;
   logic [4:0] r1, r2, r3;
   reg_t v1, v2, v3;
   modport master(output r1, r2, r3, input v1, v2, v3);
   modport slave(input r1, r2, r3, output v1, v2, v3);
 endinterface
 
-interface mmapingif;
+interface mmaping_intf;
   logic valid, ready, error;
   logic [2:0] rwx;
   addr_t va, pa;
@@ -967,7 +934,7 @@ module top ();
 endmodule
 
 //------------------------------------
-// linux environment
+// linux environment(opensbi + linux + busybox)
 //  - memory map
 //  - xbar
 //  - clkgen
@@ -990,8 +957,8 @@ module linux ();
     $timeformat(-9, 3, "", 9);
   end
 
-  memif master_ports[3] ();
-  memif slave_ports[4] ();
+  xbar_intf master_ports[3] ();
+  xbar_intf slave_ports[4] ();
 
   clkgen #(
     .COUNTER(64'd99999999999999)
@@ -1019,9 +986,9 @@ module linux ();
     .intr_ext_i(intr[0]),
     .mtime_i(timeval),
     .halt_o(halt),
-    .ifetch_if(master_ports[0].master),
-    .ldst_if(master_ports[1].master),
-    .mmap_if(master_ports[2].master)
+    .ifetch_if(master_ports[0]),
+    .ldst_if(master_ports[1]),
+    .mmap_if(master_ports[2])
   );
 
   sram #(
@@ -1030,7 +997,7 @@ module linux ();
   ) sram2 (
     .clk(clk),
     .rst_n(rst_n),
-    .mif(slave_ports[0].slave)
+    .mif(slave_ports[0])
   );
 
   reg_t timeval;
@@ -1100,13 +1067,23 @@ module soc (
   input  logic intr_i,
   output logic halt_o
 );
-  memif master_ports[MASTER_CNT] ();
-  memif slave_ports[SLAVE_CNT] ();
+  xbar_intf master_ports[MASTER_CNT] ();
+  xbar_intf slave_ports[SLAVE_CNT] ();
 
   import "DPI-C" function int elf_parse_mapping(
     input  string elf_path,
     output mmap_t mapping [3]
   );
+
+  mmap_t mapping[SLAVE_CNT] = '{
+      '{BASE: addr_t'('h8000_0000), END: addr_t'('h8000_0fff)},  // rom
+      '{BASE: addr_t'('h8000_1000), END: addr_t'('h8000_1fff)},  // tohost
+      '{BASE: addr_t'('h8000_2000), END: addr_t'('h808f_ffff)},  // sram
+      '{BASE: addr_t'('h0200_0000), END: addr_t'('h0200_ffff)},  // clint
+      '{BASE: addr_t'('h0c00_0000), END: addr_t'('h0fff_ffff)},  // plic
+      '{BASE: addr_t'('h9000_0000), END: addr_t'('h9000_0fff)},  // igen
+      '{BASE: addr_t'('h9000_1000), END: addr_t'('h9000_1fff)}  // uart8250
+  };
 
   mmap_t maps[SLAVE_CNT] = '{default: 0};
   mmap_t elfmaps[3] = '{default: 0};
@@ -1165,7 +1142,8 @@ module soc (
   );
 
   sram #(
-    .DATAONLY(1)
+    .DATAONLY(1),
+    .CAPS_IN_BYTES(8 * MB)
   ) sram2 (
     .clk(clk),
     .rst_n(rst_n),
@@ -1221,9 +1199,9 @@ module core (
   input  reg_t mtime_i,
   output logic halt_o,
 
-  memif.master ifetch_if,
-  memif.master ldst_if,
-  memif.master mmap_if
+  xbar_intf.master ifetch_if,
+  xbar_intf.master ldst_if,
+  xbar_intf.master mmap_if
 );
 
   logic stage_ready[6];
@@ -1236,7 +1214,7 @@ module core (
   id_t id_out;
   exception_t exc[6];
 
-  regif rf ();
+  reg_intf rf ();
 
   ifu ifu1 (
     .clk(clk),
@@ -1285,7 +1263,7 @@ module core (
     .fif(fprif.master)
   );
 
-  regif fprif ();
+  reg_intf fprif ();
   fflags_t fflags;
   reg_t wb_fpu2gpr;
   reg_t wb_fpu2fpr;
@@ -1395,7 +1373,7 @@ module core (
     .interrupted_o(interrupted)
   );
 
-  mmapingif imap (), dmap ();
+  mmaping_intf imap (), dmap ();
   mmu mmu1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -1542,8 +1520,8 @@ module xbar #(
   input logic clk,
   input logic rst_n,
   input mmap_t mmapping[MAX_SLAVE],
-  memif.slave masters[MAX_MASTER],
-  memif.master slaves[MAX_SLAVE]
+  xbar_intf.slave masters[MAX_MASTER],
+  xbar_intf.master slaves[MAX_SLAVE]
 );
   request_t mreq[MAX_MASTER];
   response_t mrsp[MAX_MASTER];
@@ -1633,8 +1611,8 @@ endmodule
 module ifu (
   input logic clk,
   input logic rst_n,
-  memif.master mif,
-  mmapingif.master mapif,
+  xbar_intf.master mif,
+  mmaping_intf.master mapif,
 
   // instr fetch interface
   input  logic   valid,
@@ -1780,8 +1758,8 @@ module idu (
   input priviledge_e priv_i,
 
   // decode output
-  regif.master rif,
-  regif.master fif,
+  reg_intf.master rif,
+  reg_intf.master fif,
   output id_t id_o,
   output wb_src_e wb_src_o
 );
@@ -3102,23 +3080,24 @@ endmodule
 // - addr calc: ld/sd, branch/jal(r)
 //------------------------------------
 module exu (
-  input  logic        clk,
-  input  logic        rst_n,
-  input  logic        valid,
-  output logic        ready_o,
-  output exception_t  exc_o,
-  input  addr_t       pc_i,
-  input  id_t         id_i,
-  input  reg_t        op_amo_i,
-  output addr_t       btarget_o,
-  output logic        btaken_o,
-  output reg_t        wb_o,
-  output reg_t        wb_amo_o,
-  output addr_t       mem_addr_o,
-  output reg_t        mem_wd_o,
-  output reg_t        amo_wd_o,
-         regif.master rif,
-         regif.master fif
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic       valid,
+  output logic       ready_o,
+  output exception_t exc_o,
+  input  addr_t      pc_i,
+  input  id_t        id_i,
+  input  reg_t       op_amo_i,
+  output addr_t      btarget_o,
+  output logic       btaken_o,
+  output reg_t       wb_o,
+  output reg_t       wb_amo_o,
+  output addr_t      mem_addr_o,
+  output reg_t       mem_wd_o,
+  output reg_t       amo_wd_o,
+
+  reg_intf.master rif,
+  reg_intf.master fif
 );
   reg_t alu_result;
   reg_t wb, wb_amo, mem_wd, amo_wd;
@@ -3595,8 +3574,8 @@ endmodule
 module lsu (
   input logic clk,
   input logic rst_n,
-  memif.master mif,
-  mmapingif.master mapif,
+  xbar_intf.master mif,
+  mmaping_intf.master mapif,
 
   // common interface for each stage
   input  logic       valid,
@@ -3806,7 +3785,7 @@ module sram #(
 ) (
   input logic clk,
   input logic rst_n,
-  memif.slave mif
+  xbar_intf.slave mif
 );
   typedef logic [$clog2(CAPS_IN_BYTES)-1:0] idx_t;
   wire idx_t idx = mif.addr[$clog2(CAPS_IN_BYTES)-1:0];
@@ -3871,7 +3850,7 @@ endmodule
 module rom (
   input logic clk,
   input logic rst_n,
-  memif.slave mif
+  xbar_intf.slave mif
 );
   localparam addr_t SIZE = 12 * KB;
   localparam BITS = $clog2(SIZE);
@@ -3916,9 +3895,9 @@ module mmu (
   input satp_t       satp_i,
   input logic        tlb_invalid_i,
 
-  mmapingif    imapif,
-  mmapingif    dmapif,
-  memif.master mif
+  mmaping_intf    imapif,
+  mmaping_intf    dmapif,
+  xbar_intf.master mif
 );
 
   typedef enum {
@@ -4706,18 +4685,18 @@ endmodule
 // - 32 64bits common register rw
 //------------------------------------
 module rfu (
-  input  logic             clk,
-  input  logic             rst_n,
-  input  logic             valid,
-  output logic             ready_o,
-         regif.slave       rif,
-  input  wb_src_e          wb_src_i,
-  input  logic       [4:0] rd_i,
-  input  reg_t             alu_i,
-  input  reg_t             mem_i,
-  input  reg_t             amo_i,
-  input  reg_t             csr_i,
-  input  reg_t             fpu_i
+  input  logic                clk,
+  input  logic                rst_n,
+  input  logic                valid,
+  output logic                ready_o,
+         reg_intf.slave       rif,
+  input  wb_src_e             wb_src_i,
+  input  logic          [4:0] rd_i,
+  input  reg_t                alu_i,
+  input  reg_t                mem_i,
+  input  reg_t                amo_i,
+  input  reg_t                csr_i,
+  input  reg_t                fpu_i
 );
   reg_t x[REGMAX];
   reg_t r;
@@ -4766,7 +4745,7 @@ endmodule
 module clint (
   input logic clk,
   input logic rst_n,
-  memif.slave mif,
+  xbar_intf.slave mif,
   input logic rtc_i,
   output logic timer_o,
   output logic ipi_o,
@@ -4877,7 +4856,7 @@ module plic #(
   input logic rst_n,
   input logic [SOURCE_CNT-1:0] src_i,
   output logic [CTX_CNT-1:0] intr_o,
-  memif.slave mif
+  xbar_intf.slave mif
 );
   localparam int unsigned PRIO_BASE = 32'h00_0000;
   localparam int unsigned PENDING_BASE = 32'h00_1000;
@@ -5040,7 +5019,7 @@ module igen (
   input logic clk,
   input logic rst_n,
   output logic intr_o,
-  memif.slave mif
+  xbar_intf.slave mif
 );
 
   logic intr;
@@ -5088,7 +5067,7 @@ endmodule
 module uart8250 (
   input logic clk,
   input logic rst_n,
-  memif mif,
+  xbar_intf mif,
   output logic intr_o
 );
   import "DPI-C" function void sim_uart_init();
@@ -5259,7 +5238,7 @@ endmodule
 module scoreboard (
   input logic clk,
   input logic rst_n,
-  memif.slave mif
+  xbar_intf.slave mif
 );
   assign mif.ready = 1;
 
@@ -5290,7 +5269,7 @@ module fpr (
   input wb_src_e wb_src_i,
   input reg_t wb_fpu_i,
   input reg_t wb_mem_i,
-  regif.slave rif
+  reg_intf.slave rif
 );
   reg_t f[REGMAX];
 
@@ -5324,8 +5303,8 @@ module fpu (
   input logic single_i,
   input logic [2:0] rm_i,
   input logic [1:0] fstate_i,
-  regif.master rif,
-  regif.master fif,
+  reg_intf.master rif,
+  reg_intf.master fif,
 
   output reg_t    wb_gpr_o, // to rfu
   output reg_t    wb_fpr_o, // to fpr
