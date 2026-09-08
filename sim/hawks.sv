@@ -139,20 +139,20 @@ package hawks;
   } response_t;
 
   typedef enum logic [63:0] {
-    EXC_INSTR_ADDR_MISALIGNED = 64'h0,   // 指令地址未对齐
-    EXC_INSTR_ACCESS_FAULT    = 64'h1,   // 取指访问故障
-    EXC_ILLEGAL_INSTRUCTION   = 64'h2,   // 非法指令
-    EXC_BREAKPOINT            = 64'h3,   // 断点
-    EXC_LOAD_ADDR_MISALIGNED  = 64'h4,   // 加载地址未对齐
-    EXC_LOAD_ACCESS_FAULT     = 64'h5,   // 加载访问故障
-    EXC_STORE_ADDR_MISALIGNED = 64'h6,   // 存储/AMO地址未对齐
-    EXC_STORE_ACCESS_FAULT    = 64'h7,   // 存储/AMO访问故障
-    EXC_ECALL_U_MODE          = 64'h8,   // U模式环境调用
-    EXC_ECALL_S_MODE          = 64'h9,   // S模式环境调用
-    EXC_ECALL_M_MODE          = 64'hb,   // M模式环境调用
-    EXC_INSTR_PAGE_FAULT      = 64'hc,   // 指令页面错误
-    EXC_LOAD_PAGE_FAULT       = 64'hd,   // 加载页面错误
-    EXC_STORE_PAGE_FAULT      = 64'hf,   // 存储/AMO页面错误
+    EXC_INSTR_ADDR_MISALIGNED = 64'h0,   // Instruction address misaligned
+    EXC_INSTR_ACCESS_FAULT    = 64'h1,   // Instruction access fault
+    EXC_ILLEGAL_INSTRUCTION   = 64'h2,   // Illegal instruction
+    EXC_BREAKPOINT            = 64'h3,   // Breakpoint
+    EXC_LOAD_ADDR_MISALIGNED  = 64'h4,   // Load address misaligned
+    EXC_LOAD_ACCESS_FAULT     = 64'h5,   // Load access fault
+    EXC_STORE_ADDR_MISALIGNED = 64'h6,   // Store/AMO address misaligned
+    EXC_STORE_ACCESS_FAULT    = 64'h7,   // Store/AMO access fault
+    EXC_ECALL_U_MODE          = 64'h8,   // Environment call from U-mode
+    EXC_ECALL_S_MODE          = 64'h9,   // Environment call from S-mode
+    EXC_ECALL_M_MODE          = 64'hb,   // Environment call from M-mode
+    EXC_INSTR_PAGE_FAULT      = 64'hc,   // Instruction page fault
+    EXC_LOAD_PAGE_FAULT       = 64'hd,   // Load page fault
+    EXC_STORE_PAGE_FAULT      = 64'hf,   // Store/AMO page fault
     EXC_NONE                  = 64'hfff, // just for internal usage
 
     INTR_SUPERVISOR_SW  = 64'h8000_0000_0000_0001,  // S-level software interrupt
@@ -552,10 +552,10 @@ package hawks;
   } satp_t;
 
   typedef struct packed {
-    logic [28:0] HPM;  // Bits [31:3]: 硬件性能监视器计数器使能位 (hpmcounter3~31)
-    logic        IR;   // Bit 2: 指令执行计数器使能位 (instret)
-    logic        TM;   // Bit 1: 时间计数器使能位 (time)
-    logic        CY;   // Bit 0: 周期计数器使能位 (cycle)
+    logic [28:0] HPM;  // Bits [31:3]: Hardware performance monitor counter enable bits (hpmcounter3~31)
+    logic        IR;   // Bit 2: Instruction retirement counter enable bit (instret)
+    logic        TM;   // Bit 1: Time counter enable bit (time)
+    logic        CY;   // Bit 0: Cycle counter enable bit (cycle)
   } mcounteren_t;
 
   typedef struct packed {

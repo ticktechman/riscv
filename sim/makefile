@@ -8,8 +8,10 @@
 ###############################################################################
 .PHONY: all build test install doc hawks
 
-HEX_FILES := $(wildcard $(CURDIR)/../software/riscv-tests/hawks/*.hex | sort)
-HEX_FPU := $(shell find fpu-test/testcases/build -name *.hex | sort)
+ROOT_DIR := $(dir $(CURDIR))
+TEST_DIR := $(ROOT_DIR)/software/test
+HEX_FILES := $(wildcard $(TEST_DIR)/riscv-tests/hawks/*.hex | sort)
+HEX_FPU := $(shell find $(TEST_DIR)/testfloat/testcases/build -name *.hex | sort)
 
 HAWKS_FLAGS = -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary
 V_FLAGS = --timing --cc --exe --trace --build -I../
@@ -35,7 +37,7 @@ all: $(SIM)
 # linux
 #------------------
 linux: obj_dir/linux
-	@$< +verilator+quiet +elf="./isa/sbi"
+	@$< +verilator+quiet +elf="$(TEST_DIR)/isa/sbi"
 
 obj_dir/linux: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module linux -o $(notdir $@)
@@ -47,14 +49,14 @@ hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.fpu: $(HEX_FPU:.hex=.fputest)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="../software/riscv-tests/hawks/rv64uc-p-rvc"
+	@$< +verilator+quiet +elf="$(TEST_DIR)/riscv-tests/hawks/rv64uc-p-rvc"
 
 obj_dir/hawks: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(notdir $@)
 
-%.fputest: obj_dir/hawks
-	@printf "%45s " "$(patsubst %.fputest,%,$@): "
-	-@obj_dir/hawks +verilator+quiet +elf="$*"
+$(TEST_DIR)/testfloat/testcases/build/%.fputest: obj_dir/hawks
+	@printf "%20s " "$*: "
+	-@obj_dir/hawks +verilator+quiet +elf="$(@:.fputest=)"
 
 %.run: obj_dir/hawks
 	@printf "%28s" "$(notdir $*): "
