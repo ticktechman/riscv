@@ -15,23 +15,8 @@ HEX_FPU := $(shell find $(TEST_DIR)/testfloat/testcases/build -name *.hex | sort
 
 HAWKS_FLAGS = -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary
 V_FLAGS = --timing --cc --exe --trace --build -I../
-SV_SRCS = \
-		top.sv \
-		../rtl/soc/soc.sv \
-		../rtl/soc/uart.sv \
-		../rtl/soc/bootrom.sv \
-		../rtl/core/corepkg.sv \
-		../rtl/core/ifstage.sv \
-		../rtl/core/idstage.sv \
-		../rtl/core/exstage.sv \
-		../rtl/core/memstage.sv \
-		../rtl/core/wbstage.sv \
-		../rtl/core/regfile.sv \
-		../rtl/core/core.sv
 
-SIM = obj_dir/Vtop
-
-all: $(SIM)
+all: hawks
 
 #------------------
 # linux
@@ -61,15 +46,7 @@ $(TEST_DIR)/testfloat/testcases/build/%.fputest: obj_dir/hawks
 %.run: obj_dir/hawks
 	@printf "%28s" "$(notdir $*): "
 	-@obj_dir/hawks +verilator+quiet +elf="$*"
-#------------------
-
-$(SIM): $(SV_SRCS) main.cpp
-	verilator $(V_FLAGS) $(SV_SRCS) main.cpp --top-module top
-
-run: $(SIM)
-	@$(SIM) +verilator+quiet
 
 clean:
 	rm -rf obj_dir
-
 ###############################################################################

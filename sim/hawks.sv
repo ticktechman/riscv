@@ -5085,71 +5085,71 @@ module uart8250 (
     REG_MSR
   } reg_e;
 
-  // 1. 中断允许寄存器 (IER) - DLAB=0
+  // 1. Interrupt Enable Register (IER) - DLAB=0
   typedef struct packed {
-    logic [7:4] reserved_7_4;  // Bit [7:4]: 保留位
-    logic       EDSSI;         // Bit 3: 允许 Modem 状态中断
-    logic       ELSI;          // Bit 2: 允许接收线路状态中断
-    logic       ETBEI;         // Bit 1: 允许发送保持寄存器空中断
-    logic       ERBFI;         // Bit 0: 允许接收数据就绪中断
+    logic [7:4] reserved_7_4;  // Bit [7:4]: Reserved
+    logic       EDSSI;         // Bit 3: Enable Modem Status Interrupt
+    logic       ELSI;          // Bit 2: Enable Receiver Line Status Interrupt
+    logic       ETBEI;         // Bit 1: Enable Transmitter Holding Register Empty Interrupt
+    logic       ERBFI;         // Bit 0: Enable Received Data Available Interrupt
   } ier_t;
 
-  // 2. 通信线控制寄存器 (LCR)
+  // 2. Line Control Register (LCR)
   typedef struct packed {
-    logic       DLAB;  // Bit 7: 除数锁存访问位
-    logic       BC;    // Bit 6: Break 控制位
-    logic [2:0] PS;    // Bit [5:3]: 奇偶校验选择
-    logic       STB;   // Bit 2: 停止位长度 (0=1位, 1=1.5/2位)
-    logic [1:0] WLS;   // Bit [1:0]: 数据位长度 (00=5位, 01=6位, 10=7位, 11=8位)
+    logic       DLAB;  // Bit 7: Divisor Latch Access Bit
+    logic       BC;    // Bit 6: Break Control Bit
+    logic [2:0] PS;    // Bit [5:3]: Parity Select
+    logic       STB;   // Bit 2: Stop Bits (0=1 bit, 1=1.5/2 bits)
+    logic [1:0] WLS;   // Bit [1:0]: Word Length Select (00=5, 01=6, 10=7, 11=8 bits)
   } lcr_t;
 
-  // 3. Modem 控制寄存器 (MCR)
+  // 3. Modem Control Register (MCR)
   typedef struct packed {
-    logic [2:0] reserved_7_5;  // Bit [7:5]: 保留位
-    logic       LOOP;          // Bit 4: 本地回环测试模式
-    logic       OUT2;          // Bit 3: 通用输出引脚 2
-    logic       OUT1;          // Bit 2: 通用输出引脚 1
-    logic       RTS;           // Bit 1: 请求发送
-    logic       DTR;           // Bit 0: 数据终端准备好
+    logic [2:0] reserved_7_5;  // Bit [7:5]: Reserved
+    logic       LOOP;          // Bit 4: Local Loopback Test Mode
+    logic       OUT2;          // Bit 3: General-purpose Output 2
+    logic       OUT1;          // Bit 2: General-purpose Output 1
+    logic       RTS;           // Bit 1: Request to Send
+    logic       DTR;           // Bit 0: Data Terminal Ready
   } mcr_t;
 
-  // 4. 通信线状态寄存器 (LSR)
+  // 4. Line Status Register (LSR)
   typedef struct packed {
-    logic ERR_FIFO;  // Bit 7: FIFO 中存在错误数据 (16550特有)
-    logic TEMT;      // Bit 6: 发送移位寄存器空
-    logic THRE;      // Bit 5: 发送保持寄存器空
-    logic BI;        // Bit 4: 线路间断 (Break Interrupt)
-    logic FE;        // Bit 3: 帧格式错误
-    logic PE;        // Bit 2: 奇偶校验错误
-    logic OE;        // Bit 1: 溢出错误
-    logic DR;        // Bit 0: 接收数据就绪
+    logic ERR_FIFO;  // Bit 7: Error in FIFO (16550 specific)
+    logic TEMT;      // Bit 6: Transmitter Shift Register Empty
+    logic THRE;      // Bit 5: Transmitter Holding Register Empty
+    logic BI;        // Bit 4: Break Interrupt
+    logic FE;        // Bit 3: Framing Error
+    logic PE;        // Bit 2: Parity Error
+    logic OE;        // Bit 1: Overrun Error
+    logic DR;        // Bit 0: Data Ready
   } lsr_t;
 
-  // 5. Modem 状态寄存器 (MSR)
+  // 5. Modem Status Register (MSR)
   typedef struct packed {
-    logic DCD;   // Bit 7: 数据载波检测当前状态
-    logic RI;    // Bit 6: 振铃指示当前状态
-    logic DSR;   // Bit 5: 数据设备就绪当前状态
-    logic CTS;   // Bit 4: 清除发送当前状态
-    logic DDCD;  // Bit 3: DCD 状态变化标志
-    logic TERI;  // Bit 2: RI 状态变化标志
-    logic DDSR;  // Bit 1: DSR 状态变化标志
-    logic DCTS;  // Bit 0: CTS 状态变化标志
+    logic DCD;   // Bit 7: Data Carrier Detect
+    logic RI;    // Bit 6: Ring Indicator
+    logic DSR;   // Bit 5: Data Set Ready
+    logic CTS;   // Bit 4: Clear to Send
+    logic DDCD;  // Bit 3: Delta DCD
+    logic TERI;  // Bit 2: Trailing Edge Ring Indicator
+    logic DDSR;  // Bit 1: Delta DSR
+    logic DCTS;  // Bit 0: Delta CTS
   } msr_t;
 
-  // 6. 中断识别寄存器 (IIR) - 只读
+  // 6. Interrupt Identification Register (IIR) - read only
   typedef struct packed {
-    logic [5:0] reserved_7_2;  // Bit [7:2]: 保留位
-    logic [1:0] IID;           // Bit [1:0]: 中断源识别 (00=Modem, 01=THR空, 10=接收就绪, 11=线路状态)
+    logic [5:0] reserved_7_2;  // Bit [7:2]: Reserved
+    logic [1:0] IID;  // Bit [1:0]: Interrupt Source ID (00=Modem, 01=THR empty, 10=Received data, 11=Line status)
   } iir_t;
 
-  // 7. FIFO 控制寄存器 (FCR) - 只写 (16550扩展)
+  // 7. FIFO Control Register (FCR) - write only (16550 extension)
   typedef struct packed {
-    logic [1:0] reserved_7_6;  // Bit [7:6]: 保留位
-    logic [1:0] RXTRIG;        // Bit [5:4]: 接收 FIFO 触发中断阈值 (00=1B, 01=4B, 10=8B, 11=14B)
-    logic [1:0] reserved_3_2;  // Bit [3:2]: 保留位
-    logic       TX_FIFO_RST;   // Bit 1: 发送 FIFO 复位
-    logic       RX_FIFO_RST;   // Bit 0: 接收 FIFO 复位
+    logic [1:0] reserved_7_6;  // Bit [7:6]: Reserved
+    logic [1:0] RXTRIG;        // Bit [5:4]: Receiver FIFO Trigger Level (00=1B, 01=4B, 10=8B, 11=14B)
+    logic [1:0] reserved_3_2;  // Bit [3:2]: Reserved
+    logic       TX_FIFO_RST;   // Bit 1: Transmit FIFO Reset
+    logic       RX_FIFO_RST;   // Bit 0: Receive FIFO Reset
   } fcr_t;
 
   initial begin
