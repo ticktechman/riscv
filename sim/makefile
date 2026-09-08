@@ -37,7 +37,7 @@ all: $(SIM)
 # linux
 #------------------
 linux: obj_dir/linux
-	@$< +verilator+quiet +elf="$(TEST_DIR)/isa/sbi"
+	@$< +verilator+quiet +elf="$(TEST_DIR)/isa/build/sbi"
 
 obj_dir/linux: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module linux -o $(notdir $@)
