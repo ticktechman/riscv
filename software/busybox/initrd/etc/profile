@@ -1,0 +1,6 @@
+# /etc/profile: system-wide .profile file for the Bourne shells
+alias cls=clear
+alias ll="ls -l"
+export HOME=/root
+export PS1="\u@\w>"
+cd $HOME

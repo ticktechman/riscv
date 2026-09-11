@@ -1,0 +1,7 @@
+#!/bin/sh
+
+## create dirs
+mkdir -p /proc /sys
+
+## mout fstab fs
+/bin/mount -a
