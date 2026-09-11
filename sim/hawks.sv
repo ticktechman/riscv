@@ -908,7 +908,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(64'd9999999)
+    .COUNTER(64'd999)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -4406,7 +4406,7 @@ module csr (
     if (!rst_n) begin
       priv       <= M_MACHINE;
       mstatus    <= '{UXL: 2'b10, SXL: 2'b10, FS: 2'b01, default: 0};
-      misa       <= '{A: 1, I: 1, M: 1, S: 1, U: 1, MXL: 2'b10, default: 0};  // rv64imasu
+      misa       <= '{A: 1, I: 1, M: 1, S: 1, U: 1, C: 1, F: 1, D: 1, MXL: 2'b10, default: 0};  // rv64imasu
       medeleg    <= '0;
       mideleg    <= '0;
       mtvec      <= '0;

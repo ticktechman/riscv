@@ -9,7 +9,7 @@
 .PHONY: all build test install doc
 
 RISCV_PREFIX = /opt/riscv/bin/riscv-none-elf-
-CFLAGS = -march=rv64imafd_zicsr -mabi=lp64d -nostdlib -Wl,-T link.ld -Wl,-melf64lriscv
+CFLAGS = -march=rv64gc -mabi=lp64d -nostdlib -Wl,-T link.ld -Wl,-melf64lriscv
 COPYFLAGS = -O verilog --verilog-data-width=1
 SRCS = $(wildcard src/*.S)
 HEXS = $(patsubst src/%.S, build/%.hex, $(SRCS))

@@ -7,3 +7,6 @@
 [submodule "software/riscv-tests"]
 	path = software/test/riscv-tests
 	url = ssh://git@github.com/ticktechman/riscv-tests
+[submodule "software/opensbi"]
+	path = software/opensbi
+	url = ssh://git@github.com/ticktechman/opensbi
