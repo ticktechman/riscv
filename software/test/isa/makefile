@@ -10,7 +10,7 @@
 
 RISCV_PREFIX = /opt/riscv/bin/riscv-none-elf-
 CFLAGS = -march=rv64gc -mabi=lp64d -nostdlib -Wl,-T link.ld -Wl,-melf64lriscv
-COPYFLAGS = -O verilog --verilog-data-width=1
+COPYFLAGS = -O verilog --verilog-data-width=1 -j .text.init --change-section-address .text.init=0
 SRCS = $(wildcard src/*.S)
 HEXS = $(patsubst src/%.S, build/%.hex, $(SRCS))
 
