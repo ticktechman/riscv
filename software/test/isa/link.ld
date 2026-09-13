@@ -25,11 +25,12 @@ SECTIONS
   } : rwdata_phdr
 
   . = ALIGN(0x1000);
-  .rodata : {
+  .data : {
     . = ALIGN(8);
-    *(.rodata)
-    *(.rodata.*)
-  } : rodata_phdr
+    *(.data)
+    *(.data.*)
+    *(.bss)
+  } : rwdata_phdr
 
   /DISCARD/ : { *(.comment) *(.note*) }
 }

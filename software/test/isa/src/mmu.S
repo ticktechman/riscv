@@ -114,3 +114,9 @@ fail:
 
 end:
     ebreak
+
+
+.section .bss
+.align 3
+.skip 256, 0
+
