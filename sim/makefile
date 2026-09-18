@@ -34,9 +34,10 @@ hawks: obj_dir/hawks
 hawks.test: $(HEX_FILES:.hex=.run)
 hawks.fpu: $(HEX_FPU:.hex=.fputest)
 hawks.one: obj_dir/hawks
-	@$< +verilator+quiet +elf="$(TEST_DIR)/riscv-tests/hawks/rv64uc-p-rvc"
+	@$< +verilator+quiet +elf="$(TEST_DIR)/riscv-tests/hawks/rv64mi-p-csr"
 
 obj_dir/hawks: hawks.sv hawks.cpp
+	@echo "\n---------------------------------\n"
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(notdir $@)
 
 $(TEST_DIR)/testfloat/testcases/build/%.fputest: obj_dir/hawks

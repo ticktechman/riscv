@@ -16,6 +16,10 @@
 // types and structures
 //------------------------------------
 package hawks;
+  typedef logic [63:0] reg_t;
+  typedef logic [63:0] addr_t;
+  typedef logic [31:0] instr_t;
+
   localparam int unsigned MASTER_CNT = 3;
   localparam int unsigned SLAVE_CNT = 7;
   localparam int unsigned REGMAX = 32;
@@ -82,10 +86,6 @@ package hawks;
   `define OR_NBITS(val, n) (|(val & `MASK($bits(val), n)))
   `define min(a, b) (a < b ? a : b)
   `define max(a, b) (a > b ? a : b)
-
-  typedef logic [63:0] reg_t;
-  typedef logic [63:0] addr_t;
-  typedef logic [31:0] instr_t;
 
 
   // basic data types
@@ -384,6 +384,48 @@ package hawks;
     OP_SRC_FPR
   } op_src_e;
 
+  typedef enum logic [6:0] {
+    FOP_NONE = 7'b00_00000,
+
+    // add / sub / fma
+    FOP_ADD   = 7'b00_00001,
+    FOP_SUB   = 7'b00_00010,
+    FOP_MADD  = 7'b00_00011,
+    FOP_MSUB  = 7'b00_00100,
+    FOP_NMADD = 7'b00_00101,
+    FOP_NMSUB = 7'b00_00110,
+
+    // mul
+    FOP_MUL = 7'b01_00000,
+
+    // div
+    FOP_DIV  = 7'b10_00000,
+    FOP_SQRT = 7'b10_00001,
+
+    // misc
+    FOP_CMP_EQ   = 7'b11_00000,
+    FOP_CMP_LT   = 7'b11_00001,
+    FOP_CMP_LE   = 7'b11_00010,
+    FOP_MIN      = 7'b11_00011,
+    FOP_MAX      = 7'b11_00100,
+    FOP_CLASS    = 7'b11_00101,
+    FOP_SGNJ     = 7'b11_00110,
+    FOP_SGNJN    = 7'b11_00111,
+    FOP_SGNJX    = 7'b11_01000,
+    FOP_CVT_W_F  = 7'b11_01001,
+    FOP_CVT_WU_F = 7'b11_01010,
+    FOP_CVT_L_F  = 7'b11_01011,
+    FOP_CVT_LU_F = 7'b11_01100,
+    FOP_CVT_F_W  = 7'b11_01101,
+    FOP_CVT_F_WU = 7'b11_01110,
+    FOP_CVT_F_L  = 7'b11_01111,
+    FOP_CVT_F_LU = 7'b11_10000,
+    FOP_CVT_S_D  = 7'b11_10001,  // fcvt.s.d = double to single
+    FOP_CVT_D_S  = 7'b11_10010,  // fcvt.d.s = single to double
+    FOP_MV_X_F   = 7'b11_10011,  // FMV.X.W = mv single / double to integer
+    FOP_MV_F_X   = 7'b11_10110   // FMV.D.X = mv integer to double / single
+  } fop_e;
+
   typedef struct packed {
     opcode_e  opcode;
     alu_op_e  alu_op;
@@ -637,47 +679,6 @@ package hawks;
 
   typedef struct packed {logic G, R, S;} grs_t;
 
-  typedef enum logic [6:0] {
-    FOP_NONE = 7'b00_00000,
-
-    // add / sub / fma
-    FOP_ADD   = 7'b00_00001,
-    FOP_SUB   = 7'b00_00010,
-    FOP_MADD  = 7'b00_00011,
-    FOP_MSUB  = 7'b00_00100,
-    FOP_NMADD = 7'b00_00101,
-    FOP_NMSUB = 7'b00_00110,
-
-    // mul
-    FOP_MUL = 7'b01_00000,
-
-    // div
-    FOP_DIV  = 7'b10_00000,
-    FOP_SQRT = 7'b10_00001,
-
-    // misc
-    FOP_CMP_EQ   = 7'b11_00000,
-    FOP_CMP_LT   = 7'b11_00001,
-    FOP_CMP_LE   = 7'b11_00010,
-    FOP_MIN      = 7'b11_00011,
-    FOP_MAX      = 7'b11_00100,
-    FOP_CLASS    = 7'b11_00101,
-    FOP_SGNJ     = 7'b11_00110,
-    FOP_SGNJN    = 7'b11_00111,
-    FOP_SGNJX    = 7'b11_01000,
-    FOP_CVT_W_F  = 7'b11_01001,
-    FOP_CVT_WU_F = 7'b11_01010,
-    FOP_CVT_L_F  = 7'b11_01011,
-    FOP_CVT_LU_F = 7'b11_01100,
-    FOP_CVT_F_W  = 7'b11_01101,
-    FOP_CVT_F_WU = 7'b11_01110,
-    FOP_CVT_F_L  = 7'b11_01111,
-    FOP_CVT_F_LU = 7'b11_10000,
-    FOP_CVT_S_D  = 7'b11_10001,  // fcvt.s.d = double to single
-    FOP_CVT_D_S  = 7'b11_10010,  // fcvt.d.s = single to double
-    FOP_MV_X_F   = 7'b11_10011,  // FMV.X.W = mv single / double to integer
-    FOP_MV_F_X   = 7'b11_10110   // FMV.D.X = mv integer to double / single
-  } fop_e;
 
   typedef struct packed {
     logic        s;
@@ -908,7 +909,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(64'd999)
+    .COUNTER(64'd99999)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -1271,7 +1272,7 @@ module core (
   fpu fpu1 (
     .clk(clk),
     .rst_n(rst_n),
-    .valid(stage == STG_EXEC),
+    .valid(stage == STG_EXEC && mstatus.FS != FS_OFF),
     .id_i(id_out),
     .op_i(id_out.fop),
     .single_i(id_out.single),
@@ -1790,6 +1791,15 @@ module idu (
       M_SUPER: return EXC_ECALL_S_MODE;
       default: return EXC_ECALL_M_MODE;
     endcase
+  endfunction
+
+  function automatic logic check_fpu(opcode_e opc);
+    logic fop = opc inside {OPCODE_FP_LOAD, OPCODE_FP_STORE, OPCODE_FMADD, OPCODE_FMSUB, OPCODE_FNMSUB, OPCODE_FNMADD, OPCODE_FP_OP};
+    if (fop && mstatus_i.FS == FS_OFF) begin
+      return 1'b0;
+    end else begin
+      return 1'b1;
+    end
   endfunction
 
   // instr decoding
@@ -3067,6 +3077,9 @@ module idu (
           end
         endcase
       end
+      if (!check_fpu(id_o.opcode) && ecause == EXC_NONE) begin
+        ecause = EXC_ILLEGAL_INSTRUCTION;
+      end
     end
   end
 endmodule
@@ -4009,6 +4022,8 @@ module mmu (
   // controller
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      iwalking <= 0;
+      walking  <= 0;
     end else begin
       if (tlb_invalid_i) begin
         `LOGW("invalid TLB");
@@ -4084,6 +4099,13 @@ module mmu (
         end
       end
 
+      if (wstate == WS_DONE && (|update_ad) == '0) begin
+        walking <= '0;
+      end
+      if (wstate == WS_UPDATE_AD && mif.ready) begin
+        update_ad <= '0;
+      end
+
     end
   end
 
@@ -4095,9 +4117,7 @@ module mmu (
   logic [1:0] update_ad;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      wstate   <= WS_IDLE;
-      walking  <= 0;
-      iwalking <= 0;
+      wstate <= WS_IDLE;
     end else begin
       if (walking) begin
         unique case (wstate)
@@ -4169,7 +4189,7 @@ module mmu (
               `LOGPTE("AD updated", pte);
               mif.valid <= 1'b0;
               wstate <= WS_DONE;
-              update_ad <= '0;
+              // update_ad <= '0;
             end
           end
           WS_DONE: begin
@@ -4186,8 +4206,8 @@ module mmu (
               endcase
               `LOGI($sformatf("update: %0h", mif.rd));
             end else begin
-              wstate  <= WS_IDLE;
-              walking <= '0;
+              wstate <= WS_IDLE;
+              // walking <= '0;
             end
           end
         endcase
@@ -4237,7 +4257,7 @@ module csr (
   // 1. csr rw(check permission: priv-[9:8] and ro, rw[11:10])
   // 2. handle exception according to current priv and deleg
   // 3. handle int according to current priv and deleg
-  `define MSTATUS_WR_MASK 64'h000006f001fe1fea
+  `define MSTATUS_WR_MASK 64'h000006f001fe7fea
   `define SSTATUS_WR_MASK 64'h8000000f000de122
 
   `define USIP 0
@@ -4477,6 +4497,44 @@ module csr (
           end
         end
       end
+      if (commit_i) begin
+        mstatus <= status;
+        fcsr.fflags <= fcsr.fflags | fflags_i;
+        if (exc_i.fired) begin
+          if (strap) begin
+            `LOGW("strap");
+            priv   <= priv_next;
+            sepc   <= epc;
+            scause <= cause;
+            stval  <= eval;
+          end else begin
+            `LOGW("mtrap");
+            priv   <= priv_next;
+            mepc   <= epc;
+            mcause <= cause;
+            mtval  <= eval;
+          end
+        end else if (op_i inside {SYS_SRET, SYS_MRET}) begin
+          priv <= priv_next;
+          if (op_i == SYS_SRET) begin
+            scause <= '0;
+          end else begin
+            mcause <= '0;
+          end
+        end else if (m_intr != reg_t'(0)) begin
+          if (mstatus.MIE) begin
+            priv   <= priv_next;
+            mepc   <= epc;
+            mcause <= cause;
+          end
+        end else if (s_intr != reg_t'(0)) begin
+          if (mstatus.SIE) begin
+            priv   <= priv_next;
+            sepc   <= epc;
+            scause <= cause;
+          end
+        end
+      end
     end
   end
 
@@ -4585,51 +4643,6 @@ module csr (
           cause = sintr2cause(s_intr);
           epc = pc_i;
           `LOGW($sformatf("S-intr: %0h", cause));
-        end
-      end
-    end
-  end
-
-  // update register when trapped or xRET
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-    end else begin
-      if (commit_i) begin
-        mstatus <= status;
-        fcsr.fflags <= fcsr.fflags | fflags_i;
-        if (exc_i.fired) begin
-          if (strap) begin
-            `LOGW("strap");
-            priv   <= priv_next;
-            sepc   <= epc;
-            scause <= cause;
-            stval  <= eval;
-          end else begin
-            `LOGW("mtrap");
-            priv   <= priv_next;
-            mepc   <= epc;
-            mcause <= cause;
-            mtval  <= eval;
-          end
-        end else if (op_i inside {SYS_SRET, SYS_MRET}) begin
-          priv <= priv_next;
-          if (op_i == SYS_SRET) begin
-            scause <= '0;
-          end else begin
-            mcause <= '0;
-          end
-        end else if (m_intr != reg_t'(0)) begin
-          if (mstatus.MIE) begin
-            priv   <= priv_next;
-            mepc   <= epc;
-            mcause <= cause;
-          end
-        end else if (s_intr != reg_t'(0)) begin
-          if (mstatus.SIE) begin
-            priv   <= priv_next;
-            sepc   <= epc;
-            scause <= cause;
-          end
         end
       end
     end
@@ -5366,7 +5379,8 @@ module fpu (
   reg_t fcvt_result;
   fflags_t fcvt_flags;
   logic fcvt_ready, fcvt_valid;
-  logic cvt_i2d = id_i.fop inside {FOP_CVT_F_W, FOP_CVT_F_L, FOP_CVT_F_WU, FOP_CVT_F_LU};
+  logic cvt_i2d;
+  assign cvt_i2d = id_i.fop inside {FOP_CVT_F_W, FOP_CVT_F_L, FOP_CVT_F_WU, FOP_CVT_F_LU};
   fcvt fcvt1 (
     .clk(clk),
     .rst_n(rst_n),
@@ -6542,7 +6556,6 @@ module fsqrt (
         L = single_i ? mq[BP-23] : mq[BP-52];
 
         rndup = frndup(G, R, S, L, u1.sign, frm_e'(rm_i));
-        `LOGW($sformatf("mq:%h rem:%h, rndup:%b", mq, rem, rndup));
         manti = single_i ? {`ONES(29), mq[BP-1:BP-23]} : mq[BP-1:BP-52];
         `LOGW($sformatf("manti:%h", manti));
         if (rndup) begin
