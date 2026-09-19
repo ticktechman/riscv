@@ -6,7 +6,7 @@
 ##         author: ticktechman
 ##
 ###############################################################################
-.PHONY: all build test install doc hawks
+.PHONY: all build test install doc hawks falcon
 
 ROOT_DIR := $(dir $(CURDIR))
 TEST_DIR := $(ROOT_DIR)/software/test
@@ -16,7 +16,7 @@ HEX_FPU := $(shell find $(TEST_DIR)/testfloat/testcases/build -name *.hex | sort
 HAWKS_FLAGS = -LDFLAGS "-lelf" -CFLAGS "-I/opt/homebrew/include" -j 0 --timing --binary
 V_FLAGS = --timing --cc --exe --trace --build -I../
 
-all: hawks
+all: hawks falcon
 
 #------------------
 # linux
@@ -26,6 +26,18 @@ linux: obj_dir/linux
 
 obj_dir/linux: hawks.sv hawks.cpp
 	@verilator $(HAWKS_FLAGS) --trace $^ --top-module linux -o $(notdir $@)
+
+#------------------
+# falcon dev
+#------------------
+falcon: obj_dir/falcon
+falcon.test: $(HEX_FILES:.hex=.run)
+obj_dir/falcon: falcon.sv falcon.cc
+	@echo "\n---------------------------------\n"
+	@verilator $(HAWKS_FLAGS) --trace $^ --top-module top -o $(notdir $@)
+	@echo "\n---------------------------------\n"
+falcon.one: obj_dir/falcon
+	@$< +verilator+quiet +elf="$(TEST_DIR)/riscv-tests/hawks/rv64mi-p-csr"
 
 #------------------
 # hawks dev
