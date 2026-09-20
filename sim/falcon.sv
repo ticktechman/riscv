@@ -1779,6 +1779,7 @@ module ifu (
             if (ecause == EXC_NONE) begin
               mapif.valid <= 1;
               mapif.va    <= pc_i;
+              mapif.rwx   <= 3'b101;
               state       <= MAPPING;
             end
           end
