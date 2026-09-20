@@ -11,7 +11,7 @@
 
 `timescale 1ns / 100ps
 
-`define DEBUG_LOG
+// `define DEBUG_LOG
 
 //------------------------------------
 // types and structures
@@ -911,7 +911,7 @@ module top ();
   end
 
   clkgen #(
-    .COUNTER(64'd9999)
+    .COUNTER(64'd99999)
   ) clock (
     .clk(clk),
     .rst_n(rst_n),
@@ -1535,6 +1535,7 @@ module xdmux #(
     if (|requesters) begin
       last_pos = last_pos_r + 1;
       for (int i = 0; i < MN; i++) begin
+        last_pos = last_pos >= pointer_t'(MN) ? last_pos - pointer_t'(MN) : last_pos;
         if (requesters[last_pos]) begin
           winner = port_idx_t'(last_pos);
           break;
@@ -1655,34 +1656,37 @@ module xbar #(
     slv_idx_t idx;
     foreach (selected_slvs[i]) begin
       idx = slv_idx_t'(selected_slvs[i]);
-      if (selected_slvs[i] != port_idx_t'(SN)) begin
-        requesters[idx][i] = 1'b1;
+      if (selected_slvs[i] == port_idx_t'(SN)) begin
+        foreach (requesters[j]) requesters[j][i] = 1'b0;
       end else begin
-        requesters[idx][i] = 1'b0;
+        requesters[idx][i] = 1'b1;
       end
     end
   end
 
   // setup channels for M & S
-  always_comb begin : MS
+  always_comb begin : setup_ch
     slv_idx_t sid;
     mst_idx_t mid;
-    foreach (selected_msts[i]) begin : M_S
+    foreach (selected_msts[i]) begin : MS
       mid = mst_idx_t'(selected_msts[i]);
       sid = slv_idx_t'(i);
-      if (selected_msts[i] != port_idx_t'(MN)) begin : MS
-        // `LOGI($sformatf("M(%0d) <-> S(%0d)", mid, sid));
+      if (selected_msts[i] != port_idx_t'(MN)) begin
+        `LOGI($sformatf("M(%0d) <-> S(%0d)", mid, sid));
         slv_req[sid] = mst_req[mid];
         slv_req[sid].addr -= addrspaces[sid].BASE;
       end else begin
-        slv_req[sid] = '0;
+        slv_req[sid].valid = '0;
       end
     end
   end
   always_comb begin
     slv_idx_t sid;
     mst_idx_t mid;
-    foreach (mst_rsp[i]) mst_rsp[i] = '0;
+    foreach (mst_rsp[i]) begin
+      mst_rsp[i].ready = '0;
+      mst_rsp[i].error = '0;
+    end
     foreach (selected_msts[i]) begin
       mid = mst_idx_t'(selected_msts[i]);
       sid = slv_idx_t'(i);
@@ -3919,7 +3923,7 @@ module sram #(
           US64: mif.rd = `D2R(m, idx);
           default: ;
         endcase
-        `LOGI($sformatf("read M[%0d]=0x%0h type:%0d", idx, mif.rd, mif.dtype));
+        `LOGI($sformatf("read M[0x%h]=0x%0h type:%0d", idx, mif.rd, mif.dtype));
       end
     end
   end
@@ -3931,7 +3935,7 @@ module sram #(
       // end
     end else begin
       if (mif.valid && mif.we) begin
-        `LOGI($sformatf("write M[%0d]=0x%0h type:%0d", idx, mif.wd, mif.dtype));
+        `LOGI($sformatf("write M[0x%h]=0x%0h type:%0d", idx, mif.wd, mif.dtype));
         unique case (mif.dtype)
           S8, U8: `write_data(m, idx, mif.wd, 1);
           S16, U16: `write_data(m, idx, mif.wd, 2);
@@ -4150,13 +4154,20 @@ module mmu (
           imapif.ready <= 1;
           imapif.error <= 1;
         end
+        if (wstate == WS_DONE && (|update_ad) == '0) begin
+          walking <= '0;
+        end
+        if (wstate == WS_UPDATE_AD && mif.ready) begin
+          update_ad <= '0;
+        end
       end
       if (dmap && dhit) begin
         if (daligned && dcheck && lcheck) begin
-          dmapif.ready <= 1;
+          dmapif.ready <= !walking;
           `build_pa_by_tlb(dmapif.pa, dtlb, dmapif.va);
           if (|markad && !walking) begin
-            `LOGI("data trigger update PTE");
+            `LOGI($sformatf("data trigger update PTE, markad:%b", markad));
+            dmapif.ready <= 0;
             walking    <= 1;
             walking_va <= dmapif.va;
             update_ad  <= markad;
@@ -4189,6 +4200,11 @@ module mmu (
 
       if (wstate == WS_DONE && (|update_ad) == '0) begin
         walking <= '0;
+        if (iwalking) begin
+          imapif.ready <= 1;
+        end else begin
+          dmapif.ready <= 1;
+        end
       end
       if (wstate == WS_UPDATE_AD && mif.ready) begin
         update_ad <= '0;
@@ -4274,6 +4290,7 @@ module mmu (
           end
           WS_UPDATE_AD: begin
             if (mif.ready) begin
+              `LOGW($sformatf("AD updated"));
               `LOGPTE("AD updated", pte);
               mif.valid <= 1'b0;
               wstate <= WS_DONE;
@@ -4292,7 +4309,7 @@ module mmu (
                 2'b11:   mif.wd <= mif.rd | `PTE_A | `PTE_D;
                 default: ;
               endcase
-              `LOGI($sformatf("update: %0h", mif.rd));
+              `LOGW($sformatf("update: %0h upad:%b addr:%0h", mif.rd, update_ad, mif.addr));
             end else begin
               wstate <= WS_IDLE;
               // walking <= '0;

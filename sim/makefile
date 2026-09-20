@@ -34,18 +34,21 @@ obj_dir/linux: hawks.sv hawks.cc
 # falcon dev
 #------------------
 falcon: obj_dir/falcon
-falcon.test: $(HEX_FILES:.hex=.run)
+falcon.test: falcon.runner $(HEX_FILES:.hex=.run)
 
 #------------------
 # hawks dev
 #------------------
 hawks: obj_dir/hawks
-hawks.test: $(HEX_FILES:.hex=.run)
-hawks.fpu: $(HEX_FPU:.hex=.fputest)
+hawks.test: hawks.runner $(HEX_FILES:.hex=.run)
+hawks.fpu: hawks.runner $(HEX_FPU:.hex=.fputest)
 
-%.one: $(TEST_DIR)/riscv-tests/hawks/rv64mi-p-csr obj_dir/%
+%.runner: obj_dir/%
+	$(eval RUNNER = obj_dir/$*)
+
+%.one: $(TEST_DIR)/riscv-tests/hawks/rv64si-p-dirty obj_dir/%
 	@obj_dir/$* +verilator+quiet +elf="$<"
-	@echo "\n>> [$*] $(notdir $<)\n"
+	@echo "\n>> [$*] $(subst $(TEST_DIR)/,,$<)\n"
 
 obj_dir/%: %.sv %.cc
 	@echo "> building $* ..."
@@ -54,11 +57,11 @@ obj_dir/%: %.sv %.cc
 
 $(TEST_DIR)/testfloat/testcases/build/%.fputest: obj_dir/hawks
 	@printf "%20s " "$*: "
-	-@obj_dir/hawks +verilator+quiet +elf="$(@:.fputest=)"
+	-@$(RUNNER) +verilator+quiet +elf="$(@:.fputest=)"
 
-%.run: obj_dir/falcon
+%.run: $(RUNNER)
 	@printf "%28s" "$(notdir $*): "
-	-@obj_dir/falcon +verilator+quiet +elf="$*"
+	-@$(RUNNER) +verilator+quiet +elf="$*"
 
 clean:
 	rm -rf obj_dir
