@@ -51,6 +51,9 @@ hawks: obj_dir/hawks
 hawks.test: hawks.runner $(HEX_FILES:.hex=.run)
 hawks.fpu: hawks.runner $(HEX_FPU:.hex=.fputest)
 
+#------------------
+# RULES
+#------------------
 %.runner: obj_dir/%
 	$(eval RUNNER = obj_dir/$* +verilator+quiet)
 
